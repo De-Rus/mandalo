@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mándalo — the fast, offline, git-native API client</title>
+<meta name="description" content="Mándalo is a fast, offline, git-native API client for HTTP, GraphQL and gRPC. Collections are plain TOML files in your git repo — diff them, PR them, review them. No account, no telemetry, no cloud.">
+<meta property="og:title" content="Mándalo — ¡Mándalo! Send it.">
+<meta property="og:description" content="The fast, offline, git-native API client. HTTP, GraphQL and gRPC in one workbench. Collections are TOML in git — no account, no telemetry, no cloud.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mandalo.dev/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpath%20fill='%23f6a821'%20d='M3%2016.5%2029%204%2019%2028l-4.4-8.2L3%2016.5zm13.4%202.1%202.9%205.4%206.2-14.9-9.1%209.5zm9.9-11.2L7.9%2015.7l5.9%201.6%2012.5-9.9z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M3 16.5 29 4 19 28l-4.4-8.2L3 16.5zm13.4 2.1 2.9 5.4 6.2-14.9-9.1 9.5zm9.9-11.2L7.9 15.7l5.9 1.6 12.5-9.9z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav">
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+      <a href="https://github.com/De-Rus/mandalo/releases/latest" class="btn btn-small">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="hero-kicker">¡Mándalo! <span class="hero-kicker-sep">·</span> <em>send it.</em></p>
+    <h1>The fast, offline,<br>git&#8209;native API client</h1>
+    <p class="hero-sub">HTTP, GraphQL and gRPC in one desktop workbench. Your collections are plain TOML files in your git repo — diff them, review them, ship them. No account. No telemetry. No cloud.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/De-Rus/mandalo/releases/latest">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a1 1 0 0 1 1 1v6.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L7 8.6V2a1 1 0 0 1 1-1zM2 13a1 1 0 0 1 1 1h10a1 1 0 1 1 0 2H3a2 2 0 0 1-2-2 1 1 0 0 1 1-1z"/></svg>
+        Download for desktop
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/De-Rus/mandalo">View on GitHub</a>
+    </div>
+    <p class="hero-meta">macOS · Windows · Linux &nbsp;—&nbsp; free &amp; open source</p>
+  </div>
+</section>
+
+<section class="showcase" aria-label="Screenshot of the Mándalo workbench">
+  <div class="wrap">
+    <div class="app-window" role="img" aria-label="The Mándalo workbench: a request sidebar, a URL bar with an environment variable chip, and a JSON response with status 200">
+      <div class="app-titlebar">
+        <span class="tl-dot tl-red"></span><span class="tl-dot tl-yellow"></span><span class="tl-dot tl-green"></span>
+        <span class="app-title">payments-api.toml — Mándalo</span>
+        <span class="env-pill">env: <strong>staging</strong></span>
+      </div>
+      <div class="app-body">
+        <aside class="app-sidebar">
+          <div class="sidebar-group">payments-api</div>
+          <div class="req"><span class="method m-get">GET</span> List charges</div>
+          <div class="req req-active"><span class="method m-post">POST</span> Create charge</div>
+          <div class="req"><span class="method m-get">GET</span> Charge by id</div>
+          <div class="req"><span class="method m-gql">GQL</span> Customer graph</div>
+          <div class="req"><span class="method m-grpc">gRPC</span> Ledger.Stream</div>
+          <div class="req"><span class="method m-del">DEL</span> Void charge</div>
+        </aside>
+        <div class="app-main">
+          <div class="url-row">
+            <span class="method-select m-post">POST</span>
+            <span class="url-bar"><span class="var-chip">{{baseUrl}}</span>/v1/charges</span>
+            <span class="send-btn">Send</span>
+          </div>
+          <div class="resp-meta">
+            <span class="status-chip">200 OK</span>
+            <span class="resp-stat">38 ms</span>
+            <span class="resp-stat">412 B</span>
+            <span class="resp-tab">Body</span>
+            <span class="resp-tab resp-tab-dim">Headers</span>
+          </div>
+          <pre class="resp-body"><code>{
+  <span class="j-key">"id"</span>: <span class="j-str">"ch_9f2ma41"</span>,
+  <span class="j-key">"status"</span>: <span class="j-str">"succeeded"</span>,
+  <span class="j-key">"amount"</span>: <span class="j-num">2400</span>,
+  <span class="j-key">"currency"</span>: <span class="j-str">"eur"</span>,
+  <span class="j-key">"captured"</span>: <span class="j-bool">true</span>,
+  <span class="j-key">"customer"</span>: {
+    <span class="j-key">"id"</span>: <span class="j-str">"cus_mx88a"</span>,
+    <span class="j-key">"livemode"</span>: <span class="j-bool">false</span>
+  }
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="wrap">
+    <h2>Everything you need. Nothing phoning home.</h2>
+    <div class="feature-grid">
+      <div class="feature">
+        <h3>Offline &amp; no account</h3>
+        <p>Mándalo works entirely on your machine. There is no sign-up, no sync server, and no telemetry — the app makes exactly the requests you tell it to, and nothing else.</p>
+      </div>
+      <div class="feature">
+        <h3>Git-native collections</h3>
+        <p>Collections are plain TOML files in your repo. They diff cleanly, merge sanely, and go through the same pull-request review as the code they test.</p>
+      </div>
+      <div class="feature">
+        <h3>HTTP, GraphQL &amp; gRPC</h3>
+        <p>One workbench for all three. REST endpoints, GraphQL queries with variables, and gRPC calls from your proto files — side by side in the same collection.</p>
+      </div>
+      <div class="feature">
+        <h3>Environments with <code>{{variables}}</code></h3>
+        <p>Define <code>staging</code>, <code>prod</code>, or anything else, and interpolate <code>{{baseUrl}}</code>, <code>{{token}}</code> and friends anywhere — URLs, headers, bodies.</p>
+      </div>
+      <div class="feature">
+        <h3>Import &amp; export</h3>
+        <p>Bring your Postman collections over in one step. Export any collection as a single self-contained file to hand to anyone.</p>
+      </div>
+      <div class="feature">
+        <h3>Fast, honestly</h3>
+        <p>A Rust core inside a Tauri 2 shell: instant startup, a tiny footprint, and a UI that never makes you wait for a spinner to send a request.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="collab">
+  <div class="wrap">
+    <h2>Collaboration is just git</h2>
+    <p class="collab-sub">No workspaces, no seats, no sync conflicts resolved by a server you don't control. Your team already has the perfect collaboration tool — Mándalo simply stores collections where git can see them.</p>
+    <ol class="steps">
+      <li class="step">
+        <span class="step-num">1</span>
+        <h3>Edit locally</h3>
+        <p>Change a request in the app. Mándalo writes the change straight to the TOML file in your working tree.</p>
+      </li>
+      <li class="step">
+        <span class="step-num">2</span>
+        <h3>Commit or PR</h3>
+        <p>The diff is small and human-readable. Review API changes the same way you review code.</p>
+      </li>
+      <li class="step">
+        <span class="step-num">3</span>
+        <h3>Teammates pull</h3>
+        <p><code>git pull</code>, and everyone has the updated collection. That's the whole sync protocol.</p>
+      </li>
+    </ol>
+    <figure class="diff-figure">
+      <figcaption><code>git diff — collections/payments-api.toml</code></figcaption>
+      <pre class="diff"><code><span class="d-ctx">  [requests.create-charge]</span>
+<span class="d-ctx">  method = "POST"</span>
+<span class="d-del">- url = "{{baseUrl}}/v1/charges"</span>
+<span class="d-add">+ url = "{{baseUrl}}/v2/charges"</span>
+<span class="d-ctx">  </span>
+<span class="d-ctx">  [requests.create-charge.headers]</span>
+<span class="d-add">+ x-api-version = "2026-08-01"</span>
+<span class="d-ctx">  content-type = "application/json"</span></code></pre>
+    </figure>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>¡Mándalo!</h2>
+    <p>Grab the latest release and send your first request in under a minute.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/De-Rus/mandalo/releases/latest">Download the latest release</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M3 16.5 29 4 19 28l-4.4-8.2L3 16.5zm13.4 2.1 2.9 5.4 6.2-14.9-9.1 9.5zm9.9-11.2L7.9 15.7l5.9 1.6 12.5-9.9z"/></svg>
+      Mándalo
+    </span>
+    <span class="footer-note">Made with Rust + Tauri</span>
+    <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
