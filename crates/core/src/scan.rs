@@ -201,7 +201,10 @@ mod tests {
             vec!["stripe-live-key"]
         );
         assert_eq!(
-            rules_hit(&format!("gh = \"gh{}_16C7e42F292c6912E7710c838347Ae178B4a\"", "p")),
+            rules_hit(&format!(
+                "gh = \"gh{}_16C7e42F292c6912E7710c838347Ae178B4a\"",
+                "p"
+            )),
             vec!["github-token"]
         );
         assert_eq!(
@@ -209,7 +212,10 @@ mod tests {
             vec!["aws-access-key"]
         );
         assert_eq!(
-            rules_hit(&format!("g = \"AIza{}-9tSrke72PouQMnMX-a7eZSW0jkFMBWY\"", "SyD")),
+            rules_hit(&format!(
+                "g = \"AIza{}-9tSrke72PouQMnMX-a7eZSW0jkFMBWY\"",
+                "SyD"
+            )),
             vec!["google-api-key"]
         );
         assert_eq!(
@@ -251,11 +257,11 @@ description = "returns the most recent orders for the signed in user"
     fn scans_a_whole_workspace_and_skips_dot_directories() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
-        std::fs::write(dir.path().join(".git/config"), &aws_fixture()).unwrap();
+        std::fs::write(dir.path().join(".git/config"), aws_fixture()).unwrap();
         std::fs::write(dir.path().join("clean.toml"), "name = \"prod\"").unwrap();
         std::fs::write(
             dir.path().join("dirty.toml"),
-            &format!("k = \"{}\"", aws_fixture()),
+            format!("k = \"{}\"", aws_fixture()),
         )
         .unwrap();
         let found = scan_workspace(dir.path()).unwrap();
