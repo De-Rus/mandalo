@@ -504,14 +504,20 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
     };
     if let Some(span) = &tail.body {
         let raw = &source[span.clone()];
-        if let Some(rest) = raw.trim_start().strip_prefix('<') {
-            let line = source[..span.start].lines().count();
-            if rest.trim_start().starts_with('@') {
-                return Err(text::unsupported(
-                    line,
-                    "Mándalo does not support `<@` file bodies — use `<` and keep the variables in the request",
-                ));
-            }
+        let opener = raw.trim_start();
+        let line = source[..span.start].lines().count();
+        if opener.starts_with("<@") {
+            return Err(text::unsupported(
+                line,
+                "Mándalo does not support `<@` file bodies — use `<` and keep the variables in the request",
+            ));
+        }
+        // `<` only opens a file reference when whitespace follows it, so an XML or
+        // HTML body stays a body instead of being read as a path.
+        if let Some(rest) = opener
+            .strip_prefix('<')
+            .filter(|rest| rest.starts_with([' ', '\t']))
+        {
             if raw.lines().filter(|l| !l.trim().is_empty()).count() > 1 {
                 return Err(text::parse_err(
                     line,

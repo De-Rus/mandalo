@@ -173,12 +173,11 @@ async fn an_unknown_method_on_a_reachable_server_fails_loud() {
     assert!(error.to_string().contains("method not found"), "{error}");
 }
 
-/// BUG: `send_grpc` interpolates the url, the message and the metadata, but never
-/// `protoPaths`, so a saved gRPC request cannot point at a per-environment proto file —
-/// the raw `{{...}}` reaches `protox` and fails with "proto path has no parent directory".
-/// Ignored until proto paths are interpolated like every other field.
+/// The engine interpolates proto paths like every other field. A `.grpc` file still
+/// refuses to *write* one that only resolves at send time, because a path nobody can
+/// see yet cannot be proven to stay inside the workspace — so this is reachable from
+/// a caller that builds the request itself, not from a file.
 #[tokio::test]
-#[ignore = "protoPaths is not interpolated"]
 async fn a_proto_path_can_come_from_a_variable() {
     let api = MockApi::start().await;
     let mut req = grpc(&api, "Say", "{\"text\": \"hola\"}");

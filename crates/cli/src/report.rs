@@ -4,6 +4,7 @@ use mandalo_core::request::ResponseData;
 use mandalo_core::runner::{CaptureOutcome, RunReport, StepResult};
 use mandalo_core::{CoreError, CoreResult};
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[value(rename_all = "lower")]
@@ -51,7 +52,8 @@ pub struct JsonTest {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRequest {
-    /// Collection-relative POSIX path including the `.toml` extension, e.g. `auth/login.toml`.
+    /// Collection-relative POSIX path plus the index of the request inside the
+    /// file, e.g. `auth/login.http#0`.
     pub path: String,
     pub name: String,
     pub method: String,
@@ -60,6 +62,10 @@ pub struct JsonRequest {
     pub grpc: Option<GrpcResponse>,
     pub tests: Vec<JsonTest>,
     pub captures: Vec<CaptureOutcome>,
+    /// Every plain variable the request's scripts wrote. A `.http` or `.grpc`
+    /// request captures with `pm.environment.set`, so without this a scripted
+    /// capture would leave no trace in the report at all.
+    pub var_sets: BTreeMap<String, String>,
     pub logs: Vec<String>,
     pub passed: bool,
     pub duration_ms: u128,
@@ -121,6 +127,7 @@ pub fn json_request(step: &StepResult) -> JsonRequest {
         grpc: step.grpc.clone(),
         tests: json_tests(step),
         captures: step.captures.clone(),
+        var_sets: step.var_sets.clone(),
         logs: step.logs.clone(),
         passed: step.passed,
         duration_ms: step.duration_ms,
@@ -489,7 +496,8 @@ mod tests {
                 "path",
                 "response",
                 "tests",
-                "url"
+                "url",
+                "varSets"
             ],
             "a request outcome has exactly these keys"
         );

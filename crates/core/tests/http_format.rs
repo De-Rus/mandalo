@@ -571,3 +571,52 @@ fn a_description_cannot_forge_a_separator_and_split_the_file() {
     );
     assert_eq!(parsed.raw(0).unwrap().request.url, "{{baseUrl}}/auth/login");
 }
+
+#[test]
+fn an_xml_body_is_a_body_not_a_file_reference() {
+    for xml in [
+        "<user/>",
+        "<?xml version=\"1.0\"?>",
+        "<user>\n  <name>ada</name>\n</user>",
+    ] {
+        let source = format!("POST https://x.dev\nContent-Type: application/xml\n\n{xml}\n");
+        let request = request_at(&source, 0);
+        assert_eq!(
+            request.body.as_text(),
+            Some(xml),
+            "{xml:?} was not kept as a body"
+        );
+    }
+}
+
+#[test]
+fn a_file_reference_needs_whitespace_after_the_angle_bracket() {
+    let with_space = request_at("POST https://x.dev\n\n< ./payload.json\n", 0);
+    assert_eq!(
+        with_space.body,
+        Body::Binary {
+            file: "payload.json".to_string(),
+            content_type: None
+        }
+    );
+    let without_space = request_at("POST https://x.dev\n\n<./payload.json\n", 0);
+    assert_eq!(without_space.body.as_text(), Some("<./payload.json"));
+}
+
+#[test]
+fn an_xml_body_survives_a_round_trip_through_the_editor() {
+    let source = "POST https://x.dev\nContent-Type: application/xml\n\n<user/>\n";
+    let parsed = doc(source);
+    let request = parsed.raw(0).unwrap().request;
+    assert_eq!(parsed.replace(0, &request).unwrap(), source);
+    let rendered = render_request(&request, "\n").unwrap();
+    assert_eq!(
+        HttpDoc::parse("api", &rendered)
+            .unwrap()
+            .raw(0)
+            .unwrap()
+            .request
+            .body,
+        request.body
+    );
+}

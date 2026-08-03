@@ -149,7 +149,7 @@ with the message the transport has always given:
 | --- | --- |
 | An HTTP or GraphQL request | ``a .grpc file holds gRPC requests, not "http"`` |
 | Declarative `[[tests]]` and `[[captures]]` | ``a .grpc file cannot carry declarative tests or captures — assert and capture from a `> {% … %}` response script instead`` |
-| A per-request description | ``a .grpc file has no line for a description — put it in a `#` comment above the request`` |
+| A per-request description **as an editable field** | ``a .grpc file keeps a description in the `#` comments above the request, so it cannot be edited as a field — change the comment in the file``. Creating a request with one writes the comment lines for you; parsing reports the description as `None`. |
 | Server reflection instead of a `proto:` file | Not implemented — there is nothing to lose on save. Point at the `.proto`. |
 
 Saving a request that needs any of the first three fails with the message shown.
