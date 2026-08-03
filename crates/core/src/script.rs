@@ -1033,12 +1033,22 @@ pub fn run_script(source: &str, ctx: ScriptContext, limits: Limits) -> CoreResul
         if Instant::now() >= deadline {
             return CoreError::ScriptTimeout(format!("script exceeded {}ms", limits.timeout_ms));
         }
+        // QuickJS surfaces exhaustion either as a null exception value or as an
+        // ordinary `Error: out of memory`, depending on which allocation failed.
+        let out_of_memory = CoreError::Script(format!(
+            "script exceeded the memory limit of {} bytes",
+            limits.memory_bytes
+        ));
         match err {
-            CaughtError::Value(v) if v.is_null() || v.is_undefined() => CoreError::Script(format!(
-                "script exceeded the memory limit of {} bytes",
-                limits.memory_bytes
-            )),
-            other => CoreError::Script(explain(other.to_string().trim())),
+            CaughtError::Value(v) if v.is_null() || v.is_undefined() => out_of_memory,
+            other => {
+                let text = other.to_string();
+                if text.contains("out of memory") {
+                    out_of_memory
+                } else {
+                    CoreError::Script(explain(text.trim()))
+                }
+            }
         }
     };
 
