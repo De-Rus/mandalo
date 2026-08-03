@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli", "crates/grpc-wasm", "crates/testkit", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Dani Rus <dani@fsck.ro>"]
+license = "MIT"
+
+[workspace.dependencies]
+mandalo-core = { path = "crates/core" }
+mandalo-testkit = { path = "crates/testkit" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+regex = "1.13.1"
+git2 = { version = "0.21", default-features = false, features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Cargo ignores `[profile.*]` in a workspace member, so the size-tuned profile for
+# the distributed `mandalo` binary has to live here. It is a separate profile, not
+# a tweak to `release`, so the Tauri bundle keeps building exactly as before.
+[profile.release-cli]
+inherits = "release"
+strip = "symbols"
+lto = true
+codegen-units = 1
+panic = "abort"

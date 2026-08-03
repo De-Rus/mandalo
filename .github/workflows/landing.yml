@@ -3,7 +3,14 @@ name: Landing
 on:
   push:
     branches: [main]
-    paths: ["landing/**", ".github/workflows/landing.yml"]
+    paths:
+      - "landing/**"
+      - "src/**"
+      - "crates/core/src/script.rs"
+      - "web/**"
+      - "vite.config.ts"
+      - "package.json"
+      - ".github/workflows/landing.yml"
   workflow_dispatch:
 
 jobs:
@@ -11,6 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the browser app into landing/app
+        run: pnpm build:web
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

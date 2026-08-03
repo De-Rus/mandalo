@@ -1,0 +1,5 @@
+name = "prod"
+
+[vars]
+base = "https://api.example.com"
+token = "prod-token"

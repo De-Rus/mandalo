@@ -1,0 +1,201 @@
+# Mándalo for VS Code
+
+Mándalo keeps API collections as plain text files in your repo: `.http` / `.rest` for HTTP
+and GraphQL, `.grpc` for gRPC. This extension drives the files that are already in your
+workspace — there is no sync, no account, no cloud. Open the repo, and your requests are
+right there next to the code they call.
+
+Works in VS Code and in Cursor (no proprietary APIs are used).
+
+## What you get
+
+- **`▶ Send` above every request** — one file holds many requests, separated by lines
+  starting with `###`. Each block gets its own `▶ Send` and `▶ Send with env…` CodeLens on
+  its separator line, so sending is a click where you are already reading. Syntax
+  highlighting comes with it, for the separator and its name, the method and URL,
+  headers, `{{vars}}`, `@var` definitions and `{% %}` script blocks.
+- **Collections view** in the Activity Bar — workspaces → collections → folders → requests,
+  where every `###` block is its own entry, labelled with its name and described by its
+  method (or `GraphQL` / `gRPC`). It refreshes when the files change, so hand-editing the
+  text is the whole workflow.
+- **`▶ Run all`** on a `collection.toml` manifest.
+- **Response panel** — status chip, duration, size, and Body / Headers / Tests / Captures tabs.
+- **Native Testing panel** — collections become suites, every `###` block becomes a test,
+  and each assertion becomes a child item with its own failure message.
+- **Environment picker** in the status bar, persisted per workspace.
+
+> Linting of `.http` / `.grpc` files is not wired into the extension yet — the CLI is the
+> parser, and it reports a malformed file when you send. The TOML diagnostics that remain
+> only ever applied to the old request-TOML format.
+
+## How requests are sent
+
+`.http`, `.rest` and `.grpc` files are parsed and run by the **`mandalo` CLI** — the one
+bundled with this extension, or one you point at yourself. There is deliberately no second
+parser in the extension: the text format has one implementation, in Rust, and the editor
+asks it. Every send logs which engine ran it and why to the **Mándalo** output channel.
+
+Platform builds of the extension (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`,
+`win32-x64`) **ship that binary inside the VSIX**; the Marketplace serves the right one
+automatically. The binary is resolved in this order, and the choice is logged to the
+**Mándalo** output channel:
+
+1. the `mandalo.cliPath` setting, when you set one — it always wins;
+2. the binary bundled at `<extension>/bin/mandalo`;
+3. `mandalo` on your `PATH`.
+
+If none exists and something genuinely needs the CLI, the error names your platform, says the
+bundled binary is missing, and offers **Download from releases**, **Set path…** and
+**Open output**. It never claims the CLI is installed when it is not.
+
+When a `mandalo.cliPath` binary reports a different version from the extension, you get one
+warning per session naming both versions, because their JSON contracts may differ.
+
+`mandalo.executionMode` still exists for the in-process engine, but it cannot override the
+text formats: `.http`, `.rest` and `.grpc` always go to the CLI, and with no binary anywhere
+the error names the format, the missing binary and the two ways to supply one.
+
+## Installation
+
+From the Marketplace, or from a local build:
+
+```bash
+pnpm install
+pnpm run compile
+npx @vscode/vsce package --no-dependencies
+code --install-extension mandalo-0.1.0.vsix
+```
+
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `mandalo.cliPath` | *(empty)* | Path to the CLI. Empty uses the bundled binary, then `PATH`. Setting it always wins. |
+| `mandalo.executionMode` | `auto` | Which engine runs a request: `auto`, `in-process` or `cli`. |
+| `mandalo.diagnostics.enabled` | `true` | Validate the TOML files in a workspace while you type. |
+| `mandalo.codeLens.enabled` | `true` | Show `▶ Send` / `▶ Send with env…` above every `###` block. |
+| `mandalo.timeoutMs` | `120000` | How long to wait for a CLI invocation. |
+
+## Commands
+
+All under the **Mándalo** category: Send Request · Send Request with Environment… ·
+Run Request Tests · Run Collection · Run Folder · Select Environment · New Request ·
+New Collection · Refresh · Open Workspace in Mándalo · Show Log.
+
+## The on-disk layout it reads
+
+```
+<workspace>/
+  mandalo.toml                  # schema_version, id, name
+  environments/<name>.toml      # name + [vars]
+  collections/<slug>/
+    collection.toml             # schema_version, id, name
+    <folder>/<file>.http        # HTTP + GraphQL requests
+    <folder>/<file>.grpc        # gRPC requests
+```
+
+TOML is now only the manifests and the environments. Requests are text.
+
+### Addressing a request
+
+One file holds many requests, so a request is addressed as **`<path>#<index>`**, zero-based
+in file order — `auth/login.http#0`, `auth/login.http#1`, `grpc/mock.grpc#0`. That is exactly
+what the CLI takes, what the tree and the Testing panel key off, and what each `▶ Send` lens
+carries:
+
+```bash
+mandalo send acme-api auth/login.http#1 --workspace . --reporter json
+```
+
+A `###` block that holds only comments and `@var` lines declares no request, so it never
+consumes an index — a file header cannot shift the numbering of what follows.
+
+### `.http`
+
+The de-facto REST Client / httpYac / JetBrains dialect:
+
+```http
+@host = api.example.com
+
+### Login
+POST https://{{host}}/auth/login
+Content-Type: application/json
+
+{ "user": "ada" }
+
+> {%
+pm.environment.set("token", pm.response.json().token);
+%}
+
+### Get profile
+GET https://{{host}}/me
+Authorization: Bearer {{token}}
+```
+
+Also understood: `#` and `//` comments, the `# @name x` metadata comment, `< ./payload.json`
+file bodies and `< {% … %}` pre-request scripts. A request carrying an
+`X-REQUEST-TYPE: GraphQL` header is a GraphQL request — its body is the document, then a
+blank line, then a JSON variables object.
+
+### `.grpc`
+
+Deliberately rhymes with `.http`. The request line is `<target>/<package.Service>/<Method>`,
+and the header lines are gRPC metadata except the reserved, repeatable `proto:` key:
+
+```
+### Say hello
+{{grpcUrl}}/mock.v1.Mock/Say
+proto: protos/mock.proto
+x-trace: mandalo
+
+{ "text": "hola", "n": 21 }
+```
+
+Same `###` separators, same comments, same `@var` lines, same `> {% %}` / `< {% %}` scripts.
+
+## Development
+
+```bash
+pnpm install
+pnpm run compile           # esbuild bundle + tsc --noEmit
+pnpm run watch             # rebuild on save
+pnpm run test:unit         # vitest — parser, scanner, CLI adapter, diagnostics
+pnpm run test:integration  # @vscode/test-cli — runs a real VS Code against fixtures/
+pnpm test                  # both
+```
+
+`fixtures/workspace/` is a real Mándalo workspace used by both test layers; the
+integration run opens it as the VS Code workspace folder.
+
+`test/unit/cli.e2e.test.ts` and `test/unit/parity.test.ts` shell out to the **real** `mandalo`
+binary. The parity suite runs the same collection through both engines and asserts identical
+test names, verdicts, details and captures — it is what stops the in-process engine drifting
+away from the Rust one. Get a binary the same way the extension does:
+
+```bash
+node scripts/fetch-cli.mjs      # downloads the release asset, or builds it with cargo
+```
+
+It lands in `editor-extension/bin/`, which is gitignored and is also what a platform VSIX
+ships. Without one, those suites skip with a message naming the command; set
+`MANDALO_REQUIRE_CLI=1` (as CI does) to turn that skip into a failure instead.
+
+`src/engine/prelude.generated.ts` is generated from `crates/core/src/script.rs` by
+`scripts/gen-prelude.mjs` and committed. CI regenerates it and fails on a diff, so the script
+sandbox cannot drift from the Rust one.
+
+## Packaging
+
+```bash
+node scripts/fetch-cli.mjs
+npx @vscode/vsce package --target darwin-arm64 --no-dependencies
+```
+
+`vscode:prepublish` regenerates the prelude and fetches the CLI for the host platform, so a
+plain `vsce package --target <host platform>` is self-sufficient. Cross-platform VSIXs are
+built by `.github/workflows/extension.yml` on a `v*` tag, which also attaches them to the
+GitHub release and publishes to the Marketplace when a `VSCE_PAT` secret exists.
+
+## License
+
+MIT

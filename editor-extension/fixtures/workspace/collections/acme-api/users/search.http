@@ -1,0 +1,8 @@
+### Search users
+POST {{base}}/graphql
+Content-Type: application/json
+X-REQUEST-TYPE: GraphQL
+
+query Search($q: String!) { users(q: $q) { id } }
+
+{ "q": "ada" }

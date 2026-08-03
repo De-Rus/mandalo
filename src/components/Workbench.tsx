@@ -1,145 +1,204 @@
 import { useState } from "react";
 import type { Kind } from "../lib/api";
-import type { RequestDraft } from "../lib/draft";
-import { useCollection } from "../store/collection";
-import { useActiveVars } from "../store/env";
-import { useResponse, useSession } from "../store/session";
+import type { KVRow, RequestDraft } from "../lib/draft";
+import { PRE_SNIPPETS, TEST_SNIPPETS } from "../lib/snippets";
 import { AuthEditor } from "./AuthEditor";
 import { BodyEditor } from "./BodyEditor";
 import { GraphqlEditor } from "./GraphqlEditor";
 import { GrpcEditor } from "./GrpcEditor";
+import { GrpcLocalNotice } from "./GrpcLocalNotice";
 import { KeyValueEditor } from "./KeyValueEditor";
-import { Tabs } from "./Tabs";
+import { ScriptEditor } from "./ScriptEditor";
+import { Tabs, type TabItem } from "./Tabs";
+import { UrlBar } from "./UrlBar";
 
-const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-
-const TABS: Record<Kind, string[]> = {
-  http: ["Params", "Headers", "Body", "Auth"],
-  graphql: ["Query", "Variables", "Headers", "Auth"],
-  grpc: ["Proto", "Message", "Metadata"],
+const TAB_IDS: Record<Kind, string[]> = {
+  http: ["params", "auth", "headers", "body", "pre", "tests", "settings"],
+  graphql: ["query", "variables", "auth", "headers", "pre", "tests", "settings"],
+  grpc: ["proto", "message", "metadata", "auth", "pre", "tests", "settings"],
 };
 
-const KIND_LABELS: [Kind, string][] = [
-  ["http", "HTTP"],
-  ["graphql", "GraphQL"],
-  ["grpc", "gRPC"],
-];
+const LABELS: Record<string, string> = {
+  params: "Params",
+  auth: "Authorization",
+  headers: "Headers",
+  body: "Body",
+  query: "Query",
+  variables: "Variables",
+  proto: "Proto",
+  message: "Message",
+  metadata: "Metadata",
+  pre: "Pre-request Script",
+  tests: "Post-response Script",
+  settings: "Settings",
+};
 
-function varsTooltip(vars: Record<string, string>): string {
-  const entries = Object.entries(vars);
-  if (entries.length === 0) return "No environment variables active";
-  return (
-    "Active vars — use {{name}}:\n" +
-    entries.map(([k, v]) => `{{${k}}} = ${v}`).join("\n")
-  );
+const TEST_PLACEHOLDER =
+  '// Runs after the response arrives — read it, set variables, write pm.test(...)\npm.test("Status code is 200", function () {\n  pm.response.to.have.status(200);\n});';
+
+function activeCount(rows: KVRow[]): number {
+  return rows.filter((r) => r.enabled && r.key.trim() !== "").length;
 }
 
-export function Workbench({ draft }: { draft: RequestDraft }) {
-  const updateActive = useCollection((s) => s.updateActive);
-  const send = useSession((s) => s.send);
-  const vars = useActiveVars();
-  const response = useResponse(draft.id);
+interface WorkbenchProps {
+  draft: RequestDraft;
+  vars: Record<string, string>;
+  sending: boolean;
+  dirty: boolean;
+  onPatch: (patch: Partial<RequestDraft>) => void;
+  onSend: () => void;
+  onSave: () => void;
+}
+
+export function Workbench({
+  draft,
+  vars,
+  sending,
+  dirty,
+  onPatch,
+  onSend,
+  onSave,
+}: WorkbenchProps) {
   const [tabsByKind, setTabsByKind] = useState<Partial<Record<Kind, string>>>({});
 
-  const tabs = TABS[draft.kind];
-  const activeTab = tabsByKind[draft.kind] ?? tabs[0];
-  const sending = response.phase === "loading";
+  const ids = TAB_IDS[draft.kind];
+  const active = ids.includes(tabsByKind[draft.kind] ?? "")
+    ? (tabsByKind[draft.kind] as string)
+    : ids[0];
 
-  const setTab = (tab: string) =>
-    setTabsByKind((s) => ({ ...s, [draft.kind]: tab }));
+  const counts: Record<string, number | undefined> = {
+    params: activeCount(draft.params),
+    headers: activeCount(draft.headers),
+    metadata: activeCount(draft.grpc.metadata),
+  };
 
-  const urlPlaceholder =
-    draft.kind === "grpc" ? "http://localhost:50051" : "https://api.example.com/{{path}}";
+  const dots: Record<string, boolean> = {
+    body: draft.kind === "http" && draft.body.trim() !== "",
+    auth: draft.auth.type !== "none",
+    query: draft.graphqlQuery.trim() !== "",
+    variables: draft.graphqlVariables.trim() !== "",
+    message: draft.grpc.message.trim() !== "",
+    proto: draft.grpc.service !== "",
+    pre: draft.preScript.trim() !== "",
+    tests: draft.testScript.trim() !== "",
+    settings: draft.description.trim() !== "",
+  };
+
+  const items: TabItem[] = ids.map((id) => ({
+    id,
+    label: LABELS[id],
+    count: counts[id],
+    dot: dots[id],
+  }));
+
+  const flush =
+    active === "params" || active === "headers" || active === "metadata";
 
   return (
     <section className="workbench">
-      <div className="workbench-top">
-        <div className="segmented">
-          {KIND_LABELS.map(([kind, label]) => (
-            <button
-              key={kind}
-              className={`segment ${draft.kind === kind ? "segment-active" : ""}`}
-              onClick={() => updateActive({ kind })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {draft.kind === "http" && (
-          <select
-            className="select method-select"
-            value={draft.method}
-            onChange={(e) => updateActive({ method: e.target.value })}
-          >
-            {METHODS.map((m) => (
-              <option key={m}>{m}</option>
-            ))}
-          </select>
-        )}
-        <input
-          className="input mono url-input"
-          value={draft.url}
-          placeholder={urlPlaceholder}
-          title={varsTooltip(vars)}
-          spellCheck={false}
-          onChange={(e) => updateActive({ url: e.target.value })}
-        />
-        <button
-          className="btn btn-primary"
-          disabled={sending || draft.url.trim() === ""}
-          title="Send (⌘⏎)"
-          onClick={() => void send(draft, vars)}
-        >
-          {sending ? "Sending…" : "Send"}
-        </button>
-      </div>
-      <Tabs tabs={tabs} active={activeTab} onSelect={setTab} />
-      <div className="workbench-panel">
-        {activeTab === "Params" && (
+      <UrlBar
+        draft={draft}
+        vars={vars}
+        sending={sending}
+        dirty={dirty}
+        onPatch={onPatch}
+        onSend={onSend}
+        onSave={onSave}
+      />
+      <GrpcLocalNotice draft={draft} vars={vars} />
+      <Tabs
+        items={items}
+        active={active}
+        onSelect={(id) => setTabsByKind((s) => ({ ...s, [draft.kind]: id }))}
+      />
+      <div className={`panel ${flush ? "panel-flush" : ""}`}>
+        {active === "params" && (
           <KeyValueEditor
             rows={draft.params}
-            onChange={(params) => updateActive({ params })}
-            keyPlaceholder="param"
+            onChange={(params) => onPatch({ params })}
+            keyPlaceholder="Key"
           />
         )}
-        {activeTab === "Headers" && (
+        {active === "headers" && (
           <KeyValueEditor
             rows={draft.headers}
-            onChange={(headers) => updateActive({ headers })}
-            keyPlaceholder="Header"
+            onChange={(headers) => onPatch({ headers })}
+            keyPlaceholder="Key"
           />
         )}
-        {activeTab === "Body" && (
-          <BodyEditor
-            value={draft.body}
-            onChange={(body) => updateActive({ body })}
-          />
+        {active === "auth" && (
+          <AuthEditor auth={draft.auth} onChange={(auth) => onPatch({ auth })} />
         )}
-        {activeTab === "Auth" && (
-          <AuthEditor
-            auth={draft.auth}
-            onChange={(auth) => updateActive({ auth })}
-          />
+        {active === "body" && (
+          <BodyEditor value={draft.body} onChange={(body) => onPatch({ body })} />
         )}
-        {(activeTab === "Query" || activeTab === "Variables") && (
+        {(active === "query" || active === "variables") && (
           <GraphqlEditor
-            tab={activeTab}
+            tab={active === "query" ? "Query" : "Variables"}
             query={draft.graphqlQuery}
             variables={draft.graphqlVariables}
-            onQueryChange={(graphqlQuery) => updateActive({ graphqlQuery })}
-            onVariablesChange={(graphqlVariables) =>
-              updateActive({ graphqlVariables })
-            }
+            onQueryChange={(graphqlQuery) => onPatch({ graphqlQuery })}
+            onVariablesChange={(graphqlVariables) => onPatch({ graphqlVariables })}
           />
         )}
-        {(activeTab === "Proto" ||
-          activeTab === "Message" ||
-          activeTab === "Metadata") && (
+        {(active === "proto" || active === "message" || active === "metadata") && (
           <GrpcEditor
-            tab={activeTab}
+            tab={
+              active === "proto"
+                ? "Proto"
+                : active === "message"
+                  ? "Message"
+                  : "Metadata"
+            }
             grpc={draft.grpc}
-            onChange={(grpc) => updateActive({ grpc })}
+            onChange={(grpc) => onPatch({ grpc })}
           />
+        )}
+        {active === "pre" && (
+          <ScriptEditor
+            label="Pre-request script"
+            value={draft.preScript}
+            onChange={(preScript) => onPatch({ preScript })}
+            snippets={PRE_SNIPPETS}
+            placeholder="// Runs before the request is sent"
+          />
+        )}
+        {active === "tests" && (
+          <ScriptEditor
+            label="Post-response script"
+            value={draft.testScript}
+            onChange={(testScript) => onPatch({ testScript })}
+            snippets={TEST_SNIPPETS}
+            placeholder={TEST_PLACEHOLDER}
+          />
+        )}
+        {active === "settings" && (
+          <div className="settings-list">
+            <label className="field">
+              <span className="field-label">Description</span>
+              <textarea
+                className="textarea"
+                value={draft.description}
+                placeholder="What this request is for, expected inputs, gotchas…"
+                onChange={(e) => onPatch({ description: e.target.value })}
+              />
+            </label>
+            <div className="settings-row">
+              <span className="settings-row-head">Request name</span>
+              <input
+                className="input"
+                value={draft.name}
+                onChange={(e) => onPatch({ name: e.target.value })}
+              />
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-head">Storage</span>
+              <p className="settings-hint">
+                Saved as <code>{`requests/${draft.id}.toml`}</code> in the active
+                workspace. Edits autosave; ⌘S saves immediately.
+              </p>
+            </div>
+          </div>
         )}
       </div>
     </section>

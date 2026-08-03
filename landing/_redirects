@@ -1,0 +1,4 @@
+# The app has no client-side router, so there is no SPA fallback here on
+# purpose: a catch-all rewrite could shadow the hashed asset files.
+/try     /app  301
+/try/*   /app  301

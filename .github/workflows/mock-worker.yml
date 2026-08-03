@@ -1,0 +1,27 @@
+name: Mock API worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/testkit/worker/**"
+      - "crates/testkit/contract.json"
+      - ".github/workflows/mock-worker.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the worker against the route contract
+        run: node --test crates/testkit/worker/contract.test.mjs
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: crates/testkit/worker
+          command: deploy

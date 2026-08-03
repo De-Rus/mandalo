@@ -1,6 +1,13 @@
 import { useState } from "react";
-import { errorMessage, listGrpcMethods, type GrpcMethodInfo } from "../lib/api";
+import {
+  describeMessage,
+  errorMessage,
+  listGrpcMethods,
+  type GrpcMethodInfo,
+  type MessageShape,
+} from "../lib/api";
 import type { GrpcDraft } from "../lib/draft";
+import { replaceable, skeletonFor } from "../lib/skeleton";
 import { parseProtoPaths } from "../lib/spec";
 import { BodyEditor } from "./BodyEditor";
 import { KeyValueEditor } from "./KeyValueEditor";
@@ -11,10 +18,16 @@ interface GrpcEditorProps {
   onChange: (grpc: GrpcDraft) => void;
 }
 
+interface Offer {
+  method: string;
+  skeleton: string;
+}
+
 export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
   const [methods, setMethods] = useState<GrpcMethodInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offer, setOffer] = useState<Offer | null>(null);
 
   const patch = (p: Partial<GrpcDraft>) => onChange({ ...grpc, ...p });
 
@@ -32,13 +45,65 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
     }
   };
 
+  const shapeOf = async (
+    method: GrpcMethodInfo | undefined,
+  ): Promise<MessageShape | null> => {
+    if (!method) return null;
+    try {
+      return await describeMessage(
+        parseProtoPaths(grpc.protoPaths),
+        method.input,
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  const selectMethod = async (service: string, method: string) => {
+    const previous = methods.find(
+      (m) => m.service === grpc.service && m.method === grpc.method,
+    );
+    const chosen = methods.find(
+      (m) => m.service === service && m.method === method,
+    );
+    patch({ service, method });
+    setOffer(null);
+    const shape = await shapeOf(chosen);
+    if (!shape) return;
+    const skeleton = skeletonFor(shape);
+    const previousShape = previous === chosen ? null : await shapeOf(previous);
+    if (replaceable(grpc.message, previousShape && skeletonFor(previousShape)))
+      onChange({ ...grpc, service, method, message: skeleton });
+    else setOffer({ method, skeleton });
+  };
+
+  const offerBar = offer && (
+    <div className="grpc-offer">
+      <span className="grpc-offer-text">
+        The message still holds the fields of the previous method.
+      </span>
+      <button
+        className="btn btn-sm"
+        onClick={() => {
+          patch({ message: offer.skeleton });
+          setOffer(null);
+        }}
+      >
+        Insert example message for {offer.method}
+      </button>
+    </div>
+  );
+
   if (tab === "Message") {
     return (
-      <BodyEditor
-        value={grpc.message}
-        onChange={(message) => patch({ message })}
-        placeholder={'{\n  "name": "world"\n}'}
-      />
+      <div className="grpc-message">
+        {offerBar}
+        <BodyEditor
+          value={grpc.message}
+          onChange={(message) => patch({ message })}
+          placeholder={'{\n  "name": "world"\n}'}
+        />
+      </div>
     );
   }
 
@@ -81,7 +146,7 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
           disabled={methods.length === 0}
           onChange={(e) => {
             const [service, method] = e.target.value.split("/");
-            patch({ service, method });
+            void selectMethod(service, method);
           }}
         >
           <option value="" disabled>
@@ -103,6 +168,7 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
           })}
         </select>
       </div>
+      {offerBar}
       {error && <p className="inline-error">{error}</p>}
       {methods.length === 0 && !error && (
         <p className="empty-line">

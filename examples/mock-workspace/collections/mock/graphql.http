@@ -1,0 +1,43 @@
+### GraphQL user
+POST {{baseUrl}}/graphql
+X-REQUEST-TYPE: GraphQL
+
+query User($id: ID!) {
+  user(id: $id) {
+    id
+    name
+    email
+  }
+}
+
+{"id": "u-1"}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the variable selected Ada", function () {
+  pm.expect(pm.response.json().data.user.name).to.equal("Ada Lovelace");
+});
+%}
+
+### GraphQL users
+POST {{baseUrl}}/graphql
+X-REQUEST-TYPE: GraphQL
+
+{ users { id name } }
+
+> {%
+pm.test("the list came back", function () { pm.expect(pm.response.json().data.users[0].id).to.exist; });
+%}
+
+### GraphQL errors with HTTP 200
+POST {{baseUrl}}/graphql
+X-REQUEST-TYPE: GraphQL
+
+{ boom }
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the error is in the body, not the status", function () {
+  pm.expect(pm.response.json().errors[0].extensions.code).to.equal("BOOM");
+});
+%}

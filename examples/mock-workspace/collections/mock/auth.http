@@ -1,0 +1,26 @@
+### Basic auth
+GET {{baseUrl}}/auth/basic
+Authorization: Basic ada:lovelace
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### Bearer auth
+GET {{baseUrl}}/auth/bearer
+Authorization: Bearer mock-bearer-token
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### API key auth
+GET {{baseUrl}}/auth/apikey
+x-api-key: mock-api-key
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("key arrived in the header", function () {
+  pm.expect(pm.response.json().placement).to.equal("header");
+});
+%}

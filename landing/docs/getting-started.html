@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with Mándalo</title>
+<meta name="description" content="Install Mándalo, choose a workspace directory, create a collection, add an environment, and send your first HTTP, GraphQL or gRPC request.">
+<link rel="canonical" href="https://mandalo.dev/docs/getting-started">
+<meta property="og:title" content="Getting started with Mándalo">
+<meta property="og:description" content="Install Mándalo, choose a workspace directory, create a collection, add an environment, and send your first HTTP, GraphQL or gRPC request.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/getting-started">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Getting started with Mándalo">
+<meta name="twitter:description" content="Install Mándalo, choose a workspace directory, create a collection, add an environment, and send your first HTTP, GraphQL or gRPC request.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Getting started with Mándalo",
+  "description": "Install Mándalo, choose a workspace directory, create a collection, add an environment, and send your first HTTP, GraphQL or gRPC request.",
+  "url": "https://mandalo.dev/docs/getting-started",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Getting started",
+      "item": "https://mandalo.dev/docs/getting-started"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started" aria-current="page">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>Getting started</p>
+    <h1>Getting started</h1>
+    <p class="lede">Install the app, point it at a directory, and send a request. It takes about a minute, and nothing you do here leaves your machine.</p>
+
+    <h2>Desktop or browser</h2>
+    <p>Mándalo runs two ways from the same code. The desktop app is a Tauri shell around the Rust core; the <a href="/app">web app</a> runs the same client entirely in your browser. Neither one has a server behind it — the browser build is not a hosted service, it is the client running on your machine.</p>
+    <p>The browser build stores collections in the browser, and on Chromium it can open a real local folder through the File System Access API, so your collections stay actual <code>.http</code> files in your git checkout. One genuine difference is worth knowing before you start:</p>
+    <div class="callout">
+      <span class="callout-label">CORS in the browser build</span>
+      <p>A page in a browser can only call hosts that send CORS headers, and can only read response headers the server marks with <code>Access-Control-Expose-Headers</code> (beyond the safelisted ones). That is a browser rule, not a Mándalo rule, and it applies to every browser-based client. The desktop app talks to the network from Rust and has no such restriction, so it is the right choice for APIs you do not control.</p>
+    </div>
+
+    <h2>Install the desktop app</h2>
+    <p>Builds for macOS, Windows and Linux are attached to every release on GitHub. Grab the one for your platform from the <a href="https://github.com/De-Rus/mandalo/releases/latest">latest release page</a>:</p>
+    <ul>
+      <li><strong>macOS</strong> — open the disk image and drag Mándalo into <code>/Applications</code>.</li>
+      <li><strong>Windows</strong> — run the installer.</li>
+      <li><strong>Linux</strong> — take the AppImage or the <code>.deb</code>, whichever suits your distribution.</li>
+    </ul>
+    <p>On macOS the disk image comes in three flavours — Apple silicon, Intel, and a universal build that runs on both. Take the universal one if you are not sure.</p>
+    <p>The builds are not code-signed by a paid certificate, so macOS Gatekeeper and Windows SmartScreen will ask you to confirm the first launch. If you would rather not trust a binary, the project is open source — <code>pnpm install &amp;&amp; pnpm tauri dev</code> builds it from source.</p>
+
+    <h2>Or the command line, or your editor</h2>
+    <p>The desktop app is one of three ways in, and they read the same workspace directory.</p>
+    <ul>
+      <li><strong>Command line</strong> — <code>curl -fsSL https://mandalo.dev/install.sh | sh</code> on macOS or Linux, or <code>brew install De-Rus/tap/mandalo</code>. It verifies the download against the release checksums and installs into <code>~/.local/bin</code> without <code>sudo</code>. See <a href="/docs/cli-and-ci">CLI &amp; CI</a>.</li>
+      <li><strong>VS Code or Cursor</strong> — download the <code>.vsix</code> for your platform from the <a href="https://github.com/De-Rus/mandalo/releases/latest">release page</a> and run <code>code --install-extension mandalo-&lt;platform&gt;-&lt;version&gt;.vsix</code>. The per-platform builds bundle the CLI, so gRPC works immediately; the <code>universal</code> build does not, and needs <code>mandalo</code> on your <code>PATH</code> for gRPC. It is not on the Marketplace yet.</li>
+      <li><strong>Browser</strong> — <a href="/app">mandalo.dev/app</a>, nothing to install at all.</li>
+    </ul>
+
+    <h2>Pick a workspace directory</h2>
+    <p>A <strong>workspace</strong> is just a directory on disk. Everything you create in the app is written there as text. The default is <code>~/Mandalo</code>; point it at a checkout of your API repo instead and your collections become part of that repo.</p>
+    <p>On first open, Mándalo creates the skeleton:</p>
+<pre><code>my-workspace/
+  mandalo.toml          # workspace manifest: schema version, id, name
+  environments/         # one TOML file per environment
+  collections/          # one directory per collection</code></pre>
+    <p>You can register several workspaces and switch between them — one per repository is a good default. The registry of known workspaces lives in your OS config directory, not in the workspace itself, so it never pollutes a repo.</p>
+
+    <h2>Create a collection</h2>
+    <p>Create a collection from the sidebar and give it a name. Mándalo slugifies the name into a directory and writes a manifest:</p>
+<pre><code>collections/payments-api/
+  collection.toml       # schema_version, id, name
+  list-charges.http     # one file per request
+  users/                # folders are directories
+    create.http</code></pre>
+    <p>Folders are real directories and requests are real files, so moving a request between folders is a file move and shows up in git as one. The full layout is in <a href="/docs/collections-and-git">Collections &amp; git</a>.</p>
+
+    <h2>Your first request</h2>
+    <p>Pick a method, type a URL, hit Send. For a request you want to keep, save it into a collection — that write lands on disk immediately.</p>
+    <p>The request editor covers the three kinds Mándalo speaks:</p>
+    <ul>
+      <li><strong>HTTP</strong> — method, URL, headers, body.</li>
+      <li><strong>GraphQL</strong> — a query and a JSON variables document; Mándalo posts them as <code>{"query": …, "variables": …}</code>. Invalid variables JSON is an error, not a silently empty object.</li>
+      <li><strong>gRPC</strong> — proto file paths, a service and method, and a JSON message. See <a href="/docs/grpc">gRPC</a>.</li>
+    </ul>
+    <p>Auth is a field on the request, not a header you hand-roll: <code>none</code>, <code>bearer</code>, <code>basic</code>, or <code>apikey</code> with the key placed in a header or in the query string.</p>
+
+    <h2>Add an environment</h2>
+    <p>Hard-coded hostnames age badly. Create an environment — <code>staging</code>, say — with a <code>baseUrl</code> variable, and write your URL as <code>{{baseUrl}}/v1/charges</code>. Each environment is one file:</p>
+<pre><code># environments/staging.toml
+name = "staging"
+
+[vars]
+baseUrl = "https://api.staging.example.com"
+apiVersion = "2026-08-01"</code></pre>
+    <p>Interpolation applies to the URL, headers, body, auth fields, GraphQL query and variables, and gRPC message and metadata. A variable that no environment resolves is a hard error — Mándalo will not send a request with a literal <code>{{baseUrl}}</code> in it. Details in <a href="/docs/environments-and-variables">Environments &amp; variables</a>.</p>
+
+    <h2>Send and read the response</h2>
+    <p>Send gives you the status line, the elapsed time, the response size, and tabs for the body and the headers. JSON bodies are pretty-printed and highlighted.</p>
+    <p>One thing worth internalising: <strong>a non-2xx response is a result, not an error</strong>. A 404 renders like any other response, with its body and headers intact, because that is frequently the thing you were testing. Only transport-level failures — DNS, TLS, connection refused, timeouts — surface as errors.</p>
+
+    <h2>Next</h2>
+    <ul>
+      <li>Commit the workspace and review API changes as diffs: <a href="/docs/collections-and-git">Collections &amp; git</a>.</li>
+      <li>Assert on responses without writing code: <a href="/docs/scripts-and-tests">Scripts &amp; tests</a>.</li>
+      <li>Bringing existing work over: <a href="/docs/importing-from-postman">Importing from Postman</a>.</li>
+    </ul>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/"><span class="pager-dir">Previous</span><span class="pager-title">Documentation</span></a>
+      <a class="pager-link next" href="/docs/collections-and-git"><span class="pager-dir">Next</span><span class="pager-title">Collections & git</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

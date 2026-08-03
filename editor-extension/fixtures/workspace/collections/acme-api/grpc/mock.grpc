@@ -1,0 +1,12 @@
+### Say hello
+{{grpcUrl}}/mock.v1.Mock/Say
+proto: protos/mock.proto
+x-trace: mandalo
+
+{ "text": "hola", "n": 21 }
+
+### Say again
+{{grpcUrl}}/mock.v1.Mock/SayAgain
+proto: protos/mock.proto
+
+{ "text": "otra vez" }

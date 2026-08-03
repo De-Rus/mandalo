@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Rust workspace build output
+/target/
+
+# Built browser app + its generated script worker (produced by CI, see landing.yml)
+/landing/app/
+/src/lib/web/public/
+/.screenshots/
+
+# Built VS Code request-editor WebView bundle (pnpm build:vscode)
+/editor-extension/media/editor/

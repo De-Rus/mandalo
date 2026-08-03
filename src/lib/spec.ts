@@ -1,4 +1,4 @@
-import type { Auth, GrpcRequest, RequestSpec } from "./api";
+import type { Auth, GrpcSpec, RequestSpec } from "./api";
 import type { AuthDraft, KVRow, RequestDraft } from "./draft";
 
 export function activeRows(rows: KVRow[]): [string, string][] {
@@ -83,7 +83,7 @@ export function parseProtoPaths(text: string): string[] {
 export function buildGrpcRequest(
   draft: RequestDraft,
   vars: Record<string, string>,
-): GrpcRequest {
+): GrpcSpec {
   return {
     url: draft.url,
     protoPaths: parseProtoPaths(draft.grpc.protoPaths),

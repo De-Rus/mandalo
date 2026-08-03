@@ -1,0 +1,16 @@
+@scope = auth
+
+### Login
+POST {{base}}/auth/login
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{ "user": "ada" }
+
+> {%
+pm.environment.set("token", pm.response.json().token);
+%}
+
+### Get profile
+GET {{base}}/me
+Authorization: Bearer {{token}}

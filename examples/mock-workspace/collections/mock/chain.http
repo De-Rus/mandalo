@@ -1,0 +1,21 @@
+### 1 Login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{"username": "ada", "password": "lovelace"}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.environment.set("token", pm.response.json().token);
+%}
+
+### 2 Authenticated call
+GET {{baseUrl}}/auth/bearer
+Authorization: Bearer {{token}}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the captured token was accepted", function () {
+  pm.expect(pm.response.json().authenticated).to.equal(true);
+});
+%}

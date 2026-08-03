@@ -1,4 +1,4 @@
-import type { Kind } from "./api";
+import type { Capture, Kind, TestAssertion } from "./api";
 
 export interface KVRow {
   id: string;
@@ -33,6 +33,9 @@ export interface RequestDraft {
   kind: Kind;
   method: string;
   url: string;
+  description: string;
+  collection: string;
+  path: string | null;
   params: KVRow[];
   headers: KVRow[];
   body: string;
@@ -40,6 +43,10 @@ export interface RequestDraft {
   graphqlQuery: string;
   graphqlVariables: string;
   grpc: GrpcDraft;
+  preScript: string;
+  testScript: string;
+  tests: TestAssertion[];
+  captures: Capture[];
 }
 
 export function uid(): string {
@@ -50,13 +57,20 @@ export function emptyRow(): KVRow {
   return { id: uid(), key: "", value: "", enabled: true };
 }
 
-export function newDraft(name = "New Request"): RequestDraft {
+export function newDraft(
+  name = "New Request",
+  kind: Kind = "http",
+  collection = "",
+): RequestDraft {
   return {
     id: uid(),
     name,
-    kind: "http",
-    method: "GET",
+    kind,
+    method: kind === "http" ? "GET" : "POST",
     url: "",
+    description: "",
+    collection,
+    path: null,
     params: [emptyRow()],
     headers: [emptyRow()],
     body: "",
@@ -78,5 +92,9 @@ export function newDraft(name = "New Request"): RequestDraft {
       message: "",
       metadata: [emptyRow()],
     },
+    preScript: "",
+    testScript: "",
+    tests: [],
+    captures: [],
   };
 }

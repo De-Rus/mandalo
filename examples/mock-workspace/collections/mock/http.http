@@ -1,0 +1,104 @@
+@trace = mandalo
+
+### GET echo
+GET {{baseUrl}}/get?page=2&limit=10
+X-Trace: {{trace}}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("method is GET", function () { pm.expect(pm.response.json().method).to.equal("GET"); });
+%}
+
+### POST echo
+POST {{baseUrl}}/post
+Content-Type: application/json
+
+{"name": "nova", "tier": "pro"}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("method is POST", function () { pm.expect(pm.response.json().method).to.equal("POST"); });
+%}
+
+### PUT echo
+PUT {{baseUrl}}/put
+Content-Type: application/json
+
+{"name": "nova"}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### PATCH echo
+PATCH {{baseUrl}}/patch
+Content-Type: application/json
+
+{"tier": "free"}
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### DELETE echo
+DELETE {{baseUrl}}/delete
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### JSON body
+GET {{baseUrl}}/json
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("content type is json", function () {
+  pm.expect(pm.response.headers.get("content-type")).to.include("application/json");
+});
+pm.test("nested field arrived", function () { pm.expect(pm.response.json().nested.ok).to.equal(true); });
+%}
+
+### Header echo
+GET {{baseUrl}}/headers/echo
+X-Mandalo: hola
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### Teapot
+GET {{baseUrl}}/status/418
+
+> {%
+pm.test("status is 418", function () { pm.response.to.have.status(418); });
+%}
+
+### Redirect chain
+GET {{baseUrl}}/redirect/3
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### Gzip body
+GET {{baseUrl}}/gzip
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("body was gzipped", function () { pm.expect(pm.response.json().encoding).to.equal("gzip"); });
+%}
+
+### Binary body
+GET {{baseUrl}}/binary
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
+
+### Slow response
+GET {{baseUrl}}/slow?ms=300
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("under five seconds", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });
+%}

@@ -1,49 +1,98 @@
 import { create } from "zustand";
 import {
   errorMessage,
-  sendGrpc,
-  sendRequest,
+  runRequestDraft,
   type GrpcResponse,
   type ResponseData,
+  type ScriptTest,
+  type StepResult,
+  type TestResult,
+  type UnboundSecret,
 } from "../lib/api";
+import { toSaved } from "../lib/collection";
 import type { RequestDraft } from "../lib/draft";
-import { buildGrpcRequest, buildRequestSpec } from "../lib/spec";
+import { useEnv } from "./env";
+
+export interface RunResult {
+  tests: TestResult[];
+  scriptTests: TestResult[];
+  logs: string[];
+  captured: Record<string, string>;
+  unboundSecrets: UnboundSecret[];
+  secretVarSets: string[];
+}
 
 export type ResponseState =
   | { phase: "idle" }
   | { phase: "loading" }
-  | { phase: "http"; data: ResponseData }
-  | { phase: "grpc"; data: GrpcResponse }
-  | { phase: "error"; message: string };
+  | { phase: "http"; data: ResponseData; run: RunResult }
+  | { phase: "grpc"; data: GrpcResponse; run: RunResult }
+  | { phase: "error"; message: string; logs: string[] };
 
 interface SessionState {
   responses: Record<string, ResponseState>;
-  sidebarCollapsed: boolean;
-  toggleSidebar: () => void;
-  send: (draft: RequestDraft, vars: Record<string, string>) => Promise<void>;
+  send: (draft: RequestDraft) => Promise<void>;
   evictResponse: (id: string) => void;
+}
+
+export const EMPTY_RUN: RunResult = {
+  tests: [],
+  scriptTests: [],
+  logs: [],
+  captured: {},
+  unboundSecrets: [],
+  secretVarSets: [],
+};
+
+function toTestResult(test: ScriptTest): TestResult {
+  return { name: test.name, passed: test.passed, detail: test.error };
+}
+
+function runOf(step: StepResult): RunResult {
+  return {
+    tests: step.tests ?? [],
+    scriptTests: (step.scriptTests ?? []).map(toTestResult),
+    logs: step.logs ?? [],
+    captured: step.captured ?? {},
+    unboundSecrets: step.unboundSecrets ?? [],
+    secretVarSets: step.secretVarSets ?? [],
+  };
 }
 
 export const useSession = create<SessionState>((set, get) => ({
   responses: {},
-  sidebarCollapsed: false,
-  toggleSidebar: () =>
-    set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  send: async (draft, vars) => {
+  send: async (draft) => {
     if (get().responses[draft.id]?.phase === "loading") return;
     const put = (state: ResponseState) =>
       set((s) => ({ responses: { ...s.responses, [draft.id]: state } }));
     put({ phase: "loading" });
+
+    const { workspace, selected } = useEnv.getState();
+    if (!workspace) {
+      put({ phase: "error", message: "Workspace not loaded yet", logs: [] });
+      return;
+    }
+
     try {
-      if (draft.kind === "grpc") {
-        const data = await sendGrpc(buildGrpcRequest(draft, vars));
-        put({ phase: "grpc", data });
-      } else {
-        const data = await sendRequest(buildRequestSpec(draft, vars));
-        put({ phase: "http", data });
+      const step = await runRequestDraft(workspace, toSaved(draft), selected);
+      const run = runOf(step);
+      if (step.error) {
+        put({ phase: "error", message: step.error, logs: run.logs });
+        return;
       }
+      if (step.grpc) put({ phase: "grpc", data: step.grpc, run });
+      else if (step.response) put({ phase: "http", data: step.response, run });
+      else {
+        put({
+          phase: "error",
+          message: `${draft.name} produced no response`,
+          logs: run.logs,
+        });
+        return;
+      }
+      await useEnv.getState().applyVarWrites(step.varSets ?? {}, step.varUnsets ?? []);
     } catch (e) {
-      put({ phase: "error", message: errorMessage(e) });
+      put({ phase: "error", message: errorMessage(e), logs: [] });
     }
   },
   evictResponse: (id) =>
@@ -55,10 +104,8 @@ export const useSession = create<SessionState>((set, get) => ({
     }),
 }));
 
-export function useResponse(id: string | null): ResponseState {
-  return useSession((s) =>
-    id ? (s.responses[id] ?? IDLE) : IDLE,
-  );
-}
-
 const IDLE: ResponseState = { phase: "idle" };
+
+export function useResponse(id: string | null): ResponseState {
+  return useSession((s) => (id ? (s.responses[id] ?? IDLE) : IDLE));
+}

@@ -1,31 +1,87 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SavedRequest, Tree } from "../lib/api";
 import { toSaved } from "../lib/collection";
 import { newDraft } from "../lib/draft";
 import { flushPendingSaves, useCollection } from "./collection";
 import { useSession } from "./session";
+import { useTabs } from "./tabs";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+const SAVED: SavedRequest = {
+  ...toSaved(newDraft("List users")),
+  id: "r1",
+  method: "GET",
+  url: "https://api.dev/users",
+};
+
+const TREE: Tree = {
+  collections: [
+    {
+      id: "c1",
+      slug: "acme",
+      name: "Acme API",
+      folders: [
+        {
+          name: "Users",
+          path: "users",
+          folders: [],
+          requests: [
+            {
+              id: "r1",
+              name: "List users",
+              kind: "http",
+              method: "GET",
+              path: "users/list-users.toml",
+            },
+          ],
+        },
+      ],
+      requests: [],
+    },
+  ],
+  skipped: [],
+};
+
+function mockBackend(overrides: Record<string, unknown> = {}): void {
+  invoke.mockImplementation((cmd: string) => {
+    if (cmd in overrides) return Promise.resolve(overrides[cmd]);
+    if (cmd === "list_workspaces")
+      return Promise.resolve({
+        items: [{ id: "w1", path: "/ws", name: "ws" }],
+        active: "w1",
+      });
+    if (cmd === "list_tree") return Promise.resolve(TREE);
+    if (cmd === "load_request") return Promise.resolve(SAVED);
+    if (cmd === "save_request")
+      return Promise.resolve({ path: "users/list-users.toml" });
+    return Promise.resolve(undefined);
+  });
+}
+
 async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 10; i++) await Promise.resolve();
+  for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
 describe("collection store", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     invoke.mockReset();
-    invoke.mockResolvedValue("saved");
     localStorage.clear();
-    const first = newDraft("First");
+    mockBackend();
+    useTabs.setState({ openIds: [], dirtyIds: [] });
+    useSession.setState({ responses: {} });
     useCollection.setState({
-      workspace: "/ws",
-      requests: [first],
-      activeId: first.id,
+      workspace: null,
+      tree: { collections: [], skipped: [] },
+      drafts: {},
+      activeId: null,
+      loadingId: null,
       error: null,
+      warning: null,
       initStarted: false,
     });
-    useSession.setState({ responses: {} });
   });
 
   afterEach(async () => {
@@ -33,91 +89,110 @@ describe("collection store", () => {
     vi.useRealTimers();
   });
 
-  it("adds a request, makes it active, and persists it immediately", async () => {
-    useCollection.getState().addRequest();
-    const s = useCollection.getState();
-    expect(s.requests).toHaveLength(2);
-    expect(s.activeId).toBe(s.requests[1].id);
-    expect(s.requests[1].kind).toBe("http");
+  it("init loads the workspace tree and opens the first request", async () => {
+    await useCollection.getState().init();
     await flushMicrotasks();
-    expect(invoke).toHaveBeenCalledWith("save_request", {
+
+    const s = useCollection.getState();
+    expect(s.workspace).toBe("/ws");
+    expect(s.tree.collections[0].name).toBe("Acme API");
+    expect(s.activeId).toBe("r1");
+    expect(s.drafts.r1.name).toBe("List users");
+    expect(useTabs.getState().openIds).toEqual(["r1"]);
+    expect(invoke).toHaveBeenCalledWith("load_request", {
       workspace: "/ws",
-      request: toSaved(s.requests[1]),
+      collection: "acme",
+      path: "users/list-users.toml",
     });
   });
 
-  it("renames a request and ignores blank names", () => {
-    const id = useCollection.getState().requests[0].id;
-    useCollection.getState().renameRequest(id, "  Users API  ");
-    expect(useCollection.getState().requests[0].name).toBe("Users API");
-    useCollection.getState().renameRequest(id, "   ");
-    expect(useCollection.getState().requests[0].name).toBe("Users API");
+  it("runs init only once even when invoked twice", async () => {
+    await Promise.all([
+      useCollection.getState().init(),
+      useCollection.getState().init(),
+    ]);
+    expect(invoke.mock.calls.filter((c) => c[0] === "list_tree")).toHaveLength(1);
   });
 
-  it("deletes a request, moves the active pointer, and deletes the file", async () => {
-    useCollection.getState().addRequest();
+  it("surfaces skipped files from the tree as a warning", async () => {
+    mockBackend({
+      list_tree: { collections: TREE.collections, skipped: ["/ws/a.toml: bad"] },
+    });
+    await useCollection.getState().init();
     await flushMicrotasks();
-    const [a, b] = useCollection.getState().requests;
+    expect(useCollection.getState().warning).toContain("a.toml");
+    expect(useCollection.getState().error).toBeNull();
+  });
+
+  it("debounces edits into one save_request call and clears the dirty flag", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
     invoke.mockClear();
-    useCollection.getState().deleteRequest(b.id);
-    let s = useCollection.getState();
-    expect(s.requests.map((r) => r.id)).toEqual([a.id]);
-    expect(s.activeId).toBe(a.id);
-    await flushMicrotasks();
-    expect(invoke).toHaveBeenCalledWith("delete_request", {
-      workspace: "/ws",
-      id: b.id,
-    });
-    useCollection.getState().deleteRequest(a.id);
-    s = useCollection.getState();
-    expect(s.requests).toHaveLength(0);
-    expect(s.activeId).toBeNull();
-  });
 
-  it("updates only the active request", () => {
-    useCollection.getState().addRequest();
-    const [a, b] = useCollection.getState().requests;
-    useCollection.getState().updateActive({ url: "https://x.dev" });
-    const s = useCollection.getState();
-    expect(s.requests.find((r) => r.id === b.id)?.url).toBe("https://x.dev");
-    expect(s.requests.find((r) => r.id === a.id)?.url).toBe("");
-  });
-
-  it("debounces edit saves into one save_request call", async () => {
     useCollection.getState().updateActive({ url: "https://x" });
     useCollection.getState().updateActive({ url: "https://x.d" });
     useCollection.getState().updateActive({ url: "https://x.dev" });
-    expect(invoke).not.toHaveBeenCalled();
+    expect(useTabs.getState().dirtyIds).toEqual(["r1"]);
+    expect(
+      invoke.mock.calls.filter((c) => c[0] === "save_request"),
+    ).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
 
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const active = useCollection.getState().requests[0];
-    expect(invoke).toHaveBeenCalledWith("save_request", {
+    const saves = invoke.mock.calls.filter((c) => c[0] === "save_request");
+    expect(saves).toHaveLength(1);
+    expect(saves[0][1]).toMatchObject({
       workspace: "/ws",
-      request: toSaved({ ...active, url: "https://x.dev" }),
+      collection: "acme",
+      path: "users/list-users.toml",
+      folder: "users",
+    });
+    expect(useTabs.getState().dirtyIds).toEqual([]);
+  });
+
+  it("creates a request in the given collection and folder", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+
+    useCollection.getState().addRequest("graphql", "acme", "users");
+    const id = useCollection.getState().activeId as string;
+    expect(useCollection.getState().drafts[id].kind).toBe("graphql");
+    await flushMicrotasks();
+
+    const create = invoke.mock.calls.find((c) => c[0] === "save_request");
+    expect(create?.[1]).toMatchObject({
+      collection: "acme",
+      path: null,
+      folder: "users",
     });
   });
 
-  it("flushes the pending save when switching requests", async () => {
-    useCollection.getState().addRequest();
-    const [a, b] = useCollection.getState().requests;
+  it("deletes a request through its collection path and drops the tab", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
     invoke.mockClear();
-    useCollection.getState().updateActive({ url: "https://pending" });
-    useCollection.getState().openRequest(a.id);
+
+    useCollection.getState().deleteRequest("r1");
     await flushMicrotasks();
 
-    expect(useCollection.getState().activeId).toBe(a.id);
-    expect(invoke).toHaveBeenCalledWith("save_request", {
+    expect(useCollection.getState().drafts.r1).toBeUndefined();
+    expect(useTabs.getState().openIds).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("delete_request", {
       workspace: "/ws",
-      request: expect.objectContaining({ id: b.id, url: "https://pending" }),
+      collection: "acme",
+      path: "users/list-users.toml",
     });
   });
 
   it("cancels a pending save when the request is deleted", async () => {
-    const id = useCollection.getState().requests[0].id;
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+
     useCollection.getState().updateActive({ url: "https://gone" });
-    useCollection.getState().deleteRequest(id);
+    useCollection.getState().deleteRequest("r1");
     await vi.advanceTimersByTimeAsync(600);
     await flushMicrotasks();
 
@@ -126,48 +201,28 @@ describe("collection store", () => {
     expect(calls).not.toContain("save_request");
   });
 
-  it("remembers the active request id", () => {
-    useCollection.getState().addRequest();
-    const s = useCollection.getState();
-    expect(localStorage.getItem("mandalo.collection.active")).toBe(s.activeId);
-  });
-
-  it("init loads the workspace collection and seeds one draft when empty", async () => {
-    useCollection.setState({ workspace: null, requests: [], activeId: null });
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws2");
-      if (cmd === "list_requests")
-        return Promise.resolve({ items: [], skipped: [] });
-      return Promise.resolve("saved");
-    });
-
+  it("evicts the session response when a request is deleted", async () => {
     await useCollection.getState().init();
-
-    const s = useCollection.getState();
-    expect(s.workspace).toBe("/ws2");
-    expect(s.requests).toHaveLength(1);
-    expect(s.activeId).toBe(s.requests[0].id);
-    expect(invoke).toHaveBeenCalledWith("save_request", {
-      workspace: "/ws2",
-      request: toSaved(s.requests[0]),
+    await flushMicrotasks();
+    useSession.setState({
+      responses: { r1: { phase: "error", message: "boom", logs: [] } },
     });
+
+    useCollection.getState().deleteRequest("r1");
+    expect(useSession.getState().responses.r1).toBeUndefined();
   });
 
-  it("surfaces persistence failures as store errors", async () => {
-    invoke.mockRejectedValue("disk full");
+  it("surfaces persistence failures as store errors and clears them on success", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+
+    invoke.mockImplementationOnce(() => Promise.reject("disk full"));
     useCollection.getState().updateActive({ url: "https://x.dev" });
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
     expect(useCollection.getState().error).toBe("disk full");
-  });
 
-  it("clears a sticky error on the next successful save", async () => {
-    invoke.mockRejectedValueOnce("disk full");
-    useCollection.getState().updateActive({ url: "https://x.dev" });
-    await vi.advanceTimersByTimeAsync(500);
-    await flushMicrotasks();
-    expect(useCollection.getState().error).toBe("disk full");
-
+    mockBackend();
     useCollection.getState().updateActive({ url: "https://x.dev/ok" });
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
@@ -175,113 +230,65 @@ describe("collection store", () => {
   });
 
   it("serializes a delete behind an in-flight save for the same id", async () => {
-    const id = useCollection.getState().requests[0].id;
-    let resolveSave!: (value: string) => void;
-    invoke.mockImplementation((cmd: string) =>
-      cmd === "save_request"
-        ? new Promise<string>((r) => {
-            resolveSave = r;
-          })
-        : Promise.resolve(undefined),
-    );
+    await useCollection.getState().init();
+    await flushMicrotasks();
+
+    let resolveSave!: (value: unknown) => void;
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "save_request")
+        return new Promise((r) => {
+          resolveSave = r;
+        });
+      if (cmd === "list_tree") return Promise.resolve(TREE);
+      return Promise.resolve(undefined);
+    });
 
     useCollection.getState().updateActive({ url: "https://slow" });
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
-    expect(invoke.mock.calls.map((c) => c[0])).toEqual(["save_request"]);
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("save_request");
+    expect(invoke.mock.calls.map((c) => c[0])).not.toContain("delete_request");
 
-    useCollection.getState().deleteRequest(id);
+    useCollection.getState().deleteRequest("r1");
     await flushMicrotasks();
-    expect(invoke.mock.calls.map((c) => c[0])).toEqual(["save_request"]);
+    expect(invoke.mock.calls.map((c) => c[0])).not.toContain("delete_request");
 
-    resolveSave("saved");
+    resolveSave({ path: "users/list-users.toml" });
     await flushMicrotasks();
-    expect(invoke.mock.calls.map((c) => c[0])).toEqual([
-      "save_request",
-      "delete_request",
-    ]);
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("delete_request");
   });
 
-  it("evicts the session response when a request is deleted", () => {
-    const id = useCollection.getState().requests[0].id;
-    useSession.setState({
-      responses: { [id]: { phase: "error", message: "boom" } },
-    });
-    useCollection.getState().deleteRequest(id);
-    expect(useSession.getState().responses[id]).toBeUndefined();
-  });
-
-  it("runs init only once even when invoked twice", async () => {
-    useCollection.setState({
-      workspace: null,
-      requests: [],
-      activeId: null,
-      initStarted: false,
-    });
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws2");
-      if (cmd === "list_requests")
-        return Promise.resolve({ items: [], skipped: [] });
-      return Promise.resolve("saved");
-    });
-
-    await Promise.all([
-      useCollection.getState().init(),
-      useCollection.getState().init(),
-    ]);
-
-    expect(useCollection.getState().requests).toHaveLength(1);
-    expect(
-      invoke.mock.calls.filter((c) => c[0] === "list_requests"),
-    ).toHaveLength(1);
-  });
-
-  it("init skips unreadable saved requests and surfaces a warning", async () => {
-    useCollection.setState({
-      workspace: null,
-      requests: [],
-      activeId: null,
-      initStarted: false,
-    });
-    const good = toSaved(newDraft("Good"));
-    const bad = { ...toSaved(newDraft("Broken")), kind: "soap" };
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws2");
-      if (cmd === "list_requests")
-        return Promise.resolve({ items: [good, bad], skipped: [] });
-      return Promise.resolve("saved");
-    });
-
+  it("remembers the active request id across restarts", async () => {
     await useCollection.getState().init();
-
-    const s = useCollection.getState();
-    expect(s.requests.map((r) => r.name)).toEqual(["Good"]);
-    expect(s.error).toContain("Broken");
+    await flushMicrotasks();
+    expect(localStorage.getItem("mandalo.collection.active")).toBe("r1");
   });
 
-  it("init surfaces backend-skipped request files as a warning", async () => {
-    useCollection.setState({
-      workspace: null,
-      requests: [],
-      activeId: null,
-      initStarted: false,
-    });
-    const good = toSaved(newDraft("Good"));
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws2");
-      if (cmd === "list_requests")
-        return Promise.resolve({
-          items: [good],
-          skipped: ["/ws2/requests/broken.toml: expected an equals"],
-        });
-      return Promise.resolve("saved");
-    });
-
+  it("creates a collection and refreshes the tree", async () => {
     await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
 
-    const s = useCollection.getState();
-    expect(s.requests.map((r) => r.name)).toEqual(["Good"]);
-    expect(s.error).toContain("broken.toml");
-    expect(s.error).toContain("expected an equals");
+    await useCollection.getState().createCollection("Billing");
+
+    expect(invoke).toHaveBeenCalledWith("create_collection", {
+      workspace: "/ws",
+      name: "Billing",
+    });
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("list_tree");
+  });
+
+  it("creates a folder through the collection command", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+
+    await useCollection.getState().createFolder("acme", "users/admin");
+
+    expect(invoke).toHaveBeenCalledWith("create_folder", {
+      workspace: "/ws",
+      collection: "acme",
+      path: "users/admin",
+    });
   });
 });

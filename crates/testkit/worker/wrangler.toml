@@ -1,0 +1,11 @@
+name = "mandalo-mock"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[[routes]]
+pattern = "api.mandalo.dev/*"
+zone_name = "mandalo.dev"
+
+[observability]
+enabled = true

@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ACTIVE_KEY } from "./lib/collection";
-import "./styles.css";
+import "./styles/index.css";
 
 interface BoundaryState {
   error: Error | null;
@@ -20,6 +20,7 @@ class ErrorBoundary extends React.Component<
 
   resetView = () => {
     localStorage.removeItem(ACTIVE_KEY);
+    localStorage.removeItem("mandalo.tabs.v1");
     location.reload();
   };
 

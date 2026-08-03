@@ -1,0 +1,219 @@
+.web-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.web-app {
+  flex: 1;
+  min-height: 0;
+}
+
+.web-ribbon {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  background: #0c0d10;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.web-ribbon-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-ring);
+  color: var(--brand);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.web-ribbon-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-ribbon-spacer {
+  flex: 1;
+  min-width: var(--sp-2);
+}
+
+.web-ribbon-link {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.web-ribbon-link:hover {
+  color: var(--text-primary);
+}
+
+.web-ribbon-note {
+  max-width: 40ch;
+  overflow: hidden;
+  padding: 0 4px;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-ribbon-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  background: var(--brand);
+  color: var(--text-inverse);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.web-ribbon-cta:hover {
+  background: var(--brand-hover);
+}
+
+.web-card {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  width: min(460px, calc(100vw - 36px));
+  padding: 16px 18px 18px;
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  user-select: text;
+}
+
+.web-card-blocked {
+  border-color: var(--brand-ring);
+  border-top: 3px solid var(--brand);
+}
+
+.web-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: 10px;
+}
+
+.web-card-head h2 {
+  flex: 1;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.web-card code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--brand);
+}
+
+.web-card-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.web-card-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.web-card p {
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+.web-card strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.web-card-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+.web-card-list li {
+  margin-bottom: 6px;
+}
+
+.web-card-note {
+  padding-left: 11px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.web-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.web-card-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  height: 30px;
+  padding: 0 16px;
+  border-radius: var(--r-md);
+  background: var(--brand);
+  color: var(--text-inverse);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.web-card-cta:hover {
+  background: var(--brand-hover);
+}
+
+.web-card-hint {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+
+.web-boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+}

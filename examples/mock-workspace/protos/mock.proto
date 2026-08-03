@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package mock.v1;
+
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_FREE = 1;
+  TIER_PRO = 2;
+}
+
+message Address {
+  string city = 1;
+  string country = 2;
+}
+
+message User {
+  string id = 1;
+  string name = 2;
+  Address address = 3;
+  repeated string tags = 4;
+  Tier tier = 5;
+}
+
+message EchoRequest {
+  string text = 1;
+  int32 count = 2;
+}
+
+message EchoResponse {
+  string text = 1;
+  int32 doubled = 2;
+  string trace = 3;
+}
+
+message GetUserRequest {
+  string id = 1;
+  repeated string tags = 2;
+  Tier tier = 3;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message FailRequest {
+  string reason = 1;
+}
+
+message FailResponse {
+  string never = 1;
+}
+
+message SlowRequest {
+  int32 ms = 1;
+}
+
+message SlowResponse {
+  string done = 1;
+}
+
+message TickRequest {
+  int32 count = 1;
+}
+
+message Tick {
+  int32 n = 1;
+}
+
+service Mock {
+  rpc Say(EchoRequest) returns (EchoResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc Fail(FailRequest) returns (FailResponse);
+  rpc Slow(SlowRequest) returns (SlowResponse);
+  rpc Ticks(TickRequest) returns (stream Tick);
+}

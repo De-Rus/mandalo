@@ -1,0 +1,5 @@
+name = "hosted"
+
+[vars]
+baseUrl = "https://api.mandalo.dev"
+grpcUrl = "http://localhost:50051"

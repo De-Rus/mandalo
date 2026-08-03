@@ -1,12 +1,17 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import {
-  defaultWorkspaceDir,
+  bindSecretHost,
+  clearSecret,
   deleteEnvironment,
+  deleteVar,
   errorMessage,
-  listEnvironments,
-  saveEnvironment,
+  setSecret,
   type Environment,
+  type EnvironmentView,
+  type VarInfo,
 } from "../lib/api";
+import { listEnvironments, saveEnvironment } from "../lib/backend";
 
 const SELECTED_KEY = "mandalo.env.selected";
 
@@ -15,15 +20,47 @@ function skippedLine(skipped: string[]): string | null {
   return `Skipped ${skipped.length} unreadable environment file(s): ${skipped.join("; ")}`;
 }
 
+export function plainVars(
+  env: EnvironmentView | null | undefined,
+): Record<string, string> {
+  const vars: Record<string, string> = {};
+  if (!env) return vars;
+  for (const [key, info] of Object.entries(env.vars)) {
+    if (!info.secret && info.value !== null) vars[key] = info.value;
+  }
+  return vars;
+}
+
+export function secretNames(env: EnvironmentView | null | undefined): string[] {
+  if (!env) return [];
+  return Object.entries(env.vars)
+    .filter(([, info]) => info.secret)
+    .map(([key]) => key);
+}
+
+export function varLabel(info: VarInfo): string {
+  if (!info.secret) return info.value ?? "";
+  return info.set ? "••••••••" : "not set on this machine";
+}
+
 interface EnvState {
   workspace: string | null;
-  envs: Environment[];
+  envs: EnvironmentView[];
   selected: string | null;
   error: string | null;
-  init: () => Promise<void>;
+  init: (workspace: string) => Promise<void>;
+  refresh: () => Promise<void>;
   select: (name: string | null) => void;
   save: (env: Environment) => Promise<void>;
   remove: (name: string) => Promise<void>;
+  storeSecret: (env: string, key: string, value: string) => Promise<void>;
+  forgetSecret: (env: string, key: string) => Promise<void>;
+  bindHost: (env: string, key: string, host: string) => Promise<void>;
+  removeVar: (env: string, key: string) => Promise<void>;
+  applyVarWrites: (
+    sets: Record<string, string>,
+    unsets: string[],
+  ) => Promise<void>;
   dismissError: () => void;
 }
 
@@ -32,9 +69,8 @@ export const useEnv = create<EnvState>((set, get) => ({
   envs: [],
   selected: localStorage.getItem(SELECTED_KEY),
   error: null,
-  init: async () => {
+  init: async (workspace) => {
     try {
-      const workspace = await defaultWorkspaceDir();
       const { items: envs, skipped } = await listEnvironments(workspace);
       set((s) => ({
         workspace,
@@ -43,8 +79,14 @@ export const useEnv = create<EnvState>((set, get) => ({
         selected: envs.some((e) => e.name === s.selected) ? s.selected : null,
       }));
     } catch (e) {
-      set({ error: errorMessage(e) });
+      set({ workspace, error: errorMessage(e) });
     }
+  },
+  refresh: async () => {
+    const { workspace } = get();
+    if (!workspace) return;
+    const { items: envs, skipped } = await listEnvironments(workspace);
+    set({ envs, error: skippedLine(skipped) });
   },
   select: (name) => {
     if (name) localStorage.setItem(SELECTED_KEY, name);
@@ -56,8 +98,7 @@ export const useEnv = create<EnvState>((set, get) => ({
     if (!workspace) throw new Error("Workspace not loaded yet");
     try {
       await saveEnvironment(workspace, env);
-      const { items: envs, skipped } = await listEnvironments(workspace);
-      set({ envs, error: skippedLine(skipped) });
+      await get().refresh();
     } catch (e) {
       set({ error: errorMessage(e) });
       throw e;
@@ -68,25 +109,86 @@ export const useEnv = create<EnvState>((set, get) => ({
     if (!workspace) throw new Error("Workspace not loaded yet");
     try {
       await deleteEnvironment(workspace, name);
-      const { items: envs, skipped } = await listEnvironments(workspace);
-      set((s) => ({
-        envs,
-        error: skippedLine(skipped),
-        selected: s.selected === name ? null : s.selected,
-      }));
+      await get().refresh();
+      set((s) => ({ selected: s.selected === name ? null : s.selected }));
     } catch (e) {
       set({ error: errorMessage(e) });
       throw e;
     }
     if (get().selected === null) localStorage.removeItem(SELECTED_KEY);
   },
+  storeSecret: async (env, key, value) => {
+    const { workspace } = get();
+    if (!workspace) throw new Error("Workspace not loaded yet");
+    try {
+      await setSecret(workspace, env, key, value);
+      await get().refresh();
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
+    }
+  },
+  forgetSecret: async (env, key) => {
+    const { workspace } = get();
+    if (!workspace) throw new Error("Workspace not loaded yet");
+    try {
+      await clearSecret(workspace, env, key);
+      await get().refresh();
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
+    }
+  },
+  bindHost: async (env, key, host) => {
+    const { workspace } = get();
+    if (!workspace) throw new Error("Workspace not loaded yet");
+    try {
+      await bindSecretHost(workspace, env, key, host);
+      await get().refresh();
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
+    }
+  },
+  removeVar: async (env, key) => {
+    const { workspace } = get();
+    if (!workspace) throw new Error("Workspace not loaded yet");
+    try {
+      await deleteVar(workspace, env, key);
+      await get().refresh();
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
+    }
+  },
+  applyVarWrites: async (sets, unsets) => {
+    const { selected, envs } = get();
+    if (!selected) return;
+    if (Object.keys(sets).length === 0 && unsets.length === 0) return;
+    const current = envs.find((e) => e.name === selected);
+    if (!current) return;
+    const secret = new Set(secretNames(current));
+    const refused = Object.keys(sets).filter((key) => secret.has(key));
+    if (refused.length > 0) {
+      set({
+        error: `${selected}.${refused[0]} is declared secret — a script cannot write its value into the environment file. Use Set value in the environment editor.`,
+      });
+      return;
+    }
+    const vars = { ...plainVars(current), ...sets };
+    for (const key of unsets) delete vars[key];
+    await get().save({ name: selected, vars });
+  },
   dismissError: () => set({ error: null }),
 }));
 
-export function useActiveVars(): Record<string, string> {
-  return useEnv(
-    (s) => s.envs.find((e) => e.name === s.selected)?.vars ?? EMPTY_VARS,
-  );
+const EMPTY_VARS: Record<string, string> = {};
+
+export function useActiveEnv(): EnvironmentView | null {
+  return useEnv((s) => s.envs.find((e) => e.name === s.selected) ?? null);
 }
 
-const EMPTY_VARS: Record<string, string> = {};
+export function useActiveVars(): Record<string, string> {
+  const env = useActiveEnv();
+  return useMemo(() => (env ? plainVars(env) : EMPTY_VARS), [env]);
+}

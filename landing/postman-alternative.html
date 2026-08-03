@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mándalo vs Postman: an honest comparison</title>
+<meta name="description" content="An honest Mándalo vs Postman comparison: offline .http collections in git versus cloud sync, mock servers, monitoring and a far bigger ecosystem.">
+<link rel="canonical" href="https://mandalo.dev/postman-alternative">
+<meta property="og:title" content="Mándalo vs Postman: an honest comparison">
+<meta property="og:description" content="An honest Mándalo vs Postman comparison: offline .http collections in git versus cloud sync, mock servers, monitoring and a far bigger ecosystem.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/postman-alternative">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mándalo vs Postman: an honest comparison">
+<meta name="twitter:description" content="An honest Mándalo vs Postman comparison: offline .http collections in git versus cloud sync, mock servers, monitoring and a far bigger ecosystem.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Mándalo vs Postman: an honest comparison",
+  "description": "An honest comparison of Mándalo and Postman: offline git-native collections versus cloud sync, mock servers, monitoring and a far bigger ecosystem.",
+  "url": "https://mandalo.dev/postman-alternative",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Mándalo vs Postman",
+      "item": "https://mandalo.dev/postman-alternative"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap" style="padding-top:2.5rem;padding-bottom:1rem">
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span>vs Postman</p>
+    <h1>Mándalo vs Postman</h1>
+    <p class="lede">Postman is a bigger product than Mándalo and will stay that way. This page is about which of you should switch — and it is honest about the parts where the answer is no.</p>
+
+    <h2>Who Mándalo is for</h2>
+    <ul>
+      <li>You keep your API definitions in git and want your requests reviewed the same way.</li>
+      <li>You want to open a client, send a request, and be done — without signing in first.</li>
+      <li>You work in regulated or air-gapped environments where a client that syncs to a vendor cloud is a non-starter.</li>
+      <li>You use gRPC or GraphQL alongside REST and are tired of switching tools.</li>
+      <li>Your team's collaboration problem is already solved by pull requests, and you would rather not buy a second one.</li>
+    </ul>
+
+    <h2>Who it is not for</h2>
+    <ul>
+      <li>You need mock servers, uptime monitors, or a public API portal. Mándalo has none of them and none are planned soon.</li>
+      <li>Your team includes people who do not use git and never will.</li>
+      <li>You depend on Postman's collection runner features — data files, per-iteration runs, flow control between requests.</li>
+      <li>You test WebSocket, SSE or MQTT endpoints. Mándalo is request/response only.</li>
+      <li>You want generated client code in fifteen languages from the request you just sent.</li>
+    </ul>
+
+    <h2>Feature by feature</h2>
+    <div class="table-scroll">
+      <table class="cmp">
+        <caption>Mándalo (current release) vs Postman (desktop and cloud)</caption>
+        <thead>
+          <tr><th scope="col">&nbsp;</th><th scope="col">Mándalo</th><th scope="col">Postman</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Works fully offline</th><td class="yes">Yes — the app never contacts us</td><td>Partly — there is a no-sign-in lightweight client, but the product is built around the cloud</td></tr>
+          <tr><th scope="row">Account required</th><td class="yes">No account, no sign-in</td><td>Yes for most of the product</td></tr>
+          <tr><th scope="row">Telemetry</th><td class="yes">None</td><td>Yes, per its privacy policy</td></tr>
+          <tr><th scope="row">Collection storage</th><td class="yes">A folder of <code>.http</code> files (<code>.grpc</code> for gRPC) in your directory</td><td>Cloud workspace; JSON via export</td></tr>
+          <tr><th scope="row">Readable by other tools</th><td class="yes">Yes — <code>.http</code> is what REST Client, httpYac and JetBrains IDEs read</td><td>Postman&rsquo;s own JSON schema; widely supported as an import format</td></tr>
+          <tr><th scope="row">Diff &amp; PR review</th><td class="yes">Native — files in your repo</td><td>Export and diff JSON, or a paid git integration</td></tr>
+          <tr><th scope="row">HTTP</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">GraphQL</th><td class="yes">Yes — query plus variables</td><td class="yes">Yes, with schema introspection</td></tr>
+          <tr><th scope="row">gRPC</th><td>Unary only, from local <code>.proto</code>, no reflection. Native gRPC on desktop and CLI; <a href="/docs/grpc">gRPC-Web</a> in the browser</td><td class="yes">Unary and streaming, with reflection</td></tr>
+          <tr><th scope="row">Scripting</th><td>A <code>pm.*</code> subset in a sandboxed QuickJS engine</td><td class="yes">Full <code>pm.*</code>, Node-flavoured, with libraries</td></tr>
+          <tr><th scope="row">Assertions</th><td class="yes">Yes — <code>pm.test</code> and <code>pm.expect</code>, with snippets, results in the response pane, and the same run in CI</td><td class="yes">Yes, with a snippet builder</td></tr>
+          <tr><th scope="row">Environments &amp; variables</th><td class="yes">Yes; unresolved variables fail loud</td><td class="yes">Yes, with more scope levels</td></tr>
+          <tr><th scope="row">Import from Postman</th><td class="yes">Yes, with a report of what it skipped</td><td>—</td></tr>
+          <tr><th scope="row">Price</th><td class="yes">Free — no tiers, no seats; source on <a href="https://github.com/De-Rus/mandalo">GitHub</a></td><td>Free tier, then per-seat</td></tr>
+          <tr><th scope="row">Cloud sync</th><td class="no">No — sync is <code>git pull</code></td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Team workspaces &amp; roles</th><td class="no">No UI for it at all</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Mock servers</th><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">API monitoring / uptime</th><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">WebSocket / SSE / Socket.IO</th><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Code generation</th><td class="no">No</td><td class="yes">Yes, many languages</td></tr>
+          <tr><th scope="row">Request history</th><td class="no">Not synced or persisted across sessions</td><td class="yes">Yes, synced</td></tr>
+          <tr><th scope="row">Web and mobile apps</th><td>Desktop (macOS, Windows, Linux) and a full <a href="/app">browser build</a>; no mobile app</td><td class="yes">Desktop, web and mobile</td></tr>
+          <tr><th scope="row">CLI runner for CI</th><td><code>mandalo run</code> works and shares the app&rsquo;s engine (JUnit and JSON reporters), but it is not in the installer yet — you build it from the repo</td><td class="yes">Yes — Newman and the Postman CLI, packaged and documented</td></tr>
+          <tr><th scope="row">Editor integration</th><td class="yes">A VS Code extension, plus <code>.http</code> files any REST Client user can already open</td><td class="yes">A VS Code extension</td></tr>
+          <tr><th scope="row">API design &amp; schema tooling</th><td class="no">No — Mándalo only sends requests</td><td class="yes">Yes — spec editing, validation, generated docs</td></tr>
+          <tr><th scope="row">Public API directory</th><td class="no">No</td><td class="yes">Yes — a large public network of published APIs</td></tr>
+          <tr><th scope="row">Collaboration UI</th><td class="no">No — review happens in your git host</td><td class="yes">Yes — comments, forks, pull requests on collections</td></tr>
+          <tr><th scope="row">Ecosystem &amp; support</th><td>New project, small community, no commercial support</td><td class="yes">Huge — templates, integrations, docs, enterprise support</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Where the difference actually shows up</h2>
+    <p>The storage row is the one that changes how you work. When a collection is a directory of <code>.http</code> files inside the repo it documents, an endpoint change and its request definition land in the same commit, a reviewer reads both in the same diff, and a feature branch carries the requests that branch's API needs. Nothing syncs, because there is nothing to sync — the mechanism is <code>git pull</code>. It also means leaving is cheap: <code>.http</code> is a format other editors already read, so your requests are not hostage to this app. That is described in full in <a href="/docs/collections-and-git">Collections &amp; git</a>.</p>
+    <p>The scripting row is the one most likely to bite on day one. Mándalo's sandbox has no Node APIs, no filesystem, no network and no timers, and it stops a script that runs too long. Assertion-and-variable scripts port unchanged; anything that fetches a second URL or drives the runner does not. It refuses loudly with an explanation rather than returning <code>undefined</code> — see <a href="/docs/scripts-and-tests">Scripts &amp; tests</a> and <a href="/docs/importing-from-postman">Importing from Postman</a>.</p>
+
+    <h2>When you should stay on Postman</h2>
+    <p>Genuinely: stay if any of these is true.</p>
+    <ul>
+      <li>You rely on mock servers or monitors. There is no substitute here and no plan to build one.</li>
+      <li>You need WebSocket or SSE testing.</li>
+      <li>Non-engineers on your team need to run requests and would need a git workflow to do it.</li>
+      <li>You need a hosted, always-current API portal for consumers outside your organisation.</li>
+      <li>Your CI already runs Newman and it works. Mándalo's runner does the job but is not packaged yet — you would be building a binary from source. <a href="/docs/cli-and-ci">See what it does</a> before planning around it.</li>
+      <li>You depend on OAuth 2 flows being handled for you. Mándalo does bearer, basic and API key; you supply the token.</li>
+    </ul>
+    <p>Both can also coexist. The import is one step and it does not delete anything, so trying Mándalo on one collection costs an afternoon and leaves Postman exactly where it was.</p>
+
+    <h2>Trying it</h2>
+    <p>The same client runs as a desktop app or <a href="/app">straight in your browser</a> — same code, no server on our side either way. The one thing to know about the browser build: browsers enforce CORS, so a host that sends no CORS headers cannot be called from a page, and response headers beyond the safelisted ones are only readable if the server exposes them. That is a browser rule that applies to every browser-based client; the desktop app is unaffected. We will not proxy your traffic to work around it.</p>
+    <p>Read <a href="/docs/getting-started">Getting started</a>, or bring an existing collection across with <a href="/docs/importing-from-postman">Importing from Postman</a>. The download is on <a href="https://github.com/De-Rus/mandalo/releases/latest">the releases page</a>, and there is nothing to sign up for.</p>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

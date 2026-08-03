@@ -1,0 +1,278 @@
+{
+  "readme": [
+    "One contract, two engines. Every `wire` block is what the Rust engine actually put on",
+    "the socket of a local echo server — captured by src/lib/web/parity-derive.mjs, never",
+    "read off the Rust source and guessed. parity.test.ts runs the same fixture through the",
+    "browser engine and demands the same bytes; parity-derive.mjs re-runs the CLI and demands",
+    "Rust still produces them. A header value written as ~regex is matched as one, for the",
+    "values that are generated fresh on every run.",
+    "{{BASE}} stands for the echo server's origin."
+  ],
+  "vars": {
+    "seed": "s1",
+    "token": "t0ken",
+    "id": "7",
+    "field": "status",
+    "val": "open",
+    "term": "x\", \"isAdmin\": true, \"z\": \""
+  },
+  "fixtures": [
+    {
+      "name": "bearer",
+      "toml": "schema_version = 1\nid = \"bearer\"\nname = \"Bearer\"\nkind = \"http\"\nmethod = \"GET\"\nurl = \"{{BASE}}/echo?case=bearer\"\nheaders = [[\"Authorization\", \"stale\"], [\"X-Trace\", \"t-{{seed}}\"]]\n\n[auth]\ntype = \"bearer\"\ntoken = \"{{token}}\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "GET",
+        "url": "{{BASE}}/echo?case=bearer",
+        "headers": [
+          ["Authorization", "stale"],
+          ["X-Trace", "t-{{seed}}"]
+        ],
+        "body": null,
+        "auth": { "type": "bearer", "token": "{{token}}" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "GET",
+        "path": "/echo?case=bearer",
+        "headers": [
+          ["authorization", "Bearer t0ken"],
+          ["x-trace", "t-s1"]
+        ],
+        "body": null
+      }
+    },
+    {
+      "name": "basic",
+      "toml": "schema_version = 1\nid = \"basic\"\nname = \"Basic\"\nkind = \"http\"\nmethod = \"GET\"\nurl = \"{{BASE}}/echo?case=basic\"\nheaders = [[\"authorization\", \"stale\"]]\n\n[auth]\ntype = \"basic\"\nusername = \"u\"\npassword = \"p\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "GET",
+        "url": "{{BASE}}/echo?case=basic",
+        "headers": [["authorization", "stale"]],
+        "body": null,
+        "auth": { "type": "basic", "username": "u", "password": "p" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "GET",
+        "path": "/echo?case=basic",
+        "headers": [["authorization", "Basic dTpw"]],
+        "body": null
+      }
+    },
+    {
+      "name": "apikeyheader",
+      "toml": "schema_version = 1\nid = \"apikeyheader\"\nname = \"Apikey header\"\nkind = \"http\"\nmethod = \"GET\"\nurl = \"{{BASE}}/echo?case=apikeyheader\"\nheaders = [[\"Authorization\", \"custom scheme\"]]\n\n[auth]\ntype = \"apikey\"\nkey = \"X-Api-Key\"\nvalue = \"abc\"\nplacement = \"header\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "GET",
+        "url": "{{BASE}}/echo?case=apikeyheader",
+        "headers": [["Authorization", "custom scheme"]],
+        "body": null,
+        "auth": { "type": "apikey", "key": "X-Api-Key", "value": "abc", "placement": "header" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "GET",
+        "path": "/echo?case=apikeyheader",
+        "headers": [
+          ["authorization", "custom scheme"],
+          ["x-api-key", "abc"]
+        ],
+        "body": null
+      }
+    },
+    {
+      "name": "apikeyquery",
+      "toml": "schema_version = 1\nid = \"apikeyquery\"\nname = \"Apikey query\"\nkind = \"http\"\nmethod = \"GET\"\nurl = \"{{BASE}}/echo?case=apikeyquery&q=1\"\n\n[auth]\ntype = \"apikey\"\nkey = \"api key\"\nvalue = \"a b&c\"\nplacement = \"query\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "GET",
+        "url": "{{BASE}}/echo?case=apikeyquery&q=1",
+        "headers": [],
+        "body": null,
+        "auth": { "type": "apikey", "key": "api key", "value": "a b&c", "placement": "query" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "GET",
+        "path": "/echo?case=apikeyquery&q=1&api+key=a+b%26c",
+        "headers": [],
+        "body": null
+      }
+    },
+    {
+      "name": "rawtext",
+      "toml": "schema_version = 1\nid = \"rawtext\"\nname = \"Raw text\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=rawtext\"\nbody = \"plain words {{seed}}\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=rawtext",
+        "headers": [],
+        "body": "plain words {{seed}}",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=rawtext",
+        "headers": [["content-type", "text/plain"]],
+        "body": "plain words s1"
+      }
+    },
+    {
+      "name": "rawxml",
+      "toml": "schema_version = 1\nid = \"rawxml\"\nname = \"Raw xml\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=rawxml\"\nbody = \"<user id=\\\"1\\\"/>\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=rawxml",
+        "headers": [],
+        "body": "<user id=\"1\"/>",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=rawxml",
+        "headers": [["content-type", "application/xml"]],
+        "body": "<user id=\"1\"/>"
+      }
+    },
+    {
+      "name": "rawjson",
+      "toml": "schema_version = 1\nid = \"rawjson\"\nname = \"Raw json\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=rawjson\"\nbody = \"{\\\"a\\\": 1}\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=rawjson",
+        "headers": [],
+        "body": "{\"a\": 1}",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=rawjson",
+        "headers": [["content-type", "application/json"]],
+        "body": "{\"a\": 1}"
+      }
+    },
+    {
+      "name": "rawtextct",
+      "toml": "schema_version = 1\nid = \"rawtextct\"\nname = \"Raw text with content type\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=rawtextct\"\nheaders = [[\"Content-Type\", \"application/vnd.acme+json\"]]\nbody = \"plain words\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=rawtextct",
+        "headers": [["Content-Type", "application/vnd.acme+json"]],
+        "body": "plain words",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=rawtextct",
+        "headers": [["content-type", "application/vnd.acme+json"]],
+        "body": "plain words"
+      }
+    },
+    {
+      "name": "graphql",
+      "toml": "schema_version = 1\nid = \"graphql\"\nname = \"Graphql\"\nkind = \"graphql\"\nmethod = \"GET\"\nurl = \"{{BASE}}/echo?case=graphql\"\n\n[graphql]\nquery = \"query Me { me(id: {{id}}) { name } }\"\nvariables = \"{\\\"q\\\":\\\"{{term}}\\\", \\\"filter\\\": {\\\"{{field}}\\\": [\\\"{{val}}\\\", 3]}, \\\"n\\\": 7}\"\n",
+      "spec": {
+        "kind": "graphql",
+        "method": "GET",
+        "url": "{{BASE}}/echo?case=graphql",
+        "headers": [],
+        "body": null,
+        "auth": { "type": "none" },
+        "graphql": {
+          "query": "query Me { me(id: {{id}}) { name } }",
+          "variables": "{\"q\":\"{{term}}\", \"filter\": {\"{{field}}\": [\"{{val}}\", 3]}, \"n\": 7}"
+        }
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=graphql",
+        "headers": [["content-type", "application/json"]],
+        "body": "{\"query\":\"query Me { me(id: 7) { name } }\",\"variables\":{\"filter\":{\"status\":[\"open\",3]},\"n\":7,\"q\":\"x\\\", \\\"isAdmin\\\": true, \\\"z\\\": \\\"\"}}"
+      }
+    },
+    {
+      "name": "graphqlct",
+      "toml": "schema_version = 1\nid = \"graphqlct\"\nname = \"Graphql content type\"\nkind = \"graphql\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=graphqlct\"\nheaders = [[\"content-type\", \"application/graphql-response+json\"]]\n\n[graphql]\nquery = \"{ ping }\"\nvariables = \"\"\n",
+      "spec": {
+        "kind": "graphql",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=graphqlct",
+        "headers": [["content-type", "application/graphql-response+json"]],
+        "body": null,
+        "auth": { "type": "none" },
+        "graphql": { "query": "{ ping }", "variables": "" }
+      },
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=graphqlct",
+        "headers": [["content-type", "application/graphql-response+json"]],
+        "body": "{\"query\":\"{ ping }\",\"variables\":{}}"
+      }
+    },
+    {
+      "name": "dynamic",
+      "toml": "schema_version = 1\nid = \"dynamic\"\nname = \"Dynamic\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=dynamic&id={{$guid}}\"\nheaders = [[\"X-Stamp\", \"{{$timestamp}}\"], [\"X-Int\", \"{{$randomInt}}\"]]\nbody = \"hola {{$randomWord}}\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=dynamic&id={{$guid}}",
+        "headers": [
+          ["X-Stamp", "{{$timestamp}}"],
+          ["X-Int", "{{$randomInt}}"]
+        ],
+        "body": "hola {{$randomWord}}",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "wire": {
+        "method": "POST",
+        "path": "~^/echo\\?case=dynamic&id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "headers": [
+          ["content-type", "text/plain"],
+          ["x-int", "~^([0-9]|[1-9][0-9]{1,2}|1000)$"],
+          ["x-stamp", "~^[0-9]{10}$"]
+        ],
+        "body": "~^hola [a-z]+$"
+      }
+    },
+    {
+      "name": "scripts",
+      "toml": "schema_version = 1\nid = \"scripts\"\nname = \"Scripts\"\nkind = \"http\"\nmethod = \"POST\"\nurl = \"{{BASE}}/echo?case=scripts\"\nbody = \"{\\\"seed\\\": \\\"{{seed}}\\\"}\"\n\n[scripts]\npre = \"pm.variables.set('injected', 'yes'); pm.request.headers.upsert({ key: 'X-Injected', value: pm.variables.get('injected') }); pm.test('pre runs', function () { pm.expect(pm.variables.get('seed')).to.equal('s1'); });\"\npost = \"pm.test('status is 200', function () { pm.response.to.have.status(200); }); pm.test('deliberate failure', function () { pm.expect(1).to.equal(2); });\"\n",
+      "spec": {
+        "kind": "http",
+        "method": "POST",
+        "url": "{{BASE}}/echo?case=scripts",
+        "headers": [],
+        "body": "{\"seed\": \"{{seed}}\"}",
+        "auth": { "type": "none" },
+        "graphql": null
+      },
+      "pre": "pm.variables.set('injected', 'yes'); pm.request.headers.upsert({ key: 'X-Injected', value: pm.variables.get('injected') }); pm.test('pre runs', function () { pm.expect(pm.variables.get('seed')).to.equal('s1'); });",
+      "post": "pm.test('status is 200', function () { pm.response.to.have.status(200); }); pm.test('deliberate failure', function () { pm.expect(1).to.equal(2); });",
+      "scriptTests": [
+        ["pre runs", true],
+        ["status is 200", true],
+        ["deliberate failure", false]
+      ],
+      "wire": {
+        "method": "POST",
+        "path": "/echo?case=scripts",
+        "headers": [
+          ["content-type", "application/json"],
+          ["x-injected", "yes"]
+        ],
+        "body": "{\"seed\": \"s1\"}"
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useEnv } from "./env";
+import { plainVars, secretNames, useEnv, varLabel } from "./env";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -18,16 +18,20 @@ describe("env store", () => {
 
   it("init loads environments and clears the error line when nothing is skipped", async () => {
     invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
       if (cmd === "list_environments")
         return Promise.resolve({
-          items: [{ name: "staging", vars: { a: "1" } }],
+          items: [
+            {
+              name: "staging",
+              vars: { a: { secret: false, value: "1", set: true } },
+            },
+          ],
           skipped: [],
         });
       return Promise.resolve(undefined);
     });
 
-    await useEnv.getState().init();
+    await useEnv.getState().init("/ws");
 
     const s = useEnv.getState();
     expect(s.workspace).toBe("/ws");
@@ -37,7 +41,6 @@ describe("env store", () => {
 
   it("init surfaces skipped environment files as a warning line", async () => {
     invoke.mockImplementation((cmd: string) => {
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
       if (cmd === "list_environments")
         return Promise.resolve({
           items: [{ name: "staging", vars: {} }],
@@ -46,7 +49,7 @@ describe("env store", () => {
       return Promise.resolve(undefined);
     });
 
-    await useEnv.getState().init();
+    await useEnv.getState().init("/ws");
 
     const s = useEnv.getState();
     expect(s.envs.map((e) => e.name)).toEqual(["staging"]);
@@ -86,5 +89,107 @@ describe("env store", () => {
     const s = useEnv.getState();
     expect(s.selected).toBeNull();
     expect(s.error).toContain("bad.toml");
+  });
+});
+
+describe("environment declarations", () => {
+  const STAGING = {
+    name: "staging",
+    vars: {
+      baseUrl: { secret: false as const, value: "https://x.dev", set: true },
+      token: {
+        secret: true as const,
+        value: null,
+        hosts: ["x.dev"],
+        set: true,
+      },
+      adminToken: {
+        secret: true as const,
+        value: null,
+        hosts: [],
+        set: false,
+      },
+    },
+  };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    localStorage.clear();
+    useEnv.setState({
+      workspace: "/ws",
+      envs: [STAGING],
+      selected: "staging",
+      error: null,
+    });
+  });
+
+  it("hands interpolation the plain values only", () => {
+    expect(plainVars(STAGING)).toEqual({ baseUrl: "https://x.dev" });
+  });
+
+  it("names the secrets without exposing a value", () => {
+    expect(secretNames(STAGING)).toEqual(["token", "adminToken"]);
+    expect(varLabel(STAGING.vars.token)).toBe("••••••••");
+    expect(varLabel(STAGING.vars.adminToken)).toBe("not set on this machine");
+  });
+
+  it("stores a secret out of band and reloads the declarations", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "list_environments")
+        return Promise.resolve({ items: [STAGING], skipped: [] });
+      return Promise.resolve(undefined);
+    });
+
+    await useEnv.getState().storeSecret("staging", "token", "s3cr3t");
+
+    expect(invoke).toHaveBeenCalledWith("set_secret", {
+      workspace: "/ws",
+      env: "staging",
+      key: "token",
+      value: "s3cr3t",
+    });
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("list_environments");
+  });
+
+  it("clears, binds and deletes through the declaration commands", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "list_environments")
+        return Promise.resolve({ items: [STAGING], skipped: [] });
+      return Promise.resolve(undefined);
+    });
+
+    await useEnv.getState().forgetSecret("staging", "token");
+    await useEnv.getState().bindHost("staging", "token", "api.x.dev");
+    await useEnv.getState().removeVar("staging", "adminToken");
+
+    const commands = invoke.mock.calls.map((c) => c[0]);
+    expect(commands).toContain("clear_secret");
+    expect(commands).toContain("bind_secret_host");
+    expect(commands).toContain("delete_var");
+    expect(invoke).toHaveBeenCalledWith("bind_secret_host", {
+      workspace: "/ws",
+      env: "staging",
+      key: "token",
+      host: "api.x.dev",
+    });
+  });
+
+  it("never writes a declaration object back into the environment file", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "list_environments")
+        return Promise.resolve({ items: [STAGING], skipped: [] });
+      return Promise.resolve(undefined);
+    });
+
+    await useEnv.getState().applyVarWrites({ userId: "7" }, []);
+
+    expect(invoke).toHaveBeenCalledWith("save_environment", {
+      workspace: "/ws",
+      env: {
+        name: "staging",
+        vars: { baseUrl: "https://x.dev", userId: "7" },
+      },
+    });
   });
 });

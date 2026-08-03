@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gRPC and gRPC-Web in Mándalo</title>
+<meta name="description" content="Call gRPC from Mándalo: native gRPC on desktop and CLI, gRPC-Web in the browser, proto compilation with no protoc, and what each platform supports.">
+<link rel="canonical" href="https://mandalo.dev/docs/grpc">
+<meta property="og:title" content="gRPC and gRPC-Web in Mándalo">
+<meta property="og:description" content="Call gRPC from Mándalo: native gRPC on desktop and CLI, gRPC-Web in the browser, proto compilation with no protoc, and what each platform supports.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/grpc">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gRPC and gRPC-Web in Mándalo">
+<meta name="twitter:description" content="Call gRPC from Mándalo: native gRPC on desktop and CLI, gRPC-Web in the browser, proto compilation with no protoc, and what each platform supports.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "gRPC and gRPC-Web in Mándalo",
+  "description": "Call gRPC from Mándalo: native gRPC on desktop and CLI, gRPC-Web in the browser, proto compilation with no protoc, and what each platform supports.",
+  "url": "https://mandalo.dev/docs/grpc",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "gRPC",
+      "item": "https://mandalo.dev/docs/grpc"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc" aria-current="page">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>gRPC</p>
+    <h1>gRPC</h1>
+    <p class="lede">Mándalo compiles your <code>.proto</code> files in-process and calls the service directly. No <code>protoc</code> on your PATH, no generated stubs, no code generation step.</p>
+    <p>It runs everywhere Mándalo runs. The desktop app and the CLI link that compiler as native Rust and speak <strong>native gRPC</strong>. The <a href="/app">browser build</a> loads the very same compiler as WebAssembly and speaks <strong>gRPC-Web</strong> — so your protos parse identically in a tab and on your machine, but the wire protocol differs, and that difference is not cosmetic.</p>
+
+    <h2>What works where</h2>
+    <div class="table-scroll">
+      <table class="cmp">
+        <caption>Transport support by platform. Every cell is what ships today, not what is planned.</caption>
+        <thead>
+          <tr><th scope="col">Capability</th><th scope="col">Desktop app</th><th scope="col">CLI</th><th scope="col">Browser</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">HTTP</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes, if the API allows your origin over CORS</td></tr>
+          <tr><th scope="row">GraphQL</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes, same CORS rule</td></tr>
+          <tr><th scope="row">Native gRPC <span class="mime">application/grpc</span></th><td class="yes">Yes, over tonic</td><td class="yes">Yes, over tonic</td><td class="no">No — needs HTTP/2 trailers, which no browser exposes to a page</td></tr>
+          <tr><th scope="row">gRPC-Web <span class="mime">application/grpc-web+proto</span></th><td class="no">No, and it does not need it</td><td class="no">No, and it does not need it</td><td class="yes">Yes, if the server runs a gRPC-Web layer and allows the CORS headers below</td></tr>
+          <tr><th scope="row">Proto compilation without <code>protoc</code></th><td class="yes">Yes, native</td><td class="yes">Yes, native</td><td class="yes">Yes, the same code as WebAssembly</td></tr>
+          <tr><th scope="row">Streaming methods</th><td class="no">Not yet</td><td class="no">Not yet</td><td class="no">Not yet</td></tr>
+          <tr><th scope="row">Server reflection</th><td class="no">Not yet</td><td class="no">Not yet</td><td class="no">Not yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Each client uses the one transport that suits it. The desktop app and the CLI are not bound by browser rules, so they speak native gRPC and never need the gRPC-Web wrapper — and because <code>tonic-web</code> and Envoy layer gRPC-Web <em>on top of</em> a service that still answers native gRPC on the same port, the desktop can usually call the exact endpoint your browser is calling.</p>
+    <p>The short version: if the service already sits behind Envoy or <code>tonic-web</code>, the browser is enough. If you are calling a plain gRPC service, use the desktop app or the CLI.</p>
+
+    <h2>Calling gRPC from the browser</h2>
+    <p>A page cannot open a native gRPC connection, so the browser build sends gRPC-Web over <code>fetch</code>. That needs two things from the server, and neither is something Mándalo can do for you:</p>
+    <ol>
+      <li>A <strong>gRPC-Web layer</strong> in front of the service — <code>tonic-web</code>, Envoy's gRPC-Web filter, or a Connect server.</li>
+      <li>A <strong>CORS policy</strong> that allows the <code>content-type</code> and <code>x-grpc-web</code> request headers, and <em>exposes</em> <code>grpc-status</code> and <code>grpc-message</code> on the response. Without the expose, the browser hides the real outcome and every call looks like a network failure.</li>
+    </ol>
+    <p>When something is missing, Mándalo says which layer is at fault instead of reporting a generic failure. A host answering ordinary HTTP on the call path is reported as not serving gRPC-Web there; a host answering <code>application/grpc</code> is reported as native gRPC that the desktop app can call but a page cannot.</p>
+    <div class="callout callout-warn">
+      <span class="callout-label">The sample collection</span>
+      <p>The <code>gRPC GetUser</code> and <code>gRPC Say</code> requests in the seeded workspace point at <code>{{grpcUrl}}</code>, which is a service on your own machine. The hosted mock at <code>api.mandalo.dev</code> does <strong>not</strong> serve gRPC — it runs on Cloudflare Workers, which cannot — so those two requests need the local mock (<code>make mock-api</code>, which does serve gRPC-Web with the right CORS) or the desktop app. The HTTP and GraphQL samples work against the hosted mock as-is.</p>
+    </div>
+
+    <h2>Point it at proto files</h2>
+    <p>A gRPC request carries a list of proto file paths, a fully-qualified service name, a method name, and a JSON message:</p>
+<pre><code>[grpc]
+protoPaths = ["/Users/you/src/ledger/proto/ledger.proto"]
+service = "ledger.v1.Ledger"
+method = "GetBalance"
+message = "{\"account_id\": \"{{accountId}}\"}"
+metadata = [["authorization", "Bearer {{token}}"]]</code></pre>
+    <p>The directory containing each proto file is added as an include path, so <code>import "ledger/common.proto";</code> resolves relative to it. If your protos import across trees, list a file from each tree.</p>
+    <p>Compilation happens on every call. That costs a few milliseconds and means editing a <code>.proto</code> and re-sending picks up the change immediately — there is no cache to invalidate.</p>
+
+    <h2>Listing methods</h2>
+    <p>Once proto paths are set, Mándalo lists every service and method it found, with the input and output message types and flags for client and server streaming. Pick one instead of typing a fully-qualified name by hand.</p>
+    <div class="callout callout-warn">
+      <span class="callout-label">No server reflection</span>
+      <p>Method discovery reads your proto files. Mándalo does not use gRPC server reflection, so you cannot point it at a bare endpoint and enumerate services — you need the <code>.proto</code>. Reflection is on the roadmap; it is not implemented.</p>
+    </div>
+
+    <h2>Unary calls</h2>
+    <p>The message is JSON, deserialized into the method's input type using the descriptor compiled from your protos. Field names follow the proto JSON mapping, and an unknown field or a type mismatch is a loud parse error before anything is sent. The response is rendered as JSON.</p>
+    <p>The target URL must carry a scheme: <code>http://</code> for plaintext, <code>https://</code> for TLS using the system root certificates. A URL without one is rejected — <code>localhost:50051</code> is ambiguous, <code>http://localhost:50051</code> is not. The URL and the message both go through <code>{{variable}}</code> interpolation, so the endpoint can come from the active environment like any HTTP request. See <a href="/docs/environments-and-variables">Environments &amp; variables</a>.</p>
+
+    <h2>Metadata</h2>
+    <p>Metadata is a list of key/value pairs sent as gRPC request headers. Values are interpolated, which is how a bearer token from your environment reaches an authenticated service:</p>
+<pre><code>metadata = [
+  ["authorization", "Bearer {{token}}"],
+  ["x-tenant-id", "{{tenantId}}"],
+]</code></pre>
+    <p>Keys and values must be ASCII; binary (<code>-bin</code>) metadata is not supported, and a non-ASCII key or value is rejected with the offending key named rather than silently dropped.</p>
+
+    <h2>Streaming: not supported</h2>
+    <p>Mándalo does <strong>unary calls only</strong>, on every platform — this is not a browser limitation. Client-streaming, server-streaming and bidirectional methods are listed with their streaming flags and marked as disabled in the UI; calling one returns:</p>
+<pre><code>streaming methods not supported yet</code></pre>
+    <p>That is a deliberate loud failure rather than a call that hangs or silently returns the first message. Streaming support is planned; until it lands, use <code>grpcurl</code> for those methods.</p>
+
+    <h2>What else is missing</h2>
+    <ul>
+      <li>No server reflection (see above).</li>
+      <li>No mutual TLS client certificates, and no way to skip certificate verification.</li>
+      <li>No native gRPC in the browser — a page cannot read HTTP/2 trailers, so gRPC-Web is the only route there.</li>
+      <li>No deadline field per request — calls use a fixed connect and call timeout.</li>
+    </ul>
+    <p>gRPC requests are stored as plain <code>.grpc</code> text files next to the <code>.http</code> ones, so a proto path change reviews like any other diff — see <a href="/docs/collections-and-git">Collections &amp; git</a>. Because proto paths are absolute machine paths, prefer a path relative to a repo checkout your teammates also have, and expect to fix them up after an import from a colleague.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/scripts-and-tests"><span class="pager-dir">Previous</span><span class="pager-title">Scripts & tests</span></a>
+      <a class="pager-link next" href="/docs/cli-and-ci"><span class="pager-dir">Next</span><span class="pager-title">CLI & CI</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

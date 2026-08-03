@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCollection } from "../store/collection";
 import { useEnv } from "../store/env";
+import { useToasts } from "../store/toast";
 import { TransferMenu } from "./TransferMenu";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -26,14 +27,15 @@ describe("TransferMenu", () => {
     open.mockReset();
     save.mockReset();
     localStorage.clear();
-    useCollection.setState({ workspace: "/ws", requests: [], activeId: null });
+    useCollection.setState({ workspace: "/ws", activeId: null });
     useEnv.setState({ workspace: "/ws", envs: [], selected: null, error: null });
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "read_text_file_for_import") return Promise.resolve(BUNDLE);
       if (cmd === "import_bundle") return Promise.resolve(REPORT);
-      if (cmd === "export_bundle") return Promise.resolve(BUNDLE);
-      if (cmd === "list_requests")
-        return Promise.resolve({ items: [], skipped: [] });
+      if (cmd === "export_bundle")
+        return Promise.resolve({ json: BUNDLE, findings: [] });
+      if (cmd === "list_tree")
+        return Promise.resolve({ collections: [], skipped: [] });
       if (cmd === "list_environments")
         return Promise.resolve({ items: [], skipped: [] });
       if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
@@ -88,7 +90,49 @@ describe("TransferMenu", () => {
         contents: BUNDLE,
       }),
     );
-    expect(screen.getByText("Bundle saved")).toBeTruthy();
+    expect(useToasts.getState().items.map((t) => t.text)).toContain(
+      "Bundle saved",
+    );
+  });
+
+  it("makes the user confirm an export the scanner flagged", async () => {
+    save.mockResolvedValue("/out.json");
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "export_bundle")
+        return Promise.resolve({
+          json: BUNDLE,
+          findings: [
+            {
+              path: "environments/prod.toml",
+              line: 4,
+              rule: "aws-access-key-id",
+              excerpt: "key = AKIA…",
+            },
+          ],
+        });
+      if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
+      return Promise.resolve(undefined);
+    });
+    render(<TransferMenu />);
+
+    fireEvent.click(screen.getByLabelText("Import / Export"));
+    fireEvent.click(screen.getByText("Export bundle…"));
+
+    await waitFor(() =>
+      expect(screen.getByText("Review before exporting")).toBeTruthy(),
+    );
+    expect(screen.getByText("aws-access-key-id")).toBeTruthy();
+    expect(invoke.mock.calls.map((c) => c[0])).not.toContain(
+      "write_text_file_for_export",
+    );
+
+    fireEvent.click(screen.getByText("Export anyway"));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("write_text_file_for_export", {
+        path: "/out.json",
+        contents: BUNDLE,
+      }),
+    );
   });
 
   it("does not write when the export dialog is cancelled", async () => {

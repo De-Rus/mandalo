@@ -1,0 +1,42 @@
+// The shared golden for `describe_message`. Two crates compile this file — the
+// desktop compiler from disk and the browser one from memory — and both must
+// produce `parity.json` exactly. Every construct here is one the walk treats
+// specially: recursion, maps, oneof, enums, well-known types, imports.
+syntax = "proto3";
+
+package fix.v1;
+
+import "google/protobuf/timestamp.proto";
+import "parity_common.proto";
+
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_FREE = 1;
+  TIER_PRO = 2;
+}
+
+message Node {
+  string label = 1;
+  Node child = 2;
+  repeated Node children = 3;
+}
+
+message Everything {
+  string id = 1;
+  int64 count = 2;
+  double ratio = 3;
+  bool live = 4;
+  bytes blob = 5;
+  Tier tier = 6;
+  repeated string tags = 7;
+  fix.v1.Meta meta = 8;
+  Node tree = 9;
+  map<string, int32> counts = 10;
+  map<string, fix.v1.Meta> annotated = 11;
+  google.protobuf.Timestamp at = 12;
+  oneof body {
+    string text = 13;
+    int32 number = 14;
+  }
+  optional string note = 15;
+}

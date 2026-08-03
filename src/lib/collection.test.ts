@@ -1,15 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  fromSaved,
-  loadRequests,
-  migrateLegacyCollection,
-  toSaved,
-} from "./collection";
+import { describe, expect, it } from "vitest";
+import { fromSaved, toSaved } from "./collection";
 import { newDraft, uid } from "./draft";
-import type { SavedRequest } from "./api";
-
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 describe("draft <-> SavedRequest mapping", () => {
   it("folds enabled rows to tuples and drops disabled rows", () => {
@@ -164,131 +155,80 @@ describe("draft <-> SavedRequest mapping", () => {
   });
 });
 
-describe("workspace-backed collection", () => {
-  beforeEach(() => {
-    invoke.mockReset();
-    localStorage.clear();
+describe("scripts, assertions and captures", () => {
+  it("persists scripts as null when blank and keeps them when set", () => {
+    const draft = newDraft("Scripted");
+    expect(toSaved(draft).scripts).toEqual({ pre: null, post: null });
+
+    draft.preScript = "pm.environment.set('a', '1');";
+    draft.testScript = "pm.test('ok', () => {});";
+    const saved = toSaved(draft);
+    expect(saved.scripts).toEqual({
+      pre: "pm.environment.set('a', '1');",
+      post: "pm.test('ok', () => {});",
+    });
+    const back = fromSaved(saved);
+    expect(back.preScript).toBe("pm.environment.set('a', '1');");
+    expect(back.testScript).toBe("pm.test('ok', () => {});");
   });
 
-  it("loads requests via list_requests and maps them to drafts", async () => {
-    const saved: SavedRequest = {
-      id: "abc123",
-      name: "Listed",
-      kind: "http",
-      method: "GET",
-      url: "https://x.dev",
-      headers: [["A", "1"]],
-      body: null,
-      auth: { type: "none" },
-      graphql: null,
-      grpc: null,
+  it("roundtrips declarative assertions", () => {
+    const draft = newDraft("Asserted");
+    draft.tests = [
+      { kind: "status", op: "eq", value: 201 },
+      { kind: "json", path: "$.id", op: "exists" },
+    ];
+    const back = fromSaved(toSaved(draft));
+    expect(back.tests).toEqual(draft.tests);
+  });
+
+  it("drops captures without a target variable", () => {
+    const draft = newDraft("Captured");
+    draft.captures = [
+      { from: "body.$.id", into: "userId", scope: "session" },
+      { from: "status", into: "  ", scope: "run" },
+    ];
+    expect(toSaved(draft).captures).toEqual([
+      { from: "body.$.id", into: "userId", scope: "session" },
+    ]);
+  });
+
+  it("preserves tests and captures the UI no longer authors", () => {
+    const saved = {
+      ...toSaved(newDraft("Legacy")),
+      tests: [
+        { kind: "status" as const, op: "eq" as const, value: 201 },
+        {
+          kind: "json" as const,
+          path: "$.id",
+          op: "exists" as const,
+        },
+      ],
+      captures: [
+        { from: "body.$.token", into: "token", scope: "persist" as const },
+      ],
     };
-    invoke.mockResolvedValueOnce({ items: [saved], skipped: [] });
 
-    const { requests: drafts, warnings } = await loadRequests("/ws");
-    expect(invoke).toHaveBeenCalledWith("list_requests", { workspace: "/ws" });
-    expect(warnings).toEqual([]);
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0].id).toBe("abc123");
-    expect(drafts[0].name).toBe("Listed");
-    expect(drafts[0].headers.map((r) => r.key)).toEqual(["A", ""]);
+    const draft = fromSaved(saved, "acme", "legacy.toml");
+    draft.name = "Legacy renamed";
+    const back = toSaved(draft);
+
+    expect(back.tests).toEqual(saved.tests);
+    expect(back.captures).toEqual(saved.captures);
   });
 
-  it("skips requests with an unknown kind and reports a warning", async () => {
-    const good = toSaved(newDraft("Good"));
-    const bad = { ...toSaved(newDraft("Bad")), kind: "soap" };
-    invoke.mockResolvedValueOnce({ items: [good, bad], skipped: [] });
-
-    const { requests: drafts, warnings } = await loadRequests("/ws");
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0].name).toBe("Good");
-    expect(warnings).toEqual([
-      'Request "Bad" has an unknown kind "soap"',
-    ]);
+  it("carries the collection and path through fromSaved", () => {
+    const saved = toSaved(newDraft("Located"));
+    const back = fromSaved(saved, "acme", "users/located.toml");
+    expect(back.collection).toBe("acme");
+    expect(back.path).toBe("users/located.toml");
   });
 
-  it("merges unparseable files reported by the backend into the warnings", async () => {
-    const good = toSaved(newDraft("Good"));
-    const bad = { ...toSaved(newDraft("Bad")), kind: "soap" };
-    invoke.mockResolvedValueOnce({
-      items: [good, bad],
-      skipped: ["/ws/requests/broken.toml: expected an equals"],
-    });
-
-    const { requests: drafts, warnings } = await loadRequests("/ws");
-    expect(drafts.map((d) => d.name)).toEqual(["Good"]);
-    expect(warnings).toEqual([
-      "/ws/requests/broken.toml: expected an equals",
-      'Request "Bad" has an unknown kind "soap"',
-    ]);
-  });
-
-  it("migrates the legacy localStorage collection then removes the key", async () => {
-    const a = newDraft("Legacy A");
-    const b = newDraft("Legacy B");
-    localStorage.setItem(
-      "mandalo.collection.v1",
-      JSON.stringify({ requests: [a, b], activeId: b.id }),
-    );
-    invoke.mockResolvedValue("saved");
-
-    const migration = await migrateLegacyCollection("/ws");
-    expect(migration?.activeId).toBe(b.id);
-    expect(migration?.skipped).toEqual([]);
-    expect(localStorage.getItem("mandalo.collection.v1")).toBeNull();
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke).toHaveBeenNthCalledWith(1, "save_request", {
-      workspace: "/ws",
-      request: toSaved(a),
-    });
-    expect(invoke).toHaveBeenNthCalledWith(2, "save_request", {
-      workspace: "/ws",
-      request: toSaved(b),
-    });
-  });
-
-  it("is a no-op without a legacy key", async () => {
-    expect(await migrateLegacyCollection("/ws")).toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("discards an unparseable legacy blob", async () => {
-    localStorage.setItem("mandalo.collection.v1", "{broken");
-    expect(await migrateLegacyCollection("/ws")).toBeNull();
-    expect(localStorage.getItem("mandalo.collection.v1")).toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("salvages valid legacy entries, skips malformed ones, and removes the key", async () => {
-    const good = newDraft("Legacy good");
-    localStorage.setItem(
-      "mandalo.collection.v1",
-      JSON.stringify({
-        requests: [good, { name: "Mangled" }, "garbage", null],
-        activeId: good.id,
-      }),
-    );
-    invoke.mockResolvedValue("saved");
-
-    const migration = await migrateLegacyCollection("/ws");
-    expect(migration?.activeId).toBe(good.id);
-    expect(migration?.skipped).toEqual(["Mangled", "unnamed request", "unnamed request"]);
-    expect(localStorage.getItem("mandalo.collection.v1")).toBeNull();
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("save_request", {
-      workspace: "/ws",
-      request: toSaved(good),
-    });
-  });
-
-  it("removes the legacy key even when a save fails mid-migration", async () => {
-    localStorage.setItem(
-      "mandalo.collection.v1",
-      JSON.stringify({ requests: [newDraft("Doomed")], activeId: null }),
-    );
-    invoke.mockRejectedValue("disk full");
-
-    await expect(migrateLegacyCollection("/ws")).rejects.toBe("disk full");
-    expect(localStorage.getItem("mandalo.collection.v1")).toBeNull();
+  it("maps a blank description to null", () => {
+    const draft = newDraft();
+    draft.description = "   ";
+    expect(toSaved(draft).description).toBeNull();
+    draft.description = "Fetches users";
+    expect(toSaved(draft).description).toBe("Fetches users");
   });
 });

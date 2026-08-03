@@ -1,21 +1,32 @@
-interface TabsProps {
-  tabs: string[];
-  active: string;
-  onSelect: (tab: string) => void;
+export interface TabItem {
+  id: string;
+  label: string;
+  count?: number;
+  dot?: boolean;
 }
 
-export function Tabs({ tabs, active, onSelect }: TabsProps) {
+interface TabsProps {
+  items: TabItem[];
+  active: string;
+  onSelect: (id: string) => void;
+}
+
+export function Tabs({ items, active, onSelect }: TabsProps) {
   return (
     <div className="tabs" role="tablist">
-      {tabs.map((t) => (
+      {items.map((t) => (
         <button
-          key={t}
+          key={t.id}
           role="tab"
-          aria-selected={t === active}
-          className={`tab ${t === active ? "tab-active" : ""}`}
-          onClick={() => onSelect(t)}
+          aria-selected={t.id === active}
+          className={`tab ${t.id === active ? "tab-active" : ""}`}
+          onClick={() => onSelect(t.id)}
         >
-          {t}
+          {t.label}
+          {t.count !== undefined && t.count > 0 && (
+            <span className="count">{t.count}</span>
+          )}
+          {t.dot && <span className="tab-dot" />}
         </button>
       ))}
     </div>

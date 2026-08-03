@@ -51,4 +51,27 @@ describe("KeyValueEditor", () => {
     expect(keyInputs()).toHaveLength(1);
     expect(keyInputs()[0].value).toBe("");
   });
+
+  it("round-trips through bulk edit, keeping disabled rows commented out", () => {
+    render(
+      <Harness
+        initial={[
+          { id: "1", key: "Accept", value: "application/json", enabled: true },
+          { id: "2", key: "X-Debug", value: "1", enabled: false },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Bulk Edit"));
+    const area = screen.getByLabelText("Key bulk edit") as HTMLTextAreaElement;
+    expect(area.value).toBe("Accept:application/json\n//X-Debug:1");
+
+    fireEvent.change(area, { target: { value: "Accept:text/plain\n//X-Debug:1" } });
+    fireEvent.click(screen.getByText("Key-Value Edit"));
+
+    expect(keyInputs().map((i) => i.value)).toEqual(["Accept", "X-Debug", ""]);
+    expect(
+      (screen.getAllByLabelText("Enable row")[1] as HTMLInputElement).checked,
+    ).toBe(false);
+  });
 });

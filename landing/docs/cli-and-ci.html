@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI &amp; CI — Mándalo docs</title>
+<meta name="description" content="The Mándalo command line runner, in development: the intended run/send/ls/import/export/scan surface, secret handling, and a GitHub Actions example.">
+<link rel="canonical" href="https://mandalo.dev/docs/cli-and-ci">
+<meta property="og:title" content="CLI &amp; CI — Mándalo docs">
+<meta property="og:description" content="The Mándalo command line runner, in development: the intended run/send/ls/import/export/scan surface, secret handling, and a GitHub Actions example.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/cli-and-ci">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CLI &amp; CI — Mándalo docs">
+<meta name="twitter:description" content="The Mándalo command line runner, in development: the intended run/send/ls/import/export/scan surface, secret handling, and a GitHub Actions example.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "CLI & CI — Mándalo docs",
+  "description": "The Mándalo command line runner, in development: the intended run/send/ls/import/export/scan surface, secret handling, and a GitHub Actions example.",
+  "url": "https://mandalo.dev/docs/cli-and-ci",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "CLI & CI",
+      "item": "https://mandalo.dev/docs/cli-and-ci"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci" aria-current="page">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>CLI & CI</p>
+    <h1>CLI &amp; CI</h1>
+    <p class="lede">The point of storing collections as files is that something other than a GUI can run them. The CLI shares the same runner as the desktop app, so a request cannot behave one way on your machine and another way in CI.</p>
+
+    <h2>Install</h2>
+<pre><code>curl -fsSL https://mandalo.dev/install.sh | sh</code></pre>
+    <p>That works on macOS and Linux, on both Intel and ARM. It picks the archive for your machine off the latest <a href="https://github.com/De-Rus/mandalo/releases/latest">GitHub release</a>, checks it against the release's <code>SHA256SUMS</code>, refuses to go on if the checksum does not match, and installs into <code>~/.local/bin</code> — no <code>sudo</code>, and it tells you where the binary went. Set <code>MANDALO_INSTALL_DIR</code> to put it somewhere else, or <code>MANDALO_VERSION</code> to pin a tag.</p>
+    <p>There is also a Homebrew tap — <code>brew install De-Rus/tap/mandalo</code> — and on Windows a <code>.zip</code> on the release page. Every platform archive is listed there by target triple, alongside <code>SHA256SUMS</code> if you would rather verify and unpack it yourself.</p>
+    <p><code>cargo install mandalo-cli</code> does not work: nothing is published to crates.io yet. Building from a checkout is <code>cargo build --profile release-cli -p mandalo-cli</code>.</p>
+
+    <h2>The command surface</h2>
+<pre><code>mandalo run &lt;collection&gt; [--folder PATH] [--env NAME] [--reporter pretty|json|junit] [--fail-fast]
+mandalo send &lt;collection&gt; &lt;request-path&gt; [--env NAME]
+mandalo ls
+mandalo env list | get &lt;name&gt; | set &lt;name&gt; &lt;key&gt; &lt;value&gt;
+mandalo import &lt;file&gt;
+mandalo export &lt;file&gt;
+mandalo scan [--staged]</code></pre>
+    <ul>
+      <li><code>run</code> executes every request in a collection, in order, applying the same assertions, captures and scripts the app applies. It exits non-zero if any request fails.</li>
+      <li><code>send</code> runs a single saved request — <code>mandalo send payments-api auth/login.http --env staging</code> — and prints the response.</li>
+      <li><code>ls</code> prints the collection tree, which is the fastest way to learn the request paths <code>send</code> wants.</li>
+      <li><code>env</code> reads environments and writes non-secret variables into them.</li>
+      <li><code>import</code> and <code>export</code> are the Postman importer and the bundle exporter from the app.</li>
+      <li><code>scan</code> looks for credential-shaped literals in workspace files and exits non-zero on a hit — with <code>--staged</code> it looks only at what you are about to commit, which makes it a usable pre-commit hook.</li>
+    </ul>
+    <p>Two global flags matter: <code>--workspace</code> selects the workspace directory, and <code>--strict-network</code> refuses requests to loopback, private, link-local and cloud metadata addresses — the flag you want on a shared runner.</p>
+
+    <h2>Secrets</h2>
+    <p>Secrets are not meant to live in the workspace files. Any variable the environment does not define is read from the process environment as <code>MANDALO_SECRET__&lt;ENV&gt;__&lt;KEY&gt;</code>: the environment name and variable name upper-cased, with <code>-</code> replaced by <code>_</code>. Resolved secret values are scrubbed from the runner's own output, and under GitHub Actions they are additionally registered as masked values. The resolution rules are the same ones described in <a href="/docs/environments-and-variables">Environments &amp; variables</a>.</p>
+
+    <h2>A GitHub Actions workflow</h2>
+    <p>Copy this into <code>.github/workflows/</code> and it runs.</p>
+<pre><code>name: api-checks
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mandalo
+        run: |
+          curl -fsSL https://mandalo.dev/install.sh | sh
+          echo "$HOME/.local/bin" &gt;&gt; "$GITHUB_PATH"
+
+      - name: Run the payments suite
+        env:
+          MANDALO_SECRET__STAGING__TOKEN: ${{ secrets.STAGING_API_TOKEN }}
+        run: |
+          mandalo run payments-api \
+            --workspace ./api \
+            --env staging \
+            --strict-network \
+            --reporter junit &gt; results.xml
+
+      - name: Publish results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-results
+          path: results.xml</code></pre>
+    <p>The shape is the point: the collection under review is the collection that runs, the environment file in the repo supplies the non-secret variables, and the one secret comes from the Actions secret store and never touches a file.</p>
+
+    <h2>Pre-commit hygiene</h2>
+<pre><code>#!/bin/sh
+# .git/hooks/pre-commit
+mandalo scan --staged || exit 1</code></pre>
+    <p>Committing a token by accident is the failure mode that actually happens with file-based collections. A staged scan is the cheap guard; the habits in <a href="/docs/collections-and-git">Collections &amp; git</a> are the real fix.</p>
+
+    <h2>Following along</h2>
+    <p>Watch <a href="https://github.com/De-Rus/mandalo">the repository</a> for the release that ships the binary, and the <a href="/changelog">changelog</a> for the announcement. Until then, the desktop app is the supported way to run requests.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/grpc"><span class="pager-dir">Previous</span><span class="pager-title">gRPC</span></a>
+      <a class="pager-link next" href="/docs/importing-from-postman"><span class="pager-dir">Next</span><span class="pager-title">Importing from Postman</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

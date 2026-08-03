@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Environments &amp; variables — Mándalo</title>
+<meta name="description" content="How {{var}} interpolation works in Mándalo: where it applies, resolution order, fail-loud unresolved variables, and capturing values into variables.">
+<link rel="canonical" href="https://mandalo.dev/docs/environments-and-variables">
+<meta property="og:title" content="Environments &amp; variables — Mándalo">
+<meta property="og:description" content="How {{var}} interpolation works in Mándalo: where it applies, resolution order, fail-loud unresolved variables, and capturing values into variables.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/environments-and-variables">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Environments &amp; variables — Mándalo">
+<meta name="twitter:description" content="How {{var}} interpolation works in Mándalo: where it applies, resolution order, fail-loud unresolved variables, and capturing values into variables.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Environments & variables — Mándalo",
+  "description": "How {{var}} interpolation works in Mándalo: where it applies, resolution order, fail-loud unresolved variables, and capturing values into variables.",
+  "url": "https://mandalo.dev/docs/environments-and-variables",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Environments & variables",
+      "item": "https://mandalo.dev/docs/environments-and-variables"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables" aria-current="page">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>Environments & variables</p>
+    <h1>Environments &amp; variables</h1>
+    <p class="lede">One request, many deployments. An environment is a named bag of string variables, and <code>{{name}}</code> is how you reach into it.</p>
+
+    <h2>An environment is a file</h2>
+<pre><code># environments/staging.toml
+name = "staging"
+
+[vars]
+baseUrl = "https://api.staging.example.com"
+tenantId = "acme"
+apiVersion = "2026-08-01"</code></pre>
+    <p>Values are strings — TOML gives you numbers and booleans, but a variable is substituted into text, so Mándalo stores every value as a string. Environments live in <code>environments/</code> inside the workspace and are selected from the picker in the title bar; exactly one is active at a time.</p>
+
+    <h2>Where interpolation applies</h2>
+    <p><code>{{name}}</code> is substituted, with surrounding whitespace inside the braces trimmed, in all of these places:</p>
+    <ul>
+      <li>The <strong>URL</strong> — including the host, so <code>{{baseUrl}}/v1/charges</code> works.</li>
+      <li><strong>Header names and values</strong>.</li>
+      <li>The <strong>request body</strong>.</li>
+      <li><strong>Auth fields</strong> — bearer token, basic username and password, API key name and value.</li>
+      <li>The <strong>GraphQL query</strong> and, key by key and value by value, the <strong>GraphQL variables</strong> JSON.</li>
+      <li>The <strong>gRPC message</strong> JSON, the target URL, and gRPC <strong>metadata</strong> values.</li>
+    </ul>
+    <p>Interpolation happens in the Rust core, before auth is applied and before the request is built. There is no second, different substitution pass in the UI to drift out of sync with it.</p>
+
+    <h2>Unresolved variables fail loud</h2>
+    <p>If a template names a variable that nothing resolves, the request is not sent. You get an error naming the variable:</p>
+<pre><code>unresolved variable: token</code></pre>
+    <p>This is deliberate and it is not configurable. The alternative — substituting an empty string — turns <code>Authorization: Bearer {{token}}</code> into <code>Authorization: Bearer </code> and gives you a 401 to debug instead of a one-line message telling you exactly what is missing. An unclosed <code>{{</code> is an error too, rather than being passed through as literal text.</p>
+
+    <h2>Resolution order</h2>
+    <p>For a saved request executed by the runner, a variable name is resolved in this order:</p>
+    <ol>
+      <li><strong>Values set by a pre-request script</strong> during this run (<code>pm.environment.set(…)</code>), and values captured earlier in the same run.</li>
+      <li><strong>The active environment's</strong> <code>[vars]</code>.</li>
+      <li><strong>The process environment</strong>, under <code>MANDALO_SECRET__&lt;ENV&gt;__&lt;KEY&gt;</code> — the environment name and the variable name upper-cased, with <code>-</code> turned into <code>_</code>. In the <code>staging</code> environment, <code>{{token}}</code> falls back to <code>MANDALO_SECRET__STAGING__TOKEN</code>.</li>
+      <li>Otherwise: the unresolved-variable error above.</li>
+    </ol>
+    <p>Note the direction: the file wins over the process environment. The secret lookup is a fallback for names the file deliberately does not define, which is what makes it safe to commit the file. See <a href="/docs/collections-and-git">Collections &amp; git</a> for the full secret-hygiene story.</p>
+
+    <h2>Captures</h2>
+    <p>A capture pulls a value out of a response and stores it in a variable, so the next request can use it. Log in, capture the token, and every following request sends it — with no script involved.</p>
+    <p>A capture has three fields:</p>
+    <ul>
+      <li><code>from</code> — the source. One of <code>status</code>, <code>header.&lt;Name&gt;</code> (case-insensitive), or <code>body.$.&lt;jsonpath&gt;</code>. The body form takes a real JSONPath expression that must start with <code>$</code>, so <code>body.$.data.users[0].id</code> is valid.</li>
+      <li><code>into</code> — the variable name to write. Letters, digits, <code>-</code> and <code>_</code>.</li>
+      <li><code>scope</code> — <code>run</code>, <code>session</code> or <code>persist</code>.</li>
+    </ul>
+<pre><code>[[captures]]
+from = "body.$.token"
+into = "token"
+scope = "session"</code></pre>
+    <p>A capture that matches nothing is a failure, not an empty string — the same fail-loud rule as interpolation. If the source is a JSON path and the body is not JSON, that is an error too.</p>
+
+    <h3>The three scopes</h3>
+    <ul>
+      <li><strong>run</strong> — the value is meant to live only for the current run: available to later requests in the same collection run, then gone.</li>
+      <li><strong>session</strong> — the value is meant to live as long as the app is open, across runs.</li>
+      <li><strong>persist</strong> — the value is meant to be written back into the environment file on disk.</li>
+    </ul>
+    <div class="callout">
+      <span class="callout-label">Honestly</span>
+      <p>The scope is stored on the capture and shown in the editor, but the three are not yet fully differentiated at execution time. Today, when an environment is selected in the app, captured values are written into it; a runner-driven run keeps them in that run's variable frame. Assume a capture may end up in your environment file, and do not capture a production token into an environment you commit.</p>
+    </div>
+
+    <h2>Setting variables from scripts</h2>
+    <p>Scripts can read and write the same variable bag: <code>pm.environment.get</code>, <code>set</code>, <code>unset</code>, <code>has</code>, <code>toObject</code> and <code>replaceIn</code>. Non-string values are coerced to strings on the way in, objects via <code>JSON.stringify</code>. The full surface is documented in <a href="/docs/scripts-and-tests">Scripts &amp; tests</a>.</p>
+<pre><code>const body = pm.response.json();
+pm.environment.set("token", body.access_token);
+pm.environment.set("expiresAt", Date.now() + body.expires_in * 1000);</code></pre>
+    <p>Prefer a declarative capture when it does the job. It survives review better than a script, and it is one line instead of a JavaScript block a reviewer has to read.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/collections-and-git"><span class="pager-dir">Previous</span><span class="pager-title">Collections & git</span></a>
+      <a class="pager-link next" href="/docs/scripts-and-tests"><span class="pager-dir">Next</span><span class="pager-title">Scripts & tests</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

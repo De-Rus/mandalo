@@ -1,12 +1,4 @@
-import {
-  deleteRequest,
-  errorMessage,
-  listRequests,
-  saveRequest,
-  type Auth,
-  type Kind,
-  type SavedRequest,
-} from "./api";
+import type { Auth, Capture, Kind, SavedRequest } from "./api";
 import {
   emptyRow,
   newDraft,
@@ -17,8 +9,17 @@ import {
 } from "./draft";
 import { activeRows, buildAuth, mergeParams, parseProtoPaths } from "./spec";
 
-const LEGACY_KEY = "mandalo.collection.v1";
 export const ACTIVE_KEY = "mandalo.collection.active";
+
+function blankToNull(value: string): string | null {
+  return value.trim() === "" ? null : value;
+}
+
+export function validCaptures(captures: Capture[]): Capture[] {
+  return captures.filter(
+    (c) => c.into.trim() !== "" && c.from.trim() !== "",
+  );
+}
 
 export function toSaved(draft: RequestDraft): SavedRequest {
   return {
@@ -30,6 +31,7 @@ export function toSaved(draft: RequestDraft): SavedRequest {
       draft.kind === "http"
         ? mergeParams(draft.url, activeRows(draft.params))
         : draft.url,
+    description: blankToNull(draft.description),
     headers: activeRows(draft.headers),
     body: draft.body.trim() === "" ? null : draft.body,
     auth: buildAuth(draft.auth),
@@ -47,6 +49,12 @@ export function toSaved(draft: RequestDraft): SavedRequest {
             metadata: activeRows(draft.grpc.metadata),
           }
         : null,
+    scripts: {
+      pre: blankToNull(draft.preScript),
+      post: blankToNull(draft.testScript),
+    },
+    tests: draft.tests,
+    captures: validCaptures(draft.captures),
   };
 }
 
@@ -127,13 +135,17 @@ function splitParams(url: string): { url: string; params: [string, string][] } {
   return { url: url.slice(0, qIndex), params };
 }
 
-export function fromSaved(saved: SavedRequest): RequestDraft {
+export function fromSaved(
+  saved: SavedRequest,
+  collection = "",
+  path: string | null = null,
+): RequestDraft {
   if (!isKind(saved.kind))
     throw new Error(
       `Request "${saved.name}" has an unknown kind "${String(saved.kind)}"`,
     );
   const base = newDraft(saved.name);
-  const { url, params } =
+  const split =
     saved.kind === "http"
       ? splitParams(saved.url)
       : { url: saved.url, params: [] as [string, string][] };
@@ -142,13 +154,20 @@ export function fromSaved(saved: SavedRequest): RequestDraft {
     id: saved.id,
     kind: saved.kind,
     method: saved.method,
-    url,
-    params: toRows(params),
+    url: split.url,
+    description: saved.description ?? "",
+    collection,
+    path,
+    params: toRows(split.params),
     headers: toRows(saved.headers ?? []),
     body: saved.body ?? "",
     auth: toAuthDraft(saved.auth),
     graphqlQuery: saved.graphql?.query ?? "",
     graphqlVariables: saved.graphql?.variables ?? "",
+    preScript: saved.scripts?.pre ?? "",
+    testScript: saved.scripts?.post ?? "",
+    tests: saved.tests ?? [],
+    captures: saved.captures ?? [],
     grpc: saved.grpc
       ? {
           protoPaths: saved.grpc.protoPaths.join("\n"),
@@ -158,92 +177,5 @@ export function fromSaved(saved: SavedRequest): RequestDraft {
           metadata: toRows(saved.grpc.metadata ?? []),
         }
       : base.grpc,
-  };
-}
-
-export interface LoadedCollection {
-  requests: RequestDraft[];
-  warnings: string[];
-}
-
-export async function loadRequests(workspace: string): Promise<LoadedCollection> {
-  const requests: RequestDraft[] = [];
-  const { items, skipped } = await listRequests(workspace);
-  const warnings: string[] = [...skipped];
-  for (const saved of items) {
-    try {
-      requests.push(fromSaved(saved));
-    } catch (e) {
-      warnings.push(errorMessage(e));
-    }
-  }
-  return { requests, warnings };
-}
-
-export function persistRequest(
-  workspace: string,
-  draft: RequestDraft,
-): Promise<string> {
-  return saveRequest(workspace, toSaved(draft));
-}
-
-export function removeRequest(workspace: string, id: string): Promise<void> {
-  return deleteRequest(workspace, id);
-}
-
-export interface LegacyMigration {
-  activeId: string | null;
-  skipped: string[];
-}
-
-function isLegacyDraft(value: unknown): value is RequestDraft {
-  if (typeof value !== "object" || value === null) return false;
-  const d = value as Record<string, unknown>;
-  return (
-    typeof d.id === "string" &&
-    typeof d.name === "string" &&
-    isKind(d.kind) &&
-    Array.isArray(d.params) &&
-    Array.isArray(d.headers) &&
-    typeof d.auth === "object" &&
-    d.auth !== null &&
-    typeof d.grpc === "object" &&
-    d.grpc !== null
-  );
-}
-
-function legacyEntryName(value: unknown): string {
-  if (typeof value === "object" && value !== null) {
-    const name = (value as Record<string, unknown>).name;
-    if (typeof name === "string" && name.trim() !== "") return name;
-  }
-  return "unnamed request";
-}
-
-export async function migrateLegacyCollection(
-  workspace: string,
-): Promise<LegacyMigration | null> {
-  const raw = localStorage.getItem(LEGACY_KEY);
-  if (!raw) return null;
-  let parsed: { requests?: unknown[]; activeId?: string | null };
-  try {
-    parsed = JSON.parse(raw) as typeof parsed;
-  } catch {
-    localStorage.removeItem(LEGACY_KEY);
-    return null;
-  }
-  const entries = Array.isArray(parsed.requests) ? parsed.requests : [];
-  const skipped: string[] = [];
-  try {
-    for (const entry of entries) {
-      if (isLegacyDraft(entry)) await persistRequest(workspace, entry);
-      else skipped.push(legacyEntryName(entry));
-    }
-  } finally {
-    localStorage.removeItem(LEGACY_KEY);
-  }
-  return {
-    activeId: typeof parsed.activeId === "string" ? parsed.activeId : null,
-    skipped,
   };
 }

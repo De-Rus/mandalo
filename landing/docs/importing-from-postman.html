@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Importing from Postman — Mándalo</title>
+<meta name="description" content="Import a Postman collection into Mándalo: what converts cleanly, what is skipped or downgraded, how to read the import report, and reviewing the diff.">
+<link rel="canonical" href="https://mandalo.dev/docs/importing-from-postman">
+<meta property="og:title" content="Importing from Postman — Mándalo">
+<meta property="og:description" content="Import a Postman collection into Mándalo: what converts cleanly, what is skipped or downgraded, how to read the import report, and reviewing the diff.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/importing-from-postman">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Importing from Postman — Mándalo">
+<meta name="twitter:description" content="Import a Postman collection into Mándalo: what converts cleanly, what is skipped or downgraded, how to read the import report, and reviewing the diff.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Importing from Postman — Mándalo",
+  "description": "Import a Postman collection into Mándalo: what converts cleanly, what is skipped or downgraded, how to read the import report, and reviewing the diff.",
+  "url": "https://mandalo.dev/docs/importing-from-postman",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Importing from Postman",
+      "item": "https://mandalo.dev/docs/importing-from-postman"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman" aria-current="page">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>Importing from Postman</p>
+    <h1>Importing from Postman</h1>
+    <p class="lede">Point Mándalo at an exported Postman collection and it writes ordinary <code>.http</code> files into your workspace, then tells you exactly what it did — including what it refused to convert.</p>
+
+    <h2>Running the import</h2>
+    <p>Export your collection from Postman (Collection v2.1 JSON), then import that file into a Mándalo workspace. The importer creates one collection, mirrors the Postman folder structure as directories, writes one <code>.http</code> file per request, and converts any environments contained in the export.</p>
+    <p>Import is additive: it writes new files and never deletes what is already in the workspace. Because everything lands as files, the safest way to run one is on a clean git tree — then <code>git diff</code> is your import review.</p>
+
+    <h2>What maps cleanly</h2>
+    <ul>
+      <li><strong>Folder structure</strong> — Postman folders become directories, nesting preserved.</li>
+      <li><strong>Requests</strong> — method, URL, headers and description.</li>
+      <li><strong>Bodies</strong> — raw bodies come across as-is; URL-encoded form bodies are converted, and a <code>Content-Type</code> is added if the export did not carry one. GraphQL bodies become native GraphQL requests with their query and variables.</li>
+      <li><strong>Auth</strong> — bearer, basic, and API key (including whether the key goes in a header or the query string). Collection-level auth is applied to requests that do not override it.</li>
+      <li><strong>Variables</strong> — Postman's <code>{{variable}}</code> syntax is identical to Mándalo's, so templates are passed through untouched. Environments in the export become files in <code>environments/</code>.</li>
+    </ul>
+
+    <h2>What does not</h2>
+    <p>Some things are skipped, some are imported with a warning, and the report distinguishes the two.</p>
+    <ul>
+      <li><strong>Unsupported body modes are skipped</strong> — the request is not written, and the report names it. Multipart file uploads are the common case.</li>
+      <li><strong>Unsupported auth types are downgraded</strong> — OAuth 1 and 2, AWS SigV4, NTLM, Digest and friends have no equivalent, so the request is imported with auth set to none and a warning. You will need to supply a token yourself, usually via a login request plus a capture.</li>
+      <li><strong>Scripts are imported verbatim, not translated</strong> — a Postman pre-request or test script is copied into the request file with a warning that it has not been executed. Anything using APIs the sandbox does not have — <code>pm.sendRequest</code>, <code>pm.execution</code>, <code>pm.cookies</code>, <code>pm.iterationData</code>, <code>require</code>, timers — will throw an explanatory error when you first run it. The supported surface is listed in <a href="/docs/scripts-and-tests">Scripts &amp; tests</a>.</li>
+      <li><strong>Mock servers, monitors, and anything cloud-side do not come across</strong>, because Mándalo has no equivalent to import them into. Neither do saved response examples or Postman's own test results.</li>
+      <li><strong>gRPC requests</strong> — Mándalo's gRPC support is driven by local <code>.proto</code> files, so gRPC requests are set up in the app rather than imported. See <a href="/docs/grpc">gRPC</a>.</li>
+    </ul>
+
+    <h2>The import report</h2>
+    <p>Every import returns a summary rather than a silent success:</p>
+    <ul>
+      <li><strong>imported</strong> — how many requests were written.</li>
+      <li><strong>collections</strong> and <strong>environments</strong> — how many of each were created.</li>
+      <li><strong>skipped</strong> — requests that were not written, each with its reason.</li>
+      <li><strong>warnings</strong> — requests that were written but need your attention: downgraded auth, un-run scripts.</li>
+    </ul>
+    <p>Read the skipped list first. Those are the requests you think you migrated and did not.</p>
+
+    <h2>Reviewing the diff</h2>
+    <p>The real advantage of a file-based importer is that the result is reviewable. After importing onto a clean tree:</p>
+<pre><code>git status --short          # every file the import wrote
+git diff --stat             # the size of what landed
+git diff collections/       # read the requests themselves</code></pre>
+    <p>Walk the new files looking for three things: literal secrets that were hard-coded in Postman rather than parameterised (move them out before you commit — see <a href="/docs/collections-and-git">Collections &amp; git</a>), URLs that should be <code>{{baseUrl}}</code> instead of a hostname, and the requests flagged in the warnings. Then commit the import as one commit, so any later cleanup is a diff against a clear baseline.</p>
+
+    <h2>After the import</h2>
+    <p>Two cleanups pay for themselves immediately. Replace imported test scripts with <a href="/docs/scripts-and-tests">declarative assertions</a> where the check is simple — a status code, a header, a JSON field — because they review better and cannot break on an unsupported API. And replace chained-token scripts with a capture, which is a couple of lines instead of a JavaScript block.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/cli-and-ci"><span class="pager-dir">Previous</span><span class="pager-title">CLI & CI</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

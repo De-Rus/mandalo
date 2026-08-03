@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mándalo documentation</title>
+<meta name="description" content="Documentation for Mándalo: collections as .http files, environments, scripts and tests, gRPC and gRPC-Web, Postman import — and what is not built.">
+<link rel="canonical" href="https://mandalo.dev/docs/">
+<meta property="og:title" content="Mándalo documentation">
+<meta property="og:description" content="Documentation for Mándalo: collections as .http files, environments, scripts and tests, gRPC and gRPC-Web, Postman import — and what is not built.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mándalo documentation">
+<meta name="twitter:description" content="Documentation for Mándalo: collections as .http files, environments, scripts and tests, gRPC and gRPC-Web, Postman import — and what is not built.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Mándalo documentation",
+  "description": "Documentation for the Mándalo API client: collections as .http files, environments, scripts, tests, gRPC and Postman import.",
+  "url": "https://mandalo.dev/docs/",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/" aria-current="page">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span>Docs</p>
+    <h1>Mándalo documentation</h1>
+    <p class="lede">Mándalo is an API client that keeps your collections as plain <code>.http</code> files in your own git repo. These pages cover what it does today, in the order you will need it.</p>
+
+    <h2>Start here</h2>
+    <div class="card-grid">
+      <a class="card" href="/docs/getting-started"><h3>Getting started</h3><p>Install, choose a workspace directory, create a collection, send a request, read the response.</p></a>
+      <a class="card" href="/docs/collections-and-git"><h3>Collections &amp; git</h3><p>The on-disk layout, what a <code>.http</code> request file holds, what a diff looks like, and how to keep secrets out of the repo.</p></a>
+      <a class="card" href="/docs/environments-and-variables"><h3>Environments &amp; variables</h3><p>Where <code>{{var}}</code> interpolation applies, resolution order, fail-loud behaviour, and captures.</p></a>
+      <a class="card" href="/docs/scripts-and-tests"><h3>Scripts &amp; tests</h3><p>The exact <code>pm.*</code> surface in the sandbox, the declarative assertion kinds, and what is deliberately missing.</p></a>
+      <a class="card" href="/docs/grpc"><h3>gRPC</h3><p>Compiling <code>.proto</code> files, listing methods, unary calls, metadata, and the streaming limitation.</p></a>
+      <a class="card" href="/docs/cli-and-ci"><h3>CLI &amp; CI</h3><p>Install the command line runner in one line, and run your collections from GitHub Actions.</p></a>
+      <a class="card" href="/docs/importing-from-postman"><h3>Importing from Postman</h3><p>What converts cleanly, what is skipped, and how to read the import report.</p></a>
+    </div>
+
+    <h2>What ships today</h2>
+    <p>Everything in this list is in the current desktop build:</p>
+    <ul>
+      <li>HTTP, GraphQL and gRPC requests from one workbench.</li>
+      <li>Auth: bearer token, basic, and API key placed in a header or a query parameter.</li>
+      <li>Environments with <code>{{var}}</code> interpolation across URL, headers, body, GraphQL query and variables, gRPC message and metadata, and every auth field.</li>
+      <li>Collections and folders on disk as <code>.http</code> and <code>.grpc</code> files, in as many workspaces as you like.</li>
+      <li>Pre-request and post-response scripts running a <code>pm.*</code> subset inside a sandboxed QuickJS engine embedded in the Rust core.</li>
+      <li>Declarative assertions and captures that need no script at all.</li>
+      <li>Postman collection import and single-file bundle export.</li>
+      <li>macOS, Windows and Linux desktop builds, and the same client running <a href="/app">in the browser</a> from the same code. Free and open source. Offline, no account, no telemetry.</li>
+    </ul>
+
+    <h2>In development</h2>
+    <p>These exist in the repository but are not part of a release yet. Do not plan around them:</p>
+    <ul>
+      <li>The <code>mandalo</code> command line runner — see <a href="/docs/cli-and-ci">CLI &amp; CI</a>.</li>
+      <li>A VS Code extension.</li>
+    </ul>
+
+    <h2>Not built</h2>
+    <p>We would rather say so than let you find out later. Mándalo has no cloud sync, no team workspace UI, no mock servers, no API monitoring or uptime checks, no WebSocket or SSE support, no synced request history, and no code generation. If you need those, read the honest <a href="/postman-alternative">Mándalo vs Postman comparison</a> before you switch.</p>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

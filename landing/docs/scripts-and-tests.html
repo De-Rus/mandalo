@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scripts &amp; tests — Mándalo docs</title>
+<meta name="description" content="The pm.* surface Mándalo supports in its sandboxed QuickJS engine, the declarative assertion kinds and operators, and what the sandbox refuses to do.">
+<link rel="canonical" href="https://mandalo.dev/docs/scripts-and-tests">
+<meta property="og:title" content="Scripts &amp; tests — Mándalo docs">
+<meta property="og:description" content="The pm.* surface Mándalo supports in its sandboxed QuickJS engine, the declarative assertion kinds and operators, and what the sandbox refuses to do.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/scripts-and-tests">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Scripts &amp; tests — Mándalo docs">
+<meta name="twitter:description" content="The pm.* surface Mándalo supports in its sandboxed QuickJS engine, the declarative assertion kinds and operators, and what the sandbox refuses to do.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Scripts & tests — Mándalo docs",
+  "description": "The pm.* surface Mándalo supports in its sandboxed QuickJS engine, the declarative assertion kinds and operators, and what the sandbox refuses to do.",
+  "url": "https://mandalo.dev/docs/scripts-and-tests",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Scripts & tests",
+      "item": "https://mandalo.dev/docs/scripts-and-tests"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests" aria-current="page">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>Scripts & tests</p>
+    <h1>Scripts &amp; tests</h1>
+    <p class="lede">Two ways to check a response: declarative assertions stored as data, and JavaScript that runs in a sandbox with a Postman-compatible <code>pm.*</code> surface. The app authors tests as scripts; the declarative form is still read and run by the engine.</p>
+
+    <h2>Declarative assertions</h2>
+    <p>An assertion is a row in the request file. There is no code to review, no runtime to trust, and the failure message writes itself:</p>
+<pre><code>[[tests]]
+kind = "status"
+op = "eq"
+value = 200
+
+[[tests]]
+kind = "json"
+path = "$.data.items"
+op = "len"
+value = 25
+
+[[tests]]
+kind = "header"
+name = "content-type"
+op = "contains"
+value = "application/json"
+
+[[tests]]
+kind = "duration"
+op = "lt"
+value = 500</code></pre>
+    <p>Four kinds exist, and these are all the operators each one takes:</p>
+    <div class="table-scroll">
+      <table class="cmp">
+        <caption>Assertion kinds and their operators</caption>
+        <thead><tr><th scope="col">Kind</th><th scope="col">Fields</th><th scope="col">Operators</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>status</code></th><td><code>value</code> (number)</td><td><code>eq</code>, <code>ne</code>, <code>lt</code>, <code>gt</code></td></tr>
+          <tr><th scope="row"><code>json</code></th><td><code>path</code> (JSONPath), <code>value</code> (optional)</td><td><code>eq</code>, <code>ne</code>, <code>exists</code>, <code>absent</code>, <code>contains</code>, <code>matches</code>, <code>lt</code>, <code>gt</code>, <code>len</code></td></tr>
+          <tr><th scope="row"><code>header</code></th><td><code>name</code>, <code>value</code> (optional)</td><td><code>exists</code>, <code>absent</code>, <code>eq</code>, <code>contains</code>, <code>matches</code></td></tr>
+          <tr><th scope="row"><code>duration</code></th><td><code>value</code> (milliseconds)</td><td><code>lt</code>, <code>gt</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Notes that save you a debugging session: <code>path</code> is a real JSONPath rooted at <code>$</code>; <code>matches</code> takes a regular expression; <code>len</code> asserts on the length of a string, array or object; header names are matched case-insensitively; and numeric comparison is numeric, so <code>1</code> and <code>1.0</code> compare equal. A <code>json</code> assertion against a body that is not JSON fails with that reason rather than pretending the path was missing.</p>
+
+    <h2>Scripts</h2>
+    <p>Each request can carry a <strong>pre-request</strong> script and a <strong>post-response</strong> script. They run in a QuickJS engine embedded in the Rust core — not in Node, not in the browser, not in a hidden window.</p>
+    <p>Order of execution for one request: pre-request script → variable resolution → send → declarative assertions and captures → post-response script.</p>
+
+    <h3>The pm.* surface</h3>
+    <p>This is the complete list. Anything not here does not exist:</p>
+    <ul>
+      <li><code>pm.info</code> — <code>requestName</code>, <code>eventName</code>, <code>iteration</code>, <code>iterationCount</code>.</li>
+      <li><code>pm.environment</code>, <code>pm.variables</code>, <code>pm.globals</code>, <code>pm.collectionVariables</code> — the same variable bag under four names, with <code>get</code>, <code>set</code>, <code>unset</code>, <code>has</code>, <code>clear</code>, <code>toObject</code> and <code>replaceIn</code>. Mándalo has one scope, not four; the aliases exist so pasted Postman scripts keep working.</li>
+      <li><code>pm.request</code> — <code>method</code>, <code>url</code>, <code>body</code>, all writable from a pre-request script, plus <code>pm.request.headers</code> with <code>add</code>, <code>upsert</code>, <code>remove</code>, <code>has</code>, <code>get</code>, <code>all</code>, <code>each</code> and <code>count</code>. Headers are <code>{ key, value }</code> objects. Edits made before the send are applied to the outgoing request.</li>
+      <li><code>pm.response</code> — only in a post-response script. <code>code</code>, <code>status</code>, <code>responseTime</code>, <code>responseSize</code>, <code>text()</code>, <code>json()</code>, and <code>headers</code> with <code>get</code>, <code>has</code> and <code>all</code>.</li>
+      <li><code>pm.response.to</code> — <code>to.have.status(200)</code> or <code>status("OK")</code>, <code>to.have.header(name)</code>, <code>to.have.body()</code>, <code>to.have.jsonBody()</code>, <code>to.be.ok</code>, <code>to.be.success</code>, <code>to.be.clientError</code>, <code>to.be.serverError</code>, and <code>to.not.…</code> for all of them.</li>
+      <li><code>pm.test(name, fn)</code> — runs <code>fn</code>, records a pass or a failure with the thrown message. A failing test never aborts the run.</li>
+      <li><code>pm.expect(value)</code> — a Chai-shaped assertion chain: <code>equal</code>/<code>eql</code>, <code>a</code>/<code>an</code>, <code>above</code>/<code>below</code>/<code>least</code>/<code>most</code>, <code>include</code>/<code>contain</code>, <code>property</code>, <code>lengthOf</code>, <code>match</code>, <code>oneOf</code>, the <code>true</code>/<code>false</code>/<code>null</code>/<code>undefined</code>/<code>ok</code>/<code>empty</code> flags, and <code>not</code> to negate.</li>
+      <li><code>console.log</code>, <code>info</code>, <code>debug</code>, <code>warn</code>, <code>error</code> — collected and shown with the response.</li>
+    </ul>
+<pre><code>// post-response
+pm.test("charge was created", function () {
+  pm.response.to.have.status(201);
+  const body = pm.response.json();
+  pm.expect(body.currency).to.equal("eur");
+  pm.expect(body.id).to.be.a("string");
+});
+
+pm.environment.set("chargeId", pm.response.json().id);
+console.log("captured", pm.environment.get("chargeId"));</code></pre>
+
+    <h2>What we deliberately don't support</h2>
+    <p>The sandbox is small on purpose, and every gap throws a message telling you what is missing and why rather than failing as <code>undefined</code>:</p>
+    <ul>
+      <li><strong>No Node APIs and no modules.</strong> <code>require</code>, <code>module</code>, <code>exports</code> and <code>process</code> are absent. There is no module loader, so there is no supply chain to audit inside your API client.</li>
+      <li><strong>No filesystem.</strong> A script cannot read or write files. Your collections cannot be modified by a script that came in with an import.</li>
+      <li><strong>No network from scripts.</strong> <code>fetch</code>, <code>XMLHttpRequest</code>, <code>WebSocket</code> and <code>pm.sendRequest</code> all refuse. A request should send one request; if you need a chain, chain requests and use captures.</li>
+      <li><strong>No timers and no async.</strong> <code>setTimeout</code>, <code>setInterval</code>, <code>setImmediate</code> and <code>queueMicrotask</code> are absent — scripts are synchronous, so a run finishes deterministically.</li>
+      <li><strong>No browser or host globals.</strong> <code>window</code>, <code>document</code>, <code>localStorage</code>, <code>Deno</code> and <code>Bun</code> are absent.</li>
+      <li><strong>Bounded execution.</strong> Each script gets a memory ceiling and a wall-clock timeout (32&nbsp;MB and 2&nbsp;seconds by default). An infinite loop is interrupted; it does not hang the app.</li>
+      <li><strong>Not implemented yet, and they say so:</strong> <code>pm.execution</code>, <code>pm.cookies</code>, <code>pm.visualizer</code>, <code>pm.iterationData</code>, <code>pm.vault</code> and <code>pm.setNextRequest</code> each throw an explanatory error when touched.</li>
+    </ul>
+    <div class="callout">
+      <span class="callout-label">Practical consequence</span>
+      <p>Postman scripts that only assert on the response and move variables around usually run unchanged. Scripts that fetch a second URL, use a cookie jar, or drive the collection runner need rewriting. The <a href="/docs/importing-from-postman">import</a> brings scripts across verbatim and flags them so you can find out at review time rather than at run time.</p>
+    </div>
+
+    <h2>Which one should you use</h2>
+    <p>Use a declarative assertion whenever it expresses the check. It is data, so it reviews as data, it cannot loop forever, and the assertion name in the result is generated from the rule itself. Drop into a script when you need a computed expectation, a value derived from several fields, or a shape check that no single operator covers.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/environments-and-variables"><span class="pager-dir">Previous</span><span class="pager-title">Environments & variables</span></a>
+      <a class="pager-link next" href="/docs/grpc"><span class="pager-dir">Next</span><span class="pager-title">gRPC</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,39 @@
+### Form login
+POST {{baseUrl}}/body/urlencoded
+Content-Type: application/x-www-form-urlencoded
+
+username=ada+lovelace&password=lovelace
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the pairs arrived as written", function () {
+  pm.expect(pm.response.json().raw).to.equal("username=ada+lovelace&password=lovelace");
+});
+%}
+
+### Send a JSON file as the body
+POST {{baseUrl}}/body/binary
+
+< ./files/payload.json
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the extension set the content type", function () {
+  pm.expect(pm.response.json().contentType).to.equal("application/json");
+});
+pm.test("the file's bytes are the body", function () {
+  pm.expect(JSON.parse(pm.response.json().text).name).to.equal("nova");
+});
+%}
+
+### Send a PDF as the body
+POST {{baseUrl}}/body/binary
+
+< ./files/report.pdf
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the extension set the content type", function () {
+  pm.expect(pm.response.json().contentType).to.equal("application/pdf");
+});
+%}

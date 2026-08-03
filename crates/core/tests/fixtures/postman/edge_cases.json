@@ -1,0 +1,279 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-0000-4000-8000-abcdefabcdef",
+    "name": "Edge Cases",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Bodies",
+      "item": [
+        {
+          "name": "Upload avatar",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "avatar", "type": "file", "src": "/Users/dev/avatar.png" },
+                { "key": "caption", "value": "hello", "type": "text" }
+              ]
+            },
+            "url": { "raw": "{{baseUrl}}/avatar", "host": ["{{baseUrl}}"], "path": ["avatar"] }
+          }
+        },
+        {
+          "name": "Raw file body",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/octet-stream" }],
+            "body": { "mode": "file", "file": { "src": "/Users/dev/blob.bin" } },
+            "url": { "raw": "{{baseUrl}}/blob", "host": ["{{baseUrl}}"], "path": ["blob"] }
+          }
+        },
+        {
+          "name": "GraphQL search",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Search($term: String!) {\n  search(term: $term) {\n    id\n  }\n}",
+                "variables": "{\n  \"term\": \"{{term}}\"\n}"
+              }
+            },
+            "url": { "raw": "{{baseUrl}}/graphql", "host": ["{{baseUrl}}"], "path": ["graphql"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth types",
+      "item": [
+        {
+          "name": "Basic",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "{{user}}", "type": "string" },
+                { "key": "password", "value": "{{pass}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/basic" }
+          }
+        },
+        {
+          "name": "Api key in query",
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                { "key": "key", "value": "api_key", "type": "string" },
+                { "key": "value", "value": "{{apiKey}}", "type": "string" },
+                { "key": "in", "value": "query", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/search" }
+          }
+        },
+        {
+          "name": "OAuth2 stored token",
+          "request": {
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                { "key": "accessToken", "value": "{{oauthToken}}", "type": "string" },
+                { "key": "addTokenTo", "value": "header", "type": "string" },
+                { "key": "tokenType", "value": "Bearer", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/oauth" }
+          }
+        },
+        {
+          "name": "AWS v4",
+          "request": {
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                { "key": "accessKey", "value": "{{awsKey}}", "type": "string" },
+                { "key": "secretKey", "value": "{{awsSecret}}", "type": "string" },
+                { "key": "service", "value": "execute-api", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/aws" }
+          }
+        },
+        {
+          "name": "Digest",
+          "request": {
+            "auth": {
+              "type": "digest",
+              "digest": [
+                { "key": "username", "value": "u", "type": "string" },
+                { "key": "password", "value": "p", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/digest" }
+          }
+        },
+        {
+          "name": "Hawk",
+          "request": {
+            "auth": { "type": "hawk", "hawk": [{ "key": "authId", "value": "id", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/hawk" }
+          }
+        },
+        {
+          "name": "NTLM",
+          "request": {
+            "auth": { "type": "ntlm", "ntlm": [{ "key": "username", "value": "u", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/ntlm" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sandbox idioms",
+      "item": [
+        {
+          "name": "Legacy sandbox script",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "tests[\"Status code is 200\"] = responseCode.code === 200;",
+                  "tests[\"Body has a token\"] = responseBody.has(\"token\") || responseBody.indexOf(\"token\") !== -1;",
+                  "postman.setEnvironmentVariable(\"legacyToken\", JSON.parse(responseBody).token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/legacy" }
+          }
+        },
+        {
+          "name": "Dynamic variables",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.request.headers.add({ key: \"X-Request-Id\", value: pm.variables.replaceIn(\"{{$guid}}\") });",
+                  "pm.request.headers.add({ key: \"X-Timestamp\", value: pm.variables.replaceIn(\"{{$timestamp}}\") });",
+                  "pm.request.url.query.add({ key: \"cache\", value: String(Math.floor(Math.random() * 1000)) });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{$guid}}\",\n  \"at\": \"{{$isoTimestamp}}\",\n  \"n\": {{$randomInt}}\n}"
+            },
+            "url": { "raw": "https://api.acme.test/events?trace={{$randomUUID}}" }
+          }
+        },
+        {
+          "name": "Chained token consumer",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.environment.get(\"accessToken\");",
+                  "if (!token) {",
+                  "    throw new Error(\"run Login first — no accessToken in the environment\");",
+                  "}",
+                  "pm.request.headers.upsert({ key: \"Authorization\", value: \"Bearer \" + token });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Authorised\", () => {",
+                  "    pm.response.to.be.ok;",
+                  "    pm.expect(pm.response.json()).to.have.property(\"user\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/me" }
+          }
+        },
+        {
+          "name": "Unsupported script apis",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.sendRequest(\"https://api.acme.test/warmup\", function (err, res) {",
+                  "    console.log(res && res.code);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const schema = { type: \"object\" };",
+                  "pm.test(\"Schema is valid\", function () {",
+                  "    pm.response.to.have.jsonSchema(schema);",
+                  "});",
+                  "postman.setNextRequest(\"Health\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "https://api.acme.test/flaky" }
+          }
+        },
+        {
+          "name": "Shorthand request",
+          "request": "https://api.acme.test/ping"
+        }
+      ]
+    }
+  ],
+  "variable": [{ "key": "baseUrl", "value": "https://api.acme.test" }]
+}

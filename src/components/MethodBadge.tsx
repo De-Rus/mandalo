@@ -1,4 +1,4 @@
-import type { RequestDraft } from "../lib/draft";
+import type { Kind } from "../lib/api";
 
 const CLASS: Record<string, string> = {
   GET: "badge-get",
@@ -7,18 +7,26 @@ const CLASS: Record<string, string> = {
   PATCH: "badge-patch",
   DELETE: "badge-delete",
   HEAD: "badge-head",
-  OPTIONS: "badge-head",
+  OPTIONS: "badge-options",
   GQL: "badge-gql",
   gRPC: "badge-grpc",
 };
 
-export function badgeLabel(draft: Pick<RequestDraft, "kind" | "method">): string {
-  if (draft.kind === "graphql") return "GQL";
-  if (draft.kind === "grpc") return "gRPC";
-  return draft.method;
+interface Labelled {
+  kind: Kind;
+  method: string;
 }
 
-export function MethodBadge({ draft }: { draft: Pick<RequestDraft, "kind" | "method"> }) {
-  const label = badgeLabel(draft);
-  return <span className={`badge ${CLASS[label] ?? "badge-head"}`}>{label}</span>;
+export function badgeLabel(item: Labelled): string {
+  if (item.kind === "graphql") return "GQL";
+  if (item.kind === "grpc") return "gRPC";
+  return item.method;
+}
+
+export function methodClass(item: Labelled): string {
+  return CLASS[badgeLabel(item)] ?? "badge-head";
+}
+
+export function MethodBadge({ item }: { item: Labelled }) {
+  return <span className={`badge ${methodClass(item)}`}>{badgeLabel(item)}</span>;
 }

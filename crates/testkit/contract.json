@@ -1,0 +1,283 @@
+{
+  "description": "The mock API route contract. Both implementations — the Rust server in crates/testkit and the Cloudflare Worker in crates/testkit/worker — are tested against this file.",
+  "credentials": {
+    "basicUser": "ada",
+    "basicPassword": "lovelace",
+    "token": "mock-bearer-token",
+    "apiKeyName": "x-api-key",
+    "apiKeyValue": "mock-api-key"
+  },
+  "cases": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/health",
+      "status": 200,
+      "json": { "status": "ok" }
+    },
+    {
+      "name": "get echo",
+      "method": "GET",
+      "path": "/get?page=2",
+      "status": 200,
+      "json": { "method": "GET", "path": "/get", "query": { "page": "2" }, "body": "" }
+    },
+    {
+      "name": "post echo",
+      "method": "POST",
+      "path": "/post",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"a\":1}",
+      "status": 200,
+      "json": { "method": "POST", "path": "/post", "body": "{\"a\":1}" }
+    },
+    {
+      "name": "put echo",
+      "method": "PUT",
+      "path": "/put",
+      "body": "x",
+      "status": 200,
+      "json": { "method": "PUT", "path": "/put" }
+    },
+    {
+      "name": "patch echo",
+      "method": "PATCH",
+      "path": "/patch",
+      "body": "x",
+      "status": 200,
+      "json": { "method": "PATCH", "path": "/patch" }
+    },
+    {
+      "name": "delete echo",
+      "method": "DELETE",
+      "path": "/delete",
+      "status": 200,
+      "json": { "method": "DELETE", "path": "/delete" }
+    },
+    {
+      "name": "options echo",
+      "method": "OPTIONS",
+      "path": "/options",
+      "status": 200,
+      "json": { "method": "OPTIONS", "path": "/options" }
+    },
+    {
+      "name": "teapot",
+      "method": "GET",
+      "path": "/status/418",
+      "status": 418,
+      "json": { "status": 418 }
+    },
+    {
+      "name": "server error",
+      "method": "GET",
+      "path": "/status/500",
+      "status": 500,
+      "json": { "status": 500 }
+    },
+    {
+      "name": "json body",
+      "method": "GET",
+      "path": "/json",
+      "status": 200,
+      "json": { "id": 7, "name": "nova", "tags": ["a", "b"], "nested": { "ok": true } }
+    },
+    {
+      "name": "text body",
+      "method": "GET",
+      "path": "/text",
+      "status": 200,
+      "bodyContains": "hola"
+    },
+    {
+      "name": "xml body",
+      "method": "GET",
+      "path": "/xml",
+      "status": 200,
+      "bodyContains": "<name>nova</name>"
+    },
+    {
+      "name": "empty body",
+      "method": "GET",
+      "path": "/empty",
+      "status": 204
+    },
+    {
+      "name": "gzip body",
+      "method": "GET",
+      "path": "/gzip",
+      "status": 200,
+      "json": { "encoding": "gzip", "ok": true }
+    },
+    {
+      "name": "big body is clamped",
+      "method": "GET",
+      "path": "/big?bytes=99999999",
+      "status": 200,
+      "maxBytes": 5243000
+    },
+    {
+      "name": "slow body",
+      "method": "GET",
+      "path": "/slow?ms=10",
+      "status": 200,
+      "json": { "path": "/slow" }
+    },
+    {
+      "name": "header echo",
+      "method": "GET",
+      "path": "/headers/echo",
+      "headers": { "x-mandalo": "hola" },
+      "status": 200,
+      "headerEcho": ["x-mandalo", "hola"]
+    },
+    {
+      "name": "cookie",
+      "method": "GET",
+      "path": "/cookies/set",
+      "status": 200,
+      "json": { "cookie": "mock_session=abc123" },
+      "responseHeaderContains": ["set-cookie", "mock_session=abc123"]
+    },
+    {
+      "name": "redirect hop",
+      "method": "GET",
+      "path": "/redirect/2",
+      "followRedirects": false,
+      "status": 302,
+      "responseHeaderContains": ["location", "/redirect/1"]
+    },
+    {
+      "name": "last redirect hop lands on /get",
+      "method": "GET",
+      "path": "/redirect/0",
+      "followRedirects": false,
+      "status": 302,
+      "responseHeaderContains": ["location", "/get"]
+    },
+    {
+      "name": "bearer denied",
+      "method": "GET",
+      "path": "/auth/bearer",
+      "status": 401,
+      "json": { "error": "unauthorized" }
+    },
+    {
+      "name": "bearer allowed",
+      "method": "GET",
+      "path": "/auth/bearer",
+      "headers": { "authorization": "Bearer mock-bearer-token" },
+      "status": 200,
+      "json": { "authenticated": true, "token": "mock-bearer-token" }
+    },
+    {
+      "name": "basic denied",
+      "method": "GET",
+      "path": "/auth/basic",
+      "headers": { "authorization": "Basic YWRhOndyb25n" },
+      "status": 401,
+      "json": { "error": "unauthorized" }
+    },
+    {
+      "name": "basic allowed",
+      "method": "GET",
+      "path": "/auth/basic",
+      "headers": { "authorization": "Basic YWRhOmxvdmVsYWNl" },
+      "status": 200,
+      "json": { "authenticated": true, "user": "ada" }
+    },
+    {
+      "name": "api key in the header",
+      "method": "GET",
+      "path": "/auth/apikey",
+      "headers": { "x-api-key": "mock-api-key" },
+      "status": 200,
+      "json": { "authenticated": true, "placement": "header" }
+    },
+    {
+      "name": "api key in the query",
+      "method": "GET",
+      "path": "/auth/apikey?x-api-key=mock-api-key",
+      "status": 200,
+      "json": { "authenticated": true, "placement": "query" }
+    },
+    {
+      "name": "api key denied",
+      "method": "GET",
+      "path": "/auth/apikey",
+      "status": 401,
+      "json": { "error": "unauthorized" }
+    },
+    {
+      "name": "login",
+      "method": "POST",
+      "path": "/auth/login",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"username\":\"ada\",\"password\":\"lovelace\"}",
+      "status": 200,
+      "json": { "token": "mock-bearer-token", "user": { "id": "u-1", "name": "Ada Lovelace" } }
+    },
+    {
+      "name": "login denied",
+      "method": "POST",
+      "path": "/auth/login",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"username\":\"ada\",\"password\":\"nope\"}",
+      "status": 401,
+      "json": { "error": "unauthorized" }
+    },
+    {
+      "name": "graphql user",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"query\":\"query User($id: ID!) { user(id: $id) { id name email } }\",\"variables\":{\"id\":\"u-9\"}}",
+      "status": 200,
+      "json": { "data": { "user": { "id": "u-9", "name": "Ada Lovelace", "email": "ada@example.com" } } }
+    },
+    {
+      "name": "graphql users",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"query\":\"{ users { id name } }\",\"variables\":{}}",
+      "status": 200,
+      "json": { "data": { "users": [{ "id": "u-1" }, { "id": "u-2" }] } }
+    },
+    {
+      "name": "graphql mutation",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"query\":\"mutation Create($name: String!) { createUser(name: $name) { id name } }\",\"variables\":{\"name\":\"nova\"}}",
+      "status": 200,
+      "json": { "data": { "createUser": { "id": "u-2", "name": "nova" } } }
+    },
+    {
+      "name": "graphql errors arrive with http 200",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"query\":\"{ boom }\",\"variables\":{}}",
+      "status": 200,
+      "json": { "data": null, "errors": [{ "message": "boom: the resolver refused", "extensions": { "code": "BOOM" } }] }
+    },
+    {
+      "name": "graphql malformed json",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{\"query\":\"{ malformed }\",\"variables\":{}}",
+      "status": 200,
+      "bodyEquals": "{\"data\": {\"malformed\":"
+    },
+    {
+      "name": "graphql without a query",
+      "method": "POST",
+      "path": "/graphql",
+      "headers": { "content-type": "application/json" },
+      "body": "{}",
+      "status": 400
+    }
+  ]
+}

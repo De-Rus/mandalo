@@ -1,11 +1,10 @@
 [package]
 name = "mandalo"
-version = "0.1.0"
 description = "Mándalo — a fast, offline, git-native API client"
-authors = ["Dani Rus <dani@fsck.ro>"]
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -14,29 +13,20 @@ edition = "2021"
 name = "mandalo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "mandalo-desktop"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+mandalo-core = { workspace = true, features = ["keychain"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "json"] }
-hyper = { version = "1", features = ["http1", "client"] }
-percent-encoding = "2"
-toml = "0.8"
-tonic = { version = "0.12", features = ["tls", "tls-roots"] }
-prost = "0.13"
-prost-reflect = { version = "0.14", features = ["serde"] }
-protox = "0.7"
-http = "1"
-uuid = { version = "1", features = ["v4"] }
-
-[dev-dependencies]
-tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-bytes = "1"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

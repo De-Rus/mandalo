@@ -1,0 +1,147 @@
+/*
+ * The app's design tokens, re-pointed at the colours VS Code publishes on the
+ * WebView root. Every theme the user installs — light, dark or high contrast —
+ * therefore drives the whole workbench without a second stylesheet.
+ */
+:root {
+  --bg-app: var(--vscode-editor-background);
+  --bg-panel: var(--vscode-editor-background);
+  --bg-elevated: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --bg-inset: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --bg-hover: var(--vscode-list-hoverBackground);
+  --bg-active: var(--vscode-list-activeSelectionBackground);
+  --bg-selected: var(--vscode-list-inactiveSelectionBackground);
+
+  --border-subtle: var(--vscode-editorGroup-border, var(--vscode-panel-border));
+  --border: var(--vscode-panel-border, var(--vscode-editorGroup-border));
+  --border-strong: var(--vscode-contrastBorder, var(--vscode-input-border, var(--vscode-panel-border)));
+
+  --text-primary: var(--vscode-foreground);
+  --text-secondary: var(--vscode-descriptionForeground);
+  --text-muted: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  --text-inverse: var(--vscode-button-foreground);
+
+  --brand: var(--vscode-button-background);
+  --brand-hover: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  --brand-press: var(--vscode-button-background);
+  --brand-soft: var(--vscode-list-inactiveSelectionBackground);
+  --brand-ring: var(--vscode-focusBorder);
+
+  --success: var(--vscode-charts-green, var(--vscode-testing-iconPassed));
+  --warn: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground));
+  --danger: var(--vscode-errorForeground);
+  --info: var(--vscode-charts-blue, var(--vscode-textLink-foreground));
+
+  --m-get: var(--vscode-charts-green, #4bbd7a);
+  --m-post: var(--vscode-charts-orange, #f0913e);
+  --m-put: var(--vscode-charts-blue, #5b9dfb);
+  --m-patch: var(--vscode-charts-purple, #a371f7);
+  --m-delete: var(--vscode-charts-red, #ef5f5f);
+  --m-head: var(--vscode-descriptionForeground);
+  --m-options: var(--vscode-descriptionForeground);
+  --m-gql: var(--vscode-charts-purple, #e2569b);
+  --m-grpc: var(--vscode-charts-purple, #9d7bf5);
+
+  --tk-key: var(--vscode-charts-blue);
+  --tk-string: var(--vscode-charts-orange, #a5d6a7);
+  --tk-number: var(--vscode-charts-green, #f0b27a);
+  --tk-bool: var(--vscode-charts-purple, #c792ea);
+  --tk-null: var(--vscode-descriptionForeground);
+  --tk-punct: var(--vscode-descriptionForeground);
+
+  --font-ui: var(--vscode-font-family);
+  --font-mono: var(--vscode-editor-font-family);
+  --fs-md: var(--vscode-font-size, 13px);
+
+  --shadow-sm: none;
+  --shadow-md: 0 2px 8px var(--vscode-widget-shadow, transparent);
+  --shadow-lg: 0 8px 30px var(--vscode-widget-shadow, transparent);
+}
+
+body {
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+}
+
+::selection {
+  background: var(--vscode-editor-selectionBackground);
+}
+
+:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+  background-clip: padding-box;
+}
+
+input,
+textarea,
+select {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border-color: var(--vscode-input-border, var(--vscode-panel-border));
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.vsc-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--vscode-editor-background);
+}
+
+.vsc-editor .center {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.vsc-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 26px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: var(--fs-sm);
+  color: var(--vscode-breadcrumb-foreground, var(--vscode-descriptionForeground));
+}
+
+.vsc-crumb-path {
+  font-family: var(--font-mono);
+}
+
+.vsc-env {
+  background: transparent;
+  border: none;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.vsc-env:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-foreground);
+}
+
+.vsc-banner {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--vscode-inputValidation-errorBackground);
+  border-bottom: 1px solid var(--vscode-inputValidation-errorBorder);
+  color: var(--vscode-foreground);
+  font-size: var(--fs-sm);
+}

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collections &amp; git — Mándalo docs</title>
+<meta name="description" content="How Mándalo stores collections as .http files on disk, why that diffs better than JSON, the PR review workflow, and how to keep secrets out of git.">
+<link rel="canonical" href="https://mandalo.dev/docs/collections-and-git">
+<meta property="og:title" content="Collections &amp; git — Mándalo docs">
+<meta property="og:description" content="How Mándalo stores collections as .http files on disk, why that diffs better than JSON, the PR review workflow, and how to keep secrets out of git.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mandalo.dev/docs/collections-and-git">
+<meta property="og:site_name" content="Mándalo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Collections &amp; git — Mándalo docs">
+<meta name="twitter:description" content="How Mándalo stores collections as .http files on disk, why that diffs better than JSON, the PR review workflow, and how to keep secrets out of git.">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Collections & git — Mándalo docs",
+  "description": "How Mándalo stores collections as .http files on disk, why that diffs better than JSON, the PR review workflow, and how to keep secrets out of git.",
+  "url": "https://mandalo.dev/docs/collections-and-git",
+  "datePublished": "2026-08-03",
+  "dateModified": "2026-08-03",
+  "inLanguage": "en",
+  "author": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Mándalo"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://mandalo.dev/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://mandalo.dev/docs/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Collections & git",
+      "item": "https://mandalo.dev/docs/collections-and-git"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap docs-layout">
+  <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Documentation</div>
+      <nav class="docs-nav" aria-label="Documentation">
+        <a href="/docs/">Documentation</a>
+        <a href="/docs/getting-started">Getting started</a>
+        <a href="/docs/collections-and-git" aria-current="page">Collections & git</a>
+        <a href="/docs/environments-and-variables">Environments & variables</a>
+        <a href="/docs/scripts-and-tests">Scripts & tests</a>
+        <a href="/docs/grpc">gRPC</a>
+        <a href="/docs/cli-and-ci">CLI & CI</a>
+        <a href="/docs/importing-from-postman">Importing from Postman</a>
+      </nav>
+  </aside>
+  <article class="prose">
+    <p class="breadcrumb"><a href="/">Home</a><span>/</span><a href="/docs/">Docs</a><span>/</span>Collections & git</p>
+    <h1>Collections &amp; git</h1>
+    <p class="lede">A Mándalo workspace is a directory of plain text files. Requests are <code>.http</code> files — the same format VS Code&rsquo;s REST Client, httpYac and the JetBrains HTTP Client already read. That is the whole storage format: no database, no proprietary bundle, no export step before your work is reviewable.</p>
+
+    <h2>The on-disk layout</h2>
+<pre><code>my-workspace/
+  mandalo.toml
+  environments/
+    staging.toml
+    production.toml
+  collections/
+    payments-api/
+      collection.toml
+      list-charges.http
+      create-charge.http
+      ledger-balance.grpc
+      customers/
+        get-customer.http</code></pre>
+    <p>Three rules explain the whole tree:</p>
+    <ul>
+      <li>A <strong>collection</strong> is a directory under <code>collections/</code> containing a <code>collection.toml</code> manifest.</li>
+      <li>A <strong>folder</strong> is a plain subdirectory. Nesting is arbitrary.</li>
+      <li>A <strong>request</strong> is one file, named after a slug of the request name. HTTP and GraphQL requests are <code>.http</code>; gRPC requests are <code>.grpc</code>. Renaming a request renames the file.</li>
+      <li><strong>Environments</strong> stay TOML — they are key/value tables, which is what TOML is good at.</li>
+    </ul>
+    <p>Paths are confined to the workspace: a request path containing <code>..</code>, or a symlink pointing outside the collection directory, is rejected rather than followed. A file that fails to parse is skipped and reported, not silently dropped — the tree tells you which ones it could not read.</p>
+
+    <h2>What a request file looks like</h2>
+    <p>Everything the editor shows is a line you could have typed yourself. Nothing is encoded, escaped into a blob, or minified:</p>
+<pre><code># collections/payments-api/create-charge.http
+### Create charge
+POST {{baseUrl}}/v1/charges
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "amount": 2400,
+  "currency": "eur"
+}
+
+&gt; {%
+pm.test("created", function () {
+  pm.response.to.have.status(201);
+});
+pm.environment.set("chargeId", pm.response.json().id);
+%}</code></pre>
+    <p>The pieces, in order: <code>###</code> names the request. Then a normal request line, then headers one per line, a blank line, then the body. <code>&lt; {% … %}</code> holds a pre-request script and <code>&gt; {% … %}</code> a post-response script — REST Client&rsquo;s own syntax, so a teammate with that extension can open and run the file unchanged.</p>
+    <p>GraphQL requests are <code>.http</code> too, marked with the <code>X-REQUEST-TYPE: GraphQL</code> header REST Client uses; the body carries the query and, after a blank line, the variables. gRPC gets its own <code>.grpc</code> extension in the same text style — a call line, metadata as header lines, and a JSON message as the body.</p>
+
+    <h2>Why plain <code>.http</code></h2>
+    <p>The format was chosen for the diff and for the exit. JSON collections diff badly: everything is nested, so a one-field change drags brace and indentation churn along with it, and a reviewer cannot tell a URL edit from a reformat. A <code>.http</code> file has one thing per line, so a diff shows exactly what changed.</p>
+    <p>The exit matters just as much. <code>.http</code> is not our invention — it is what REST Client, httpYac and the JetBrains HTTP Client already read. A collection written by Mándalo is useful to a teammate who never installs Mándalo, and if you stop using it, your requests are not trapped in an export you have to convert.</p>
+    <p>Mándalo also writes files deterministically — same request, same bytes — and writes atomically, so an interrupted save never leaves a half-written request behind.</p>
+
+    <h2>What a diff looks like</h2>
+    <figure>
+      <figcaption>git diff — collections/payments-api/create-charge.http</figcaption>
+      <pre class="diff"><code><span class="d-ctx">  ### Create charge</span>
+<span class="d-del">- POST {{baseUrl}}/v1/charges</span>
+<span class="d-add">+ POST {{baseUrl}}/v2/charges</span>
+<span class="d-ctx">  Content-Type: application/json</span>
+<span class="d-add">+ X-Api-Version: 2026-08-01</span>
+<span class="d-ctx">  </span>
+<span class="d-ctx">  {</span>
+<span class="d-ctx">    "amount": 2400,</span>
+<span class="d-ctx">    "currency": "eur"</span>
+<span class="d-ctx">  }</span></code></pre>
+    </figure>
+    <p>A version bump and a new header. No wrapper format and no exported blob — that is a diff a reviewer can approve from a phone.</p>
+
+    <h2>The review workflow</h2>
+    <ol>
+      <li>Keep the workspace inside the repo that owns the API — either at the root or in something like <code>api/</code>.</li>
+      <li>Edit requests in the app. Every save is a file write in your working tree; no sync, no publish button.</li>
+      <li>Commit the changed request files alongside the handler code that changed. The endpoint change and its collection entry land in the same commit.</li>
+      <li>Open the pull request. Reviewers see the API surface change as text, next to the implementation.</li>
+      <li>Teammates <code>git pull</code>. That is the entire sync protocol — there is no server to be out of date with.</li>
+    </ol>
+    <p>Branching works because files work: a collection on a feature branch is exactly the requests that branch's API has. Merge conflicts are per-file and per-line, and you resolve them in the editor you already use.</p>
+
+    <h2>Keeping secrets out of the repo</h2>
+    <div class="callout callout-warn">
+      <span class="callout-label">Read this before you commit</span>
+      <p>Environment files are plain text, so anything you type into a plain variable is committed as you typed it. Mark a variable as a <strong>secret</strong> and Mándalo stores the value in your OS keychain instead — the environment file records that the variable exists and nothing else. Check the file before your first commit; that is the cheapest habit on this page.</p>
+    </div>
+    <p>The workable pattern is to commit the shape of an environment, not its secrets:</p>
+    <ul>
+      <li>Commit environments that hold only non-secret values — base URLs, API versions, tenant ids, test account identifiers. These are the ones your teammates actually need.</li>
+      <li>Leave secret variables <strong>absent</strong> from the committed file. Do not commit an empty placeholder either; an unresolved variable fails loud, which is the behaviour you want.</li>
+      <li>Keep secret-bearing environments out of git entirely with a <code>.gitignore</code> rule, and hand teammates the variable names rather than the values.</li>
+    </ul>
+<pre><code># .gitignore
+environments/local.toml
+environments/*.secret.toml</code></pre>
+    <p>For automated runs there is a better answer than a file: the runner resolves any variable that the environment does not define from the process environment, under the name <code>MANDALO_SECRET__&lt;ENV&gt;__&lt;KEY&gt;</code>. An environment named <code>staging</code> using <code>{{token}}</code> reads <code>MANDALO_SECRET__STAGING__TOKEN</code>. That keeps the value in your CI secret store and out of every file. See <a href="/docs/cli-and-ci">CLI &amp; CI</a>. The command line runner works today, but it is not in the desktop installer yet — you build it from the repo.</p>
+
+    <h2>Sharing outside git</h2>
+    <p>When the other side does not have your repo, export the workspace as a single self-contained bundle file — collections, folder structure, requests and environments in one JSON document — and let them import it. It is the same importer the <a href="/docs/importing-from-postman">Postman import</a> uses, and it reports exactly what it wrote.</p>
+    <nav class="docs-pager" aria-label="Pagination">
+      <a class="pager-link prev" href="/docs/getting-started"><span class="pager-dir">Previous</span><span class="pager-title">Getting started</span></a>
+      <a class="pager-link next" href="/docs/environments-and-variables"><span class="pager-dir">Next</span><span class="pager-title">Environments & variables</span></a>
+    </nav>
+  </article>
+</div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <span class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
+      Mándalo
+    </span>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
+  </div>
+</footer>
+
+</body>
+</html>

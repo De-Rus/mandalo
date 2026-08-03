@@ -1,0 +1,303 @@
+{
+  "name": "mandalo",
+  "displayName": "Mándalo",
+  "description": "Git-native API client in your editor — send HTTP/GraphQL/gRPC requests stored as plain .http and .grpc files in your repo, and run them as native tests.",
+  "version": "0.1.0",
+  "publisher": "de-rus",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/De-Rus/mandalo"
+  },
+  "homepage": "https://mandalo.dev",
+  "bugs": {
+    "url": "https://github.com/De-Rus/mandalo/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "api",
+    "http",
+    "graphql",
+    "grpc",
+    "rest client"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/mandalo.toml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "mandalo-http",
+        "aliases": [
+          "Mándalo HTTP"
+        ],
+        "extensions": [
+          ".http",
+          ".rest"
+        ],
+        "configuration": "./syntaxes/language-configuration.json"
+      },
+      {
+        "id": "mandalo-grpc",
+        "aliases": [
+          "Mándalo gRPC"
+        ],
+        "extensions": [
+          ".grpc"
+        ],
+        "configuration": "./syntaxes/language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mandalo-http",
+        "scopeName": "source.mandalo-http",
+        "path": "./syntaxes/mandalo-http.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.javascript": "javascript"
+        }
+      },
+      {
+        "language": "mandalo-grpc",
+        "scopeName": "source.mandalo-grpc",
+        "path": "./syntaxes/mandalo-grpc.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.javascript": "javascript"
+        }
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mandalo",
+          "title": "Mándalo",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "mandalo": [
+        {
+          "id": "mandalo.requests",
+          "name": "Collections",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "mandalo.requests",
+        "contents": "No Mándalo workspace found here.\nA workspace is any folder holding a `mandalo.toml`.\n[New Collection](command:mandalo.newCollection)\n[Learn more](https://mandalo.dev)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mandalo.sendRequest",
+        "title": "Send Request",
+        "category": "Mándalo",
+        "icon": "$(play)"
+      },
+      {
+        "command": "mandalo.sendRequestWithEnv",
+        "title": "Send Request with Environment…",
+        "category": "Mándalo"
+      },
+      {
+        "command": "mandalo.runRequestTests",
+        "title": "Run Request Tests",
+        "category": "Mándalo",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "mandalo.runCollection",
+        "title": "Run Collection",
+        "category": "Mándalo",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "mandalo.runFolder",
+        "title": "Run Folder",
+        "category": "Mándalo",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "mandalo.selectEnvironment",
+        "title": "Select Environment",
+        "category": "Mándalo",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "mandalo.newRequest",
+        "title": "New Request",
+        "category": "Mándalo",
+        "icon": "$(add)"
+      },
+      {
+        "command": "mandalo.newCollection",
+        "title": "New Collection",
+        "category": "Mándalo",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "mandalo.refresh",
+        "title": "Refresh",
+        "category": "Mándalo",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mandalo.openWorkspaceInApp",
+        "title": "Open Workspace in Mándalo",
+        "category": "Mándalo",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "mandalo.showLog",
+        "title": "Show Log",
+        "category": "Mándalo"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mandalo.newRequest",
+          "when": "view == mandalo.requests",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mandalo.newCollection",
+          "when": "view == mandalo.requests",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mandalo.refresh",
+          "when": "view == mandalo.requests",
+          "group": "navigation@3"
+        },
+        {
+          "command": "mandalo.selectEnvironment",
+          "when": "view == mandalo.requests",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "mandalo.sendRequest",
+          "when": "view == mandalo.requests && viewItem == mandalo.request",
+          "group": "inline@1"
+        },
+        {
+          "command": "mandalo.runRequestTests",
+          "when": "view == mandalo.requests && viewItem == mandalo.request",
+          "group": "mandalo@1"
+        },
+        {
+          "command": "mandalo.runCollection",
+          "when": "view == mandalo.requests && viewItem == mandalo.collection",
+          "group": "inline@1"
+        },
+        {
+          "command": "mandalo.runFolder",
+          "when": "view == mandalo.requests && viewItem == mandalo.folder",
+          "group": "inline@1"
+        },
+        {
+          "command": "mandalo.openWorkspaceInApp",
+          "when": "view == mandalo.requests && viewItem == mandalo.workspace",
+          "group": "inline@1"
+        },
+        {
+          "command": "mandalo.newRequest",
+          "when": "view == mandalo.requests && viewItem =~ /mandalo.(collection|folder)/",
+          "group": "mandalo@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mandalo.runFolder",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Mándalo",
+      "properties": {
+        "mandalo.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `mandalo` CLI binary. Leave empty to use the binary bundled with this extension, falling back to `mandalo` on `PATH`. Setting it always wins."
+        },
+        "mandalo.executionMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "in-process",
+            "cli"
+          ],
+          "enumDescriptions": [
+            "Send HTTP and GraphQL from the editor process; use the CLI for gRPC and for anything the editor cannot do faithfully.",
+            "Always send from the editor process. gRPC requests fail rather than shelling out.",
+            "Always shell out to the mandalo CLI."
+          ],
+          "default": "auto",
+          "markdownDescription": "Which engine runs a request. `auto` needs no CLI installed for HTTP and GraphQL. The chosen engine is logged to the Mándalo output channel for every request."
+        },
+        "mandalo.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate request TOML files (unknown kind, capture grammar, test operators, unresolved {{vars}})."
+        },
+        "mandalo.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "How long to wait for a CLI invocation before giving up, in milliseconds."
+        },
+        "mandalo.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Send / Run CodeLens actions above every request in a .http, .rest or .grpc file."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node scripts/gen-prelude.mjs && node scripts/fetch-cli.mjs && node esbuild.mjs --production && tsc --noEmit",
+    "gen:prelude": "node scripts/gen-prelude.mjs",
+    "bundle:cli": "node scripts/fetch-cli.mjs",
+    "compile": "node scripts/gen-prelude.mjs && node esbuild.mjs && tsc --noEmit",
+    "watch": "node esbuild.mjs --watch",
+    "compile:tests": "node esbuild.mjs --tests",
+    "test:unit": "vitest run",
+    "test:integration": "npm run compile:tests && vscode-test",
+    "test": "npm run test:unit && npm run test:integration",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "smol-toml": "^1.3.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@vscode/vsce-sign",
+      "keytar"
+    ]
+  }
+}

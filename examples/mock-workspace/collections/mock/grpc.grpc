@@ -1,0 +1,24 @@
+### gRPC Say
+{{grpcUrl}}/mock.v1.Mock/Say
+proto: protos/mock.proto
+x-trace: mandalo
+
+{"text": "hola", "count": 21}
+
+> {%
+pm.test("the server doubled the count", function () {
+  pm.expect(pm.response.json().doubled).to.equal(42);
+});
+%}
+
+### gRPC GetUser
+{{grpcUrl}}/mock.v1.Mock/GetUser
+proto: protos/mock.proto
+
+{"id": "u-1", "tags": ["a", "b"], "tier": "TIER_PRO"}
+
+> {%
+pm.test("the nested message arrived", function () {
+  pm.expect(pm.response.json().user.address.city).to.equal("Madrid");
+});
+%}

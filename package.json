@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:web": "node src/lib/web/gen-worker.mjs && vite build --mode web",
+    "build:vscode": "vite build --mode vscode",
+    "dev:web": "node src/lib/web/gen-worker.mjs && vite --mode web",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run"

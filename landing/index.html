@@ -3,169 +3,426 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mándalo — the fast, offline, git-native API client</title>
-<meta name="description" content="Mándalo is a fast, offline, git-native API client for HTTP, GraphQL and gRPC. Collections are plain TOML files in your git repo — diff them, PR them, review them. No account, no telemetry, no cloud.">
-<meta property="og:title" content="Mándalo — ¡Mándalo! Send it.">
-<meta property="og:description" content="The fast, offline, git-native API client. HTTP, GraphQL and gRPC in one workbench. Collections are TOML in git — no account, no telemetry, no cloud.">
+<title>Mándalo — the offline, git-native API client</title>
+<meta name="description" content="A fast API client for HTTP, GraphQL and gRPC. Collections are plain .http files in your git repo. No account, no cloud, no telemetry — runs in the browser.">
+<link rel="canonical" href="https://mandalo.dev/">
+<meta property="og:title" content="Mándalo — the offline, git-native API client">
+<meta property="og:description" content="HTTP, GraphQL and gRPC in one workbench. Collections are plain .http files in your git repo. No account, no cloud, no telemetry.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mandalo.dev/">
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpath%20fill='%23f6a821'%20d='M3%2016.5%2029%204%2019%2028l-4.4-8.2L3%2016.5zm13.4%202.1%202.9%205.4%206.2-14.9-9.1%209.5zm9.9-11.2L7.9%2015.7l5.9%201.6%2012.5-9.9z'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
+<meta property="og:site_name" content="Mándalo">
+<meta property="og:image" content="https://mandalo.dev/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Mándalo workbench showing a POST request and a 200 response.">
+<meta property="og:locale" content="en">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mándalo — the offline, git-native API client">
+<meta name="twitter:description" content="HTTP, GraphQL and gRPC in one workbench. Collections are plain .http files in your git repo. No account, no cloud, no telemetry.">
+<meta name="twitter:image" content="https://mandalo.dev/media/og.png">
+<meta name="theme-color" content="#0c0d10">
+<link rel="icon" href="/media/mandalo-appicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/media/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<script src="/site.js"></script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Mándalo",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Windows, Linux, Web",
+  "url": "https://mandalo.dev/",
+  "image": "https://mandalo.dev/media/og.png",
+  "screenshot": "https://mandalo.dev/media/app-workbench.png",
+  "description": "A fast, offline, git-native API client for HTTP, GraphQL and gRPC. Collections are plain .http files in your git repo.",
+  "featureList": [
+    "HTTP, GraphQL and gRPC requests",
+    "Collections stored as plain .http and .grpc files, readable by other editors",
+    "Environments with {{variable}} interpolation and OS-keychain secrets",
+    "Pre-request and test scripts with a sandboxed pm.* engine",
+    "Postman collection import and single-file export",
+    "A command line runner with JUnit and JSON reporters, built from the same repo",
+    "A VS Code extension and a browser build"
+  ],
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "EUR"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is Mándalo free?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. There is no paid tier, no seat count and no sign-up. The desktop app, the browser build, the VS Code extension and the command line runner are all free, and the source is on GitHub."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I import my Postman collections?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Import a Postman collection export and Mándalo writes it out as ordinary .http files in folders — requests, headers, auth, bodies and scripts. From then on it is just files in your repo."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Mándalo work offline?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Completely. There is no account, no sync server and no telemetry. The desktop app makes exactly the requests you ask it to make and nothing else, so it works on a plane or behind an air gap against a local API."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Where are my collections stored?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "In a workspace directory you choose — by default ~/Mandalo. A collection is a folder, and each request is a .http file inside it (.grpc for gRPC), so you can keep that directory in a git repo and review API changes in a pull request. Environments are TOML. Secrets are not written to any of those files; they live in your OS keychain, or in environment variables in CI."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Mándalo work in the browser?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes, at mandalo.dev/app — the same code as the desktop app, running client-side. Because a browser tab has to obey CORS, it can only call APIs that allow your origin; anything else needs the desktop app. gRPC works in the browser too, over gRPC-Web. In Chromium-based browsers you can open a real folder and the browser build writes the same .http files."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is there a CLI for CI?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Install it with curl -fsSL https://mandalo.dev/install.sh | sh, or download the archive for your platform from the GitHub release. The mandalo binary runs the same engine as the app: mandalo run <collection> --env staging --reporter junit produces a JUnit file any CI system can read, and it exits non-zero when an assertion fails. It also has JSON output, secret redaction and mandalo scan, a credential guard for staged files."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Mándalo support gRPC?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes — in the desktop app, the CLI and the browser. Point a request at your .proto files and Mándalo compiles them at runtime, with no protoc in your path. The desktop app and the CLI speak native gRPC. The browser speaks gRPC-Web, which needs the server to run a gRPC-Web layer such as tonic-web, Envoy or Connect and to allow the right CORS headers; native gRPC needs HTTP/2 trailers that no browser exposes to a page. Streaming is not supported anywhere yet — calls are unary only, and streaming methods are rejected with a clear error rather than failing quietly."
+      }
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to content</a>
+
 <header class="site-header">
   <div class="wrap header-inner">
-    <a class="brand" href="/">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M3 16.5 29 4 19 28l-4.4-8.2L3 16.5zm13.4 2.1 2.9 5.4 6.2-14.9-9.1 9.5zm9.9-11.2L7.9 15.7l5.9 1.6 12.5-9.9z"/></svg>
+    <a class="brand" href="/" aria-label="Mándalo — home">
+      <svg class="brand-mark" viewBox="0.5 21.5 59 30" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
       Mándalo
     </a>
-    <nav class="header-nav">
-      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
-      <a href="https://github.com/De-Rus/mandalo/releases/latest" class="btn btn-small">Download</a>
+    <nav class="header-nav" aria-label="Main">
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/postman-alternative" class="nav-link nav-wide">vs Postman</a>
+      <a href="/changelog" class="nav-link nav-wide">Changelog</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link nav-wide">GitHub</a>
+      <a href="/app" class="btn btn-small">Try it</a>
     </nav>
   </div>
 </header>
 
-<main>
+<main id="main">
 
 <section class="hero">
   <div class="wrap">
     <p class="hero-kicker">¡Mándalo! <span class="hero-kicker-sep">·</span> <em>send it.</em></p>
     <h1>The fast, offline,<br>git&#8209;native API client</h1>
-    <p class="hero-sub">HTTP, GraphQL and gRPC in one desktop workbench. Your collections are plain TOML files in your git repo — diff them, review them, ship them. No account. No telemetry. No cloud.</p>
+    <p class="hero-sub">HTTP, GraphQL and gRPC in one workbench. A collection is a folder of plain <code>.http</code> files in your own repo — diff them, review them, ship them. No account, no cloud, no telemetry.</p>
     <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/De-Rus/mandalo/releases/latest">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a1 1 0 0 1 1 1v6.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L7 8.6V2a1 1 0 0 1 1-1zM2 13a1 1 0 0 1 1 1h10a1 1 0 1 1 0 2H3a2 2 0 0 1-2-2 1 1 0 0 1 1-1z"/></svg>
+      <a class="btn btn-primary" href="/app">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM2.5 8a5.5 5.5 0 0 1 .2-1.5h2.2a13 13 0 0 0 0 3H2.7A5.5 5.5 0 0 1 2.5 8zm3.9 1.5h3.2a11 11 0 0 1 0-3H6.4a11 11 0 0 0 0 3zm4.7 0h2.2a5.5 5.5 0 0 0 0-3h-2.2a13 13 0 0 1 0 3zM12.8 5h-1.9a8 8 0 0 0-.8-2.1A5.5 5.5 0 0 1 12.8 5zM8 2.6c.5 0 1.1.9 1.5 2.4h-3C6.9 3.5 7.5 2.6 8 2.6zM5.1 2.9A8 8 0 0 0 4.3 5H2.4a5.5 5.5 0 0 1 2.7-2.1zM2.4 11h1.9a8 8 0 0 0 .8 2.1A5.5 5.5 0 0 1 2.4 11zM8 13.4c-.5 0-1.1-.9-1.5-2.4h3c-.4 1.5-1 2.4-1.5 2.4zm2.9-.3a8 8 0 0 0 .8-2.1h1.9a5.5 5.5 0 0 1-2.7 2.1z"/></svg>
+        Try it in your browser
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/De-Rus/mandalo/releases/latest">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 1a1 1 0 0 1 1 1v6.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L7 8.6V2a1 1 0 0 1 1-1zM2 13a1 1 0 0 1 1 1h10a1 1 0 1 1 0 2H3a2 2 0 0 1-2-2 1 1 0 0 1 1-1z"/></svg>
         Download for desktop
       </a>
-      <a class="btn btn-ghost" href="https://github.com/De-Rus/mandalo">View on GitHub</a>
     </div>
-    <p class="hero-meta">macOS · Windows · Linux &nbsp;—&nbsp; free &amp; open source</p>
+    <p class="hero-meta">No sign-up · macOS, Windows &amp; Linux · free</p>
   </div>
 </section>
 
-<section class="showcase" aria-label="Screenshot of the Mándalo workbench">
+<section class="showcase">
   <div class="wrap">
-    <div class="app-window" role="img" aria-label="The Mándalo workbench: a request sidebar, a URL bar with an environment variable chip, and a JSON response with status 200">
-      <div class="app-titlebar">
-        <span class="tl-dot tl-red"></span><span class="tl-dot tl-yellow"></span><span class="tl-dot tl-green"></span>
-        <span class="app-title">payments-api.toml — Mándalo</span>
-        <span class="env-pill">env: <strong>staging</strong></span>
-      </div>
-      <div class="app-body">
-        <aside class="app-sidebar">
-          <div class="sidebar-group">payments-api</div>
-          <div class="req"><span class="method m-get">GET</span> List charges</div>
-          <div class="req req-active"><span class="method m-post">POST</span> Create charge</div>
-          <div class="req"><span class="method m-get">GET</span> Charge by id</div>
-          <div class="req"><span class="method m-gql">GQL</span> Customer graph</div>
-          <div class="req"><span class="method m-grpc">gRPC</span> Ledger.Stream</div>
-          <div class="req"><span class="method m-del">DEL</span> Void charge</div>
-        </aside>
-        <div class="app-main">
-          <div class="url-row">
-            <span class="method-select m-post">POST</span>
-            <span class="url-bar"><span class="var-chip">{{baseUrl}}</span>/v1/charges</span>
-            <span class="send-btn">Send</span>
-          </div>
-          <div class="resp-meta">
-            <span class="status-chip">200 OK</span>
-            <span class="resp-stat">38 ms</span>
-            <span class="resp-stat">412 B</span>
-            <span class="resp-tab">Body</span>
-            <span class="resp-tab resp-tab-dim">Headers</span>
-          </div>
-          <pre class="resp-body"><code>{
-  <span class="j-key">"id"</span>: <span class="j-str">"ch_9f2ma41"</span>,
-  <span class="j-key">"status"</span>: <span class="j-str">"succeeded"</span>,
-  <span class="j-key">"amount"</span>: <span class="j-num">2400</span>,
-  <span class="j-key">"currency"</span>: <span class="j-str">"eur"</span>,
-  <span class="j-key">"captured"</span>: <span class="j-bool">true</span>,
-  <span class="j-key">"customer"</span>: {
-    <span class="j-key">"id"</span>: <span class="j-str">"cus_mx88a"</span>,
-    <span class="j-key">"livemode"</span>: <span class="j-bool">false</span>
-  }
-}</code></pre>
+    <figure class="shot shot-hero reveal">
+      <div class="shot-frame">
+        <div class="shot-bar" aria-hidden="true">
+          <span class="tl-dot tl-red"></span><span class="tl-dot tl-yellow"></span><span class="tl-dot tl-green"></span>
+          <span class="shot-title">Mock API — Mándalo</span>
         </div>
+        <picture>
+          <source media="(max-width: 700px)" srcset="/media/app-workbench-detail.png" width="1200" height="522">
+          <img src="/media/app-workbench.png" width="1800" height="950" alt="The Mándalo workbench: a collection tree on the left, a POST request to {{baseUrl}}/auth/login with a JSON body, and a 200 response returning a bearer token." fetchpriority="high" decoding="async">
+        </picture>
       </div>
+      <figcaption>A real request against a real API — status, timing and size are what came back over the wire.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="band" id="try">
+  <div class="wrap">
+    <div class="band-inner reveal">
+      <div class="band-copy">
+        <h2>The browser build is the app, not a demo</h2>
+        <p><a href="/app">mandalo.dev/app</a> runs the same code as the desktop release, entirely client-side. Nothing you type is uploaded, because there is nowhere to upload it to.</p>
+      </div>
+      <ul class="band-facts">
+        <li><strong>It calls real APIs.</strong> Anything that allows your origin over CORS works exactly as it does on the desktop.</li>
+        <li><strong>APIs that don't allow CORS need the desktop app,</strong> which does the networking in Rust and is not bound by browser rules.</li>
+        <li><strong>gRPC works here too, over gRPC-Web</strong> — the same Rust proto compiler, running as WebAssembly in the tab. It needs your service to sit behind a gRPC-Web layer; native gRPC needs HTTP/2 trailers no browser hands to a page, so that one stays on the desktop.</li>
+        <li><strong>Your files stay yours.</strong> Collections live in the tab by default; in Chromium browsers you can open a real folder and it writes the same <code>.http</code> files.</li>
+      </ul>
     </div>
   </div>
 </section>
 
-<section class="features">
+<section class="pillars">
   <div class="wrap">
-    <h2>Everything you need. Nothing phoning home.</h2>
-    <div class="feature-grid">
-      <div class="feature">
-        <h3>Offline &amp; no account</h3>
-        <p>Mándalo works entirely on your machine. There is no sign-up, no sync server, and no telemetry — the app makes exactly the requests you tell it to, and nothing else.</p>
-      </div>
-      <div class="feature">
+    <h2 class="section-title">Everything you need. Nothing phoning home.</h2>
+    <div class="pillar-grid">
+      <article class="pillar reveal">
+        <h3>Offline, and no account</h3>
+        <p>There is no sign-in wall, no sync server and no telemetry. Mándalo makes exactly the requests you tell it to make — which is a claim you can verify, because the source is on GitHub.</p>
+      </article>
+      <article class="pillar reveal">
         <h3>Git-native collections</h3>
-        <p>Collections are plain TOML files in your repo. They diff cleanly, merge sanely, and go through the same pull-request review as the code they test.</p>
-      </div>
-      <div class="feature">
-        <h3>HTTP, GraphQL &amp; gRPC</h3>
-        <p>One workbench for all three. REST endpoints, GraphQL queries with variables, and gRPC calls from your proto files — side by side in the same collection.</p>
-      </div>
-      <div class="feature">
-        <h3>Environments with <code>{{variables}}</code></h3>
-        <p>Define <code>staging</code>, <code>prod</code>, or anything else, and interpolate <code>{{baseUrl}}</code>, <code>{{token}}</code> and friends anywhere — URLs, headers, bodies.</p>
-      </div>
-      <div class="feature">
-        <h3>Import &amp; export</h3>
-        <p>Bring your Postman collections over in one step. Export any collection as a single self-contained file to hand to anyone.</p>
-      </div>
-      <div class="feature">
-        <h3>Fast, honestly</h3>
-        <p>A Rust core inside a Tauri 2 shell: instant startup, a tiny footprint, and a UI that never makes you wait for a spinner to send a request.</p>
-      </div>
+        <p>A collection is a folder; a request is a <code>.http</code> file. That is the format VS Code&rsquo;s REST Client, httpYac and the JetBrains HTTP Client already read — so your collection stays useful even to people who never install Mándalo.</p>
+      </article>
+      <article class="pillar reveal">
+        <h3>One workbench, three protocols</h3>
+        <p>REST endpoints, GraphQL queries with variables, and gRPC calls compiled from your <code>.proto</code> files at runtime — side by side in the same collection.</p>
+      </article>
     </div>
+  </div>
+</section>
+
+<section class="rows">
+  <div class="wrap">
+
+    <div class="row reveal">
+      <div class="row-copy">
+        <p class="eyebrow">Scripts</p>
+        <h2>A <code>pm.*</code> sandbox, not a new language</h2>
+        <p>Pre-request and test scripts run in a sandboxed JavaScript engine with the Postman API you already know — <code>pm.environment</code>, <code>pm.request</code>, <code>pm.response</code>, <code>pm.test</code> and <code>pm.expect</code>. Anything that isn't implemented fails loudly and tells you what to use instead, so a script never quietly does the wrong thing.</p>
+        <p><a class="arrow-link" href="/docs/scripts-and-tests">Read the scripting docs <span aria-hidden="true">→</span></a></p>
+      </div>
+      <figure class="shot reveal">
+        <div class="shot-frame">
+          <img src="/media/app-scripts.png" width="1600" height="844" loading="lazy" decoding="async" alt="The Pre-request Script tab holding eight lines of JavaScript that set an environment variable and add an x-request-id header, with the two logged values shown in the response Console tab.">
+        </div>
+      </figure>
+    </div>
+
+    <div class="row row-flip reveal">
+      <div class="row-copy">
+        <p class="eyebrow">Tests</p>
+        <h2>Tests you write once and run everywhere</h2>
+        <p>Assert with <code>pm.test</code> and <code>pm.expect</code> against the response you just got, capture a token into the environment for the next request, and read the pass and fail rows in the response pane. Snippets are one click away when you would rather not remember the incantation.</p>
+        <p>The same file, the same engine and the same results run under <code>mandalo run</code> in CI — no second suite to keep in sync.</p>
+        <p><a class="arrow-link" href="/docs/cli-and-ci">Run them in CI <span aria-hidden="true">→</span></a></p>
+      </div>
+      <figure class="shot reveal">
+        <div class="shot-frame">
+          <img src="/media/app-tests.png" width="1600" height="844" loading="lazy" decoding="async" alt="A Tests tab holding three pm.test blocks that check the status, capture a bearer token and assert the user's name, with all three reported as passed in the response pane.">
+        </div>
+      </figure>
+    </div>
+
+    <div class="row reveal">
+      <div class="row-copy">
+        <p class="eyebrow">GraphQL</p>
+        <h2>Not just a REST client</h2>
+        <p>GraphQL requests keep the query and its variables in separate editors, and let you assert on the <code>errors</code> array rather than the status alone — because a GraphQL failure is usually a 200 and a status check would wave it through.</p>
+        <p><a class="arrow-link" href="/docs/scripts-and-tests">Asserting on responses <span aria-hidden="true">→</span></a></p>
+      </div>
+      <figure class="shot reveal">
+        <div class="shot-frame">
+          <img src="/media/app-graphql.png" width="1600" height="844" loading="lazy" decoding="async" alt="A GraphQL request with a User query and its variables, returning a 200 response containing the user's id, name and email.">
+        </div>
+      </figure>
+    </div>
+
+    <div class="row row-flip reveal">
+      <div class="row-copy">
+        <p class="eyebrow">gRPC</p>
+        <h2>gRPC, even in a browser tab</h2>
+        <p>Point a request at your <code>.proto</code> files and Mándalo compiles them at runtime — no <code>protoc</code>, no generated stubs, no build step. That compiler is one piece of Rust: the desktop app links it natively and speaks native gRPC; the browser runs the very same code as WebAssembly and speaks gRPC-Web.</p>
+        <p>The screenshot is a real unary call from a browser tab. Native gRPC needs HTTP/2 trailers no browser hands to a page, so for that one the desktop app earns its keep — and streaming is not supported anywhere yet.</p>
+        <p><a class="arrow-link" href="/docs/grpc">What works where <span aria-hidden="true">→</span></a></p>
+      </div>
+      <figure class="shot reveal">
+        <div class="shot-frame">
+          <img src="/media/app-grpc-web.png" width="1600" height="844" loading="lazy" decoding="async" alt="A gRPC request to mock.v1.Mock/Say sent from the browser build over gRPC-Web, returning a decoded protobuf response with text, doubled and trace fields.">
+        </div>
+      </figure>
+    </div>
+
   </div>
 </section>
 
 <section class="collab">
   <div class="wrap">
-    <h2>Collaboration is just git</h2>
-    <p class="collab-sub">No workspaces, no seats, no sync conflicts resolved by a server you don't control. Your team already has the perfect collaboration tool — Mándalo simply stores collections where git can see them.</p>
-    <ol class="steps">
+    <h2 class="section-title">Collaboration is just git</h2>
+    <p class="section-sub">No workspaces to buy, no seats to count, no sync conflict resolved by a server you don't control. Your team already has the perfect collaboration tool — Mándalo simply keeps collections where git can see them.</p>
+    <ol class="steps reveal">
       <li class="step">
         <span class="step-num">1</span>
         <h3>Edit locally</h3>
-        <p>Change a request in the app. Mándalo writes the change straight to the TOML file in your working tree.</p>
+        <p>Change a request in the app. Mándalo writes it straight to the <code>.http</code> file in your working tree.</p>
       </li>
       <li class="step">
         <span class="step-num">2</span>
-        <h3>Commit or PR</h3>
+        <h3>Commit or open a PR</h3>
         <p>The diff is small and human-readable. Review API changes the same way you review code.</p>
       </li>
       <li class="step">
         <span class="step-num">3</span>
         <h3>Teammates pull</h3>
-        <p><code>git pull</code>, and everyone has the updated collection. That's the whole sync protocol.</p>
+        <p><code>git pull</code>, and everyone has the updated collection. That is the whole sync protocol.</p>
       </li>
     </ol>
-    <figure class="diff-figure">
-      <figcaption><code>git diff — collections/payments-api.toml</code></figcaption>
-      <pre class="diff"><code><span class="d-ctx">  [requests.create-charge]</span>
-<span class="d-ctx">  method = "POST"</span>
-<span class="d-del">- url = "{{baseUrl}}/v1/charges"</span>
-<span class="d-add">+ url = "{{baseUrl}}/v2/charges"</span>
-<span class="d-ctx">  </span>
-<span class="d-ctx">  [requests.create-charge.headers]</span>
-<span class="d-add">+ x-api-version = "2026-08-01"</span>
-<span class="d-ctx">  content-type = "application/json"</span></code></pre>
+    <figure class="diff-figure reveal">
+      <figcaption><span class="diff-cmd">git diff</span> collections/payments/create-charge.http</figcaption>
+      <pre class="diff"><code><span class="d-hunk">@@ -1,8 +1,9 @@</span>
+<span class="d-ctx"> ### Create charge</span>
+<span class="d-del">-POST {{baseUrl}}/v1/charges</span>
+<span class="d-add">+POST {{baseUrl}}/v2/charges</span>
+<span class="d-ctx"> Content-Type: application/json</span>
+<span class="d-add">+X-Api-Version: 2026-08-01</span>
+<span class="d-ctx"> </span>
+<span class="d-ctx"> {</span>
+<span class="d-ctx">   "amount": 2400,</span>
+<span class="d-ctx">   "currency": "eur"</span>
+<span class="d-ctx"> }</span></code></pre>
     </figure>
+    <p class="collab-note">A version bump and a new header. No wrapper format, no exported JSON blob — a reviewer can approve that from a phone. <a href="/docs/collections-and-git">See the file format <span aria-hidden="true">→</span></a></p>
+  </div>
+</section>
+
+<section class="cli">
+  <div class="wrap">
+    <div class="cli-inner">
+      <div class="cli-copy reveal">
+        <p class="eyebrow">Command line</p>
+        <h2>The same engine, in your pipeline</h2>
+        <p>The <code>mandalo</code> binary shares the runner with the app, so a suite that passes on your laptop passes the same way in CI. It reports pretty, JSON or JUnit, redacts every resolved secret from its own output, and ships <code>mandalo scan</code> — a credential guard you can point at staged files.</p>
+        <p>One line on macOS and Linux: <code>curl -fsSL https://mandalo.dev/install.sh | sh</code>. It lands in <code>~/.local/bin</code>, never asks for <code>sudo</code>, and checks the download against the release checksums before writing anything. Windows binaries and the plain archives are on the <a href="https://github.com/De-Rus/mandalo/releases/latest">release page</a>.</p>
+        <p>Secrets never live in the collection files: the app reads them from your OS keychain, and CI reads them from <code>MANDALO_SECRET__&lt;ENV&gt;__&lt;KEY&gt;</code>.</p>
+        <p><a class="arrow-link" href="/docs/cli-and-ci">CLI and CI reference <span aria-hidden="true">→</span></a></p>
+      </div>
+      <figure class="terminal reveal">
+        <div class="shot-bar" aria-hidden="true">
+          <span class="tl-dot tl-red"></span><span class="tl-dot tl-yellow"></span><span class="tl-dot tl-green"></span>
+          <span class="shot-title">ci — mandalo</span>
+        </div>
+        <pre class="term"><code><span class="t-prompt">$</span> <span class="t-cmd">mandalo run payments --env staging --reporter junit &gt; results.xml</span>
+<span class="t-ok">  ✓</span> auth/login.http          <span class="t-dim">201  ·  2 passed</span>
+<span class="t-ok">  ✓</span> charges/create.http      <span class="t-dim">201  ·  3 passed</span>
+<span class="t-ok">  ✓</span> charges/get.http         <span class="t-dim">200  ·  2 passed</span>
+<span class="t-fail">  ✗</span> charges/void.http        <span class="t-dim">409  ·  1 failed</span>
+<span class="t-dim">      Status eq 200 — got 409</span>
+
+<span class="t-dim">  4 requests · 7 passed · 1 failed</span>
+<span class="t-prompt">$</span> <span class="t-cmd">echo $?</span>
+1</code></pre>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="capabilities">
+  <div class="wrap">
+    <h2 class="section-title">Shipping today</h2>
+    <div class="cap-grid">
+      <div class="cap reveal"><h3>Auth</h3><p>Bearer, Basic and API key — in a header or a query parameter — applied after variables resolve.</p></div>
+      <div class="cap reveal"><h3>Environments</h3><p><code>{{baseUrl}}</code>, <code>{{token}}</code> and friends interpolate into URLs, headers, bodies and auth. An unresolved variable fails loudly.</p></div>
+      <div class="cap reveal"><h3>Secrets</h3><p>Kept out of the workspace files and stored in your OS keychain, so a collection is always safe to commit.</p></div>
+      <div class="cap reveal"><h3>Workspaces</h3><p>Point Mándalo at more than one directory and switch between them — one per repo, if that is how you work.</p></div>
+      <div class="cap reveal"><h3>Postman import</h3><p>Bring a Postman export over in one step and get ordinary <code>.http</code> files out the other side.</p></div>
+      <div class="cap reveal"><h3>Single-file export</h3><p>Hand a whole collection to someone as one self-contained file.</p></div>
+      <div class="cap reveal"><h3>VS Code extension</h3><p>The same workbench inside the editor, next to the code the API belongs to.</p></div>
+      <div class="cap reveal"><h3>Browser build</h3><p>The full app at <a href="/app">/app</a>, client-side, with nothing to install.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="compare">
+  <div class="wrap">
+    <div class="compare-card reveal">
+      <div>
+        <h2>Coming from Postman?</h2>
+        <p>Mándalo is smaller on purpose. It has no cloud sync, no team workspace UI, no mock servers and no monitors — and it does not want an account before it will send a request. We wrote the honest version of that trade-off down, including the parts where Postman wins.</p>
+      </div>
+      <a class="btn btn-secondary" href="/postman-alternative">Read the comparison</a>
+    </div>
+  </div>
+</section>
+
+<section class="faq">
+  <div class="wrap">
+    <h2 class="section-title">Questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>Is Mándalo free?</summary>
+        <p>Yes. There is no paid tier, no seat count and no sign-up. The desktop app, the browser build, the VS Code extension and the command line runner are all free, and the source is on <a href="https://github.com/De-Rus/mandalo">GitHub</a>.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Can I import my Postman collections?</summary>
+        <p>Yes. Import a Postman collection export and Mándalo writes it out as ordinary <code>.http</code> files in folders — requests, headers, auth, bodies and scripts. From then on it is just files in your repo. <a href="/docs/importing-from-postman">What survives the trip →</a></p>
+      </details>
+      <details class="faq-item">
+        <summary>Does it work offline?</summary>
+        <p>Completely. There is no account, no sync server and no telemetry, so the desktop app works on a plane or behind an air gap against a local API. The only network traffic is the request you pressed Send on.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Where are my collections stored?</summary>
+        <p>In a workspace directory you choose — <code>~/Mandalo</code> by default. A collection is a folder, and each request is a <code>.http</code> file inside it (<code>.grpc</code> for gRPC). Environments are TOML. Secrets are not written to any of them; they live in your OS keychain, or in environment variables in CI. <a href="/docs/collections-and-git">The file format →</a></p>
+      </details>
+      <details class="faq-item">
+        <summary>Does it work in the browser?</summary>
+        <p>Yes, at <a href="/app">mandalo.dev/app</a> — the same code as the desktop app, running client-side. A browser tab has to obey CORS, so it can call any API that allows your origin; anything else needs the desktop app. gRPC works in the browser too, over gRPC-Web. In Chromium-based browsers you can open a real folder and the browser build writes the same <code>.http</code> files.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Is there a CLI for CI?</summary>
+        <p>Yes, and it installs in one line: <code>curl -fsSL https://mandalo.dev/install.sh | sh</code>. <code>mandalo run &lt;collection&gt; --env staging --reporter junit</code> produces a JUnit file any CI system reads, and exits non-zero when an assertion fails. There is JSON output for everything, secret redaction throughout, and <code>mandalo scan --staged</code> as a credential guard. <a href="/docs/cli-and-ci">CLI reference →</a></p>
+      </details>
+      <details class="faq-item">
+        <summary>Does it support gRPC?</summary>
+        <p>Yes — in the desktop app, the CLI <em>and</em> the browser. Point a request at your <code>.proto</code> files and Mándalo compiles them at runtime, with no <code>protoc</code> in your path. Desktop and CLI speak native gRPC; the browser speaks gRPC-Web, which needs a gRPC-Web layer in front of your server. Streaming is not supported anywhere yet — unary only, and streaming methods are rejected with a clear error. <a href="/docs/grpc">The platform matrix →</a></p>
+      </details>
+      <details class="faq-item">
+        <summary>What is <em>not</em> built yet?</summary>
+        <p>No cloud sync, no team workspace UI, no mock servers, no monitoring service and no one-click GitHub sync — collaboration goes through git itself today. gRPC streaming and server reflection, request history and a cookie jar are also still open. The <a href="/postman-alternative">comparison page</a> keeps the full list honest.</p>
+      </details>
+    </div>
   </div>
 </section>
 
 <section class="cta">
   <div class="wrap">
+    <img class="cta-icon" src="/media/mandalo-appicon-256.png" width="88" height="88" loading="lazy" decoding="async" alt="">
     <h2>¡Mándalo!</h2>
-    <p>Grab the latest release and send your first request in under a minute.</p>
+    <p>Open it in a tab, or put it on your machine. Either way you are one request away.</p>
     <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/De-Rus/mandalo/releases/latest">Download the latest release</a>
+      <a class="btn btn-primary" href="/app">Try it in your browser</a>
+      <a class="btn btn-secondary" href="https://github.com/De-Rus/mandalo/releases/latest">Download for desktop</a>
     </div>
   </div>
 </section>
@@ -175,11 +432,17 @@
 <footer class="site-footer">
   <div class="wrap footer-inner">
     <span class="footer-brand">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M3 16.5 29 4 19 28l-4.4-8.2L3 16.5zm13.4 2.1 2.9 5.4 6.2-14.9-9.1 9.5zm9.9-11.2L7.9 15.7l5.9 1.6 12.5-9.9z"/></svg>
+      <svg class="brand-mark" viewBox="0.5 21.5 59 30" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13.71 50V39.51Q13.71 37.99 13.33 37.31Q12.95 36.62 12.07 36.62Q11.43 36.62 10.84 37.23Q10.25 37.84 10.25 39.4V50H1.47V30.01H10.02V32.22H10.1Q10.48 31.72 11.03 31.25Q11.58 30.77 12.28 30.37Q12.98 29.97 13.86 29.73Q14.73 29.48 15.76 29.48Q17.73 29.48 19.18 30.18Q20.62 30.89 21.46 32.37Q22.45 31.15 23.89 30.32Q25.33 29.48 27.54 29.48Q29.67 29.48 31.05 30.32Q32.44 31.15 33.26 32.41Q34.07 33.66 34.4 35.12Q34.72 36.59 34.72 37.84V50H25.94V39.36Q25.94 37.73 25.54 37.17Q25.14 36.62 24.31 36.62Q23.55 36.62 23.02 37.33Q22.48 38.03 22.48 39.4V50Z"/><path fill="#F6A821" d="M48.44 22.98 56.47 25.28 58.78 50.25 50.57 47.89 50.34 44.26 43.2 42.21 41.15 45.19 33.15 42.9ZM50.1 31.93 46.67 36.96 50.31 38Z"/></svg>
       Mándalo
     </span>
-    <span class="footer-note">Made with Rust + Tauri</span>
-    <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="/app" class="nav-link">Web app</a>
+      <a href="/docs/" class="nav-link">Docs</a>
+      <a href="/changelog" class="nav-link">Changelog</a>
+      <a href="/postman-alternative" class="nav-link">vs Postman</a>
+      <a href="https://github.com/De-Rus/mandalo" class="nav-link">GitHub</a>
+    </nav>
+    <span class="footer-note">Built with Rust + Tauri</span>
   </div>
 </footer>
 

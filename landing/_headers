@@ -1,8 +1,82 @@
+# Cloudflare Pages sends every matching rule's headers. Two Content-Security-Policy
+# headers on one response are intersected by the browser, so a `/*` CSP would
+# silently override the app's own — blocking every request the API client makes.
+# CSP is therefore never set on `/*`; each area sets exactly one.
 /*
-  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
+
+# Marketing and docs: no connect-src at all, so these pages cannot talk to
+# anything, and script-src is 'self' only — one same-origin file for scroll
+# reveals, never inline and never third party.
+/
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/index.html
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/postman-alternative
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/postman-alternative.html
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/changelog
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/changelog.html
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/docs/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+/media/*
+  Content-Security-Policy: default-src 'none'
+  Cache-Control: public, max-age=604800
+
+# `curl -fsSL https://mandalo.dev/install.sh | sh`. Pages would otherwise guess a
+# content type from the extension; text/plain is what makes it readable in a
+# browser before anyone pipes it into a shell. It is a shell script, never a
+# document, so nothing may be loaded from it.
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Content-Security-Policy: default-src 'none'
+  Cache-Control: public, max-age=300
+
+# The app is an API client, so its whole job is to call hosts the user names —
+# connect-src has to be open or the product does not work. Everything else stays
+# locked down: no inline script, no third-party script, no framing, and the app
+# ships zero external assets, so nothing loads on boot that we did not build.
+#
+# The entry documents are enumerated instead of using /app/* on purpose: a
+# wildcard would ALSO match the worker below, and two Content-Security-Policy
+# headers on one response are intersected by the browser — which would strip the
+# worker's 'unsafe-eval' and break the script engine.
+#
+# 'wasm-unsafe-eval' is what lets the page instantiate the proto compiler; it
+# permits WebAssembly without permitting eval() of JavaScript.
+#
+# Asset filenames are content-hashed, so a stale index.html points at a hash that
+# no longer exists: Pages answers with the HTML 404 page and the browser rejects
+# it as a module script. The entry documents must always revalidate.
+/app/
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self'; connect-src https: http: ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Cache-Control: no-cache
+
+/app/index.html
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self'; connect-src https: http: ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Cache-Control: no-cache
+
+/app/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# A worker takes its CSP from its own response, not the page's. This one has no
+# DOM and no network — fetch/XHR/WebSocket are trapped before any user code runs.
+# It needs eval only to run the pm.* prelude and the user's own script.
+/app/script-worker.js
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-eval'
+  Cache-Control: no-cache

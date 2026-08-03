@@ -1,0 +1,27 @@
+[package]
+name = "mandalo-cli"
+description = "Mándalo command line — run API suites in a terminal or in CI"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mandalo"
+path = "src/main.rs"
+
+[dependencies]
+mandalo-core = { workspace = true, features = ["keychain"] }
+clap = { version = "4", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+mandalo-testkit.workspace = true
+assert_cmd = "2"
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+predicates = "3"
+tempfile.workspace = true

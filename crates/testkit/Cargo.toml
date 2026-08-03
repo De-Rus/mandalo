@@ -1,0 +1,37 @@
+[package]
+name = "mandalo-testkit"
+description = "Mándalo test kit — a local mock API (HTTP · GraphQL · gRPC) for integration tests and manual exploration"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "mandalo_testkit"
+
+[[bin]]
+name = "mandalo-mock"
+path = "src/bin/mandalo-mock.rs"
+
+[dependencies]
+mandalo-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+axum = { version = "0.7", features = ["multipart", "ws"] }
+rumqttd = { version = "0.20", default-features = false, features = ["websocket"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "0.12", features = ["tls"] }
+tonic-web = "0.12"
+tower-http = { version = "0.6", features = ["cors"] }
+prost-reflect = { version = "0.14", features = ["serde"] }
+http = "1"
+bytes = "1"
+flate2 = "1"
+brotli = "8"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

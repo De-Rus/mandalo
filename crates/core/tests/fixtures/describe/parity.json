@@ -1,0 +1,163 @@
+{
+  "name": "fix.v1.Everything",
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "count",
+      "type": "number",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "ratio",
+      "type": "number",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "live",
+      "type": "bool",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "blob",
+      "type": "bytes",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "tier",
+      "type": "enum",
+      "repeated": false,
+      "message": null,
+      "enumValues": [
+        "TIER_UNSPECIFIED",
+        "TIER_FREE",
+        "TIER_PRO"
+      ]
+    },
+    {
+      "name": "tags",
+      "type": "string",
+      "repeated": true,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "meta",
+      "type": "message",
+      "repeated": false,
+      "message": {
+        "name": "fix.v1.Meta",
+        "fields": [
+          {
+            "name": "trace",
+            "type": "string",
+            "repeated": false,
+            "message": null,
+            "enumValues": []
+          },
+          {
+            "name": "hops",
+            "type": "string",
+            "repeated": true,
+            "message": null,
+            "enumValues": []
+          }
+        ]
+      },
+      "enumValues": []
+    },
+    {
+      "name": "tree",
+      "type": "message",
+      "repeated": false,
+      "message": {
+        "name": "fix.v1.Node",
+        "fields": [
+          {
+            "name": "label",
+            "type": "string",
+            "repeated": false,
+            "message": null,
+            "enumValues": []
+          },
+          {
+            "name": "child",
+            "type": "message",
+            "repeated": false,
+            "message": null,
+            "enumValues": []
+          },
+          {
+            "name": "children",
+            "type": "message",
+            "repeated": true,
+            "message": null,
+            "enumValues": []
+          }
+        ]
+      },
+      "enumValues": []
+    },
+    {
+      "name": "counts",
+      "type": "message",
+      "repeated": false,
+      "message": {
+        "name": "map<string, int32>",
+        "fields": []
+      },
+      "enumValues": []
+    },
+    {
+      "name": "annotated",
+      "type": "message",
+      "repeated": false,
+      "message": {
+        "name": "map<string, fix.v1.Meta>",
+        "fields": []
+      },
+      "enumValues": []
+    },
+    {
+      "name": "at",
+      "type": "string",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "text",
+      "type": "string",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "number",
+      "type": "number",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    },
+    {
+      "name": "note",
+      "type": "string",
+      "repeated": false,
+      "message": null,
+      "enumValues": []
+    }
+  ]
+}

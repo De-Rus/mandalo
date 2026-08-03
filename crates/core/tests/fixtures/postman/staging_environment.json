@@ -1,0 +1,14 @@
+{
+  "id": "b6d7e8f9-1111-4222-8333-444455556666",
+  "name": "Acme (staging)",
+  "values": [
+    { "key": "baseUrl", "value": "https://staging.acme.test", "type": "default", "enabled": true },
+    { "key": "email", "value": "team@acme.test", "type": "default", "enabled": true },
+    { "key": "password", "value": "hunter2", "type": "secret", "enabled": true },
+    { "key": "accessToken", "value": "", "type": "secret", "enabled": true },
+    { "key": "retired", "value": "old", "type": "default", "enabled": false }
+  ],
+  "_postman_variable_scope": "environment",
+  "_postman_exported_at": "2026-07-30T09:12:44.123Z",
+  "_postman_exported_using": "Postman/11.20.0"
+}
