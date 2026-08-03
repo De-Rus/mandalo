@@ -53,6 +53,8 @@ export interface RequestModel {
   url: string;
   description?: string;
   body?: string;
+  /** A `< ./file` body: workspace-relative, and only the CLI can read it off disk. */
+  bodyFile?: string;
   headers: [string, string][];
   auth: Auth;
   graphql?: GraphqlBody;

@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { lintRequestDocument } from "./core/rules";
 import type { Finding } from "./core/rules";
 import { findCollectionFor } from "./core/scan";
+import { textFileKind } from "./core/textFormat";
 import type { MandaloStore } from "./store";
 
 const UNRESOLVED_VAR = "mandalo.unresolvedVar";
@@ -44,8 +45,7 @@ export class MandaloDiagnostics implements vscode.Disposable {
 
   isRequestDocument(document: vscode.TextDocument): boolean {
     const fsPath = document.uri.fsPath;
-    if (!fsPath.endsWith(".toml") || path.basename(fsPath) === "collection.toml") return false;
-    if (path.basename(fsPath) === "mandalo.toml") return false;
+    if (textFileKind(fsPath) === undefined) return false;
     const workspace = this.store.workspaceFor(fsPath);
     if (!workspace) return false;
     return findCollectionFor(workspace, fsPath) !== undefined;
@@ -61,7 +61,7 @@ export class MandaloDiagnostics implements vscode.Disposable {
       return;
     }
     const workspace = this.store.workspaceFor(document.uri.fsPath)!;
-    const findings = lintRequestDocument(document.getText(), {
+    const findings = lintRequestDocument(document.getText(), textFileKind(document.uri.fsPath)!, {
       envName: this.store.selectedEnv(workspace),
       envVars: this.store.envVars(workspace),
     });

@@ -534,7 +534,8 @@ pub fn list_collections(workspace: &Path) -> CoreResult<CollectionList> {
             Err(e) => list.skipped.push(e.to_string()),
         }
     }
-    list.items.sort_by(|a, b| a.name.cmp(&b.name));
+    list.items
+        .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.slug.cmp(&b.slug)));
     list.skipped.sort();
     Ok(list)
 }

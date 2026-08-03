@@ -81,10 +81,10 @@ describe("scanWorkspace", () => {
     });
   });
 
-  it("keeps a collection whose only file is a legacy .toml request empty", async () => {
+  it("still lists a block the parser rejects, so a broken file is visible not invisible", async () => {
     const workspace = await scanWorkspace(FIXTURE);
     const broken = workspace.collections[1]!;
-    expect(broken.requests).toEqual([]);
+    expect(broken.requests.map((r) => r.relPath)).toEqual(["bad-request.http#0"]);
     expect(workspace.skipped).toEqual([]);
   });
 

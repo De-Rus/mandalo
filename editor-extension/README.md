@@ -24,16 +24,26 @@ Works in VS Code and in Cursor (no proprietary APIs are used).
   and each assertion becomes a child item with its own failure message.
 - **Environment picker** in the status bar, persisted per workspace.
 
-> Linting of `.http` / `.grpc` files is not wired into the extension yet — the CLI is the
-> parser, and it reports a malformed file when you send. The TOML diagnostics that remain
-> only ever applied to the old request-TOML format.
+- **Diagnostics while you type** — `.http`, `.rest` and `.grpc` files inside a collection are
+  parsed on every keystroke; a format error is squiggled on its own line with the same
+  sentence the CLI would print, and a `{{var}}` the selected environment does not define is
+  a warning with an **Add "name" to environment** quick fix.
 
 ## How requests are sent
 
-`.http`, `.rest` and `.grpc` files are parsed and run by the **`mandalo` CLI** — the one
-bundled with this extension, or one you point at yourself. There is deliberately no second
-parser in the extension: the text format has one implementation, in Rust, and the editor
-asks it. Every send logs which engine ran it and why to the **Mándalo** output channel.
+HTTP and GraphQL requests are sent by the **in-process engine**, so the extension alone is
+enough to send: no CLI, no install. gRPC needs HTTP/2 trailers that the editor's Node runtime
+cannot read, a `< ./file` body needs the workspace on disk, and a `#name` address needs the
+CLI's own name matching — those three escalate to the **`mandalo` CLI**, bundled with this
+extension or pointed at by you. Every send logs which engine ran it and why to the **Mándalo**
+output channel.
+
+The extension therefore carries its own reader for the text formats, for the tree, the
+CodeLens positions, the diagnostics and that engine. That reader is **interim** — it is to
+be replaced by a WASM build of `crates/core`, the same pattern the repo already uses for
+gRPC. Until then the Rust parser stays the reference and a parity suite proves it: the same
+corpus is parsed by both readers and must agree on every request, name, method, URL, header
+and body, down to the wording of a parse error.
 
 Platform builds of the extension (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`,
 `win32-x64`) **ship that binary inside the VSIX**; the Marketplace serves the right one
@@ -51,9 +61,10 @@ bundled binary is missing, and offers **Download from releases**, **Set path…*
 When a `mandalo.cliPath` binary reports a different version from the extension, you get one
 warning per session naming both versions, because their JSON contracts may differ.
 
-`mandalo.executionMode` still exists for the in-process engine, but it cannot override the
-text formats: `.http`, `.rest` and `.grpc` always go to the CLI, and with no binary anywhere
-the error names the format, the missing binary and the two ways to supply one.
+`mandalo.executionMode` picks the engine: `auto` keeps HTTP and GraphQL in the editor and
+escalates the rest, `in-process` refuses to shell out, `cli` always does. When something
+genuinely needs the CLI and no binary exists anywhere, the error names the reason, the
+missing binary and the two ways to supply one.
 
 ## Installation
 
@@ -72,7 +83,7 @@ code --install-extension mandalo-0.1.0.vsix
 | --- | --- | --- |
 | `mandalo.cliPath` | *(empty)* | Path to the CLI. Empty uses the bundled binary, then `PATH`. Setting it always wins. |
 | `mandalo.executionMode` | `auto` | Which engine runs a request: `auto`, `in-process` or `cli`. |
-| `mandalo.diagnostics.enabled` | `true` | Validate the TOML files in a workspace while you type. |
+| `mandalo.diagnostics.enabled` | `true` | Validate `.http`, `.rest` and `.grpc` files while you type. |
 | `mandalo.codeLens.enabled` | `true` | Show `▶ Send` / `▶ Send with env…` above every `###` block. |
 | `mandalo.timeoutMs` | `120000` | How long to wait for a CLI invocation. |
 

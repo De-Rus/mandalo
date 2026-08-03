@@ -1,0 +1,3 @@
+### Unknown method
+FETCH {{base}}/thing
+Accept: application/json

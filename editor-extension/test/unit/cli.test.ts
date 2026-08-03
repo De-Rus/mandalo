@@ -82,7 +82,7 @@ const RUN_JSON = `{
   "durationMs": 1,
   "requests": [
     {
-      "path": "health.toml",
+      "path": "health.http#0",
       "name": "Health",
       "method": "GET",
       "url": "http://127.0.0.1:8731/health",
@@ -155,7 +155,7 @@ const LS_JSON = `{
         }
       ],
       "requests": [
-        { "id": "req-health", "name": "Health", "kind": "http", "method": "GET", "path": "health.toml" }
+        { "id": "req-health", "name": "Health", "kind": "http", "method": "GET", "path": "health.http#0" }
       ]
     }
   ],
@@ -316,12 +316,12 @@ describe("MandaloCli.run", () => {
 describe("per-assertion mapping", () => {
   it("maps every assertion of a real run payload to the right verdict by id", async () => {
     const result = await cliWith(ok(RUN_JSON, 1)).run("/ws", "api", { env: "staging" });
-    const health = result.requests.find((request) => request.path === "health.toml")!;
+    const health = result.requests.find((request) => request.path === "health.http#0")!;
     const login = result.requests.find((request) => request.path === "auth/login.toml")!;
 
-    const healthIndex = assertionIndex("/ws::api::health.toml", health.tests);
-    expect([...healthIndex.keys()]).toEqual(["/ws::api::health.toml::test:0"]);
-    expect(healthIndex.get("/ws::api::health.toml::test:0")?.passed).toBe(false);
+    const healthIndex = assertionIndex("/ws::api::health.http#0", health.tests);
+    expect([...healthIndex.keys()]).toEqual(["/ws::api::health.http#0::test:0"]);
+    expect(healthIndex.get("/ws::api::health.http#0::test:0")?.passed).toBe(false);
 
     const loginIndex = assertionIndex("/ws::api::auth/login.toml", login.tests);
     expect(loginIndex.get("/ws::api::auth/login.toml::test:0")?.passed).toBe(true);
@@ -365,7 +365,7 @@ describe("MandaloCli.ls and env list", () => {
       method: "POST",
       path: "auth/login.toml",
     });
-    expect(collection.requests[0]?.path).toBe("health.toml");
+    expect(collection.requests[0]?.path).toBe("health.http#0");
     expect(result.skipped).toEqual([]);
     expect(spawnFn.mock.calls[0]?.[1]).toEqual(["ls", "--workspace", "/ws", "--reporter", "json"]);
   });

@@ -11,17 +11,15 @@ import { MandaloStore } from "./store";
 import { MandaloTestController } from "./testing";
 import { MandaloTreeProvider } from "./tree";
 
-const TOML_SELECTOR: vscode.DocumentSelector = [
-  { scheme: "file", pattern: "**/*.toml" },
-  { scheme: "file", language: "toml" },
-];
-
 // Requests match by file pattern, not by language id: another extension may own the
 // `.http` language, and our lenses have to show up either way.
-const LENS_SELECTOR: vscode.DocumentSelector = [
-  { scheme: "file", pattern: "**/*.toml" },
-  { scheme: "file", language: "toml" },
+const REQUEST_SELECTOR: vscode.DocumentSelector = [
   { scheme: "file", pattern: "**/*.{http,rest,grpc}" },
+];
+
+const LENS_SELECTOR: vscode.DocumentSelector = [
+  ...(REQUEST_SELECTOR as vscode.DocumentFilter[]),
+  { scheme: "file", pattern: "**/collection.toml" },
 ];
 
 export interface MandaloApi {
@@ -56,7 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Mandal
     vscode.window.createTreeView("mandalo.requests", { treeDataProvider: tree, showCollapseAll: true }),
     vscode.languages.registerCodeLensProvider(LENS_SELECTOR, new MandaloCodeLensProvider(store)),
     vscode.languages.registerCodeActionsProvider(
-      TOML_SELECTOR,
+      REQUEST_SELECTOR,
       new AddVariableActionProvider(store),
       AddVariableActionProvider.metadata,
     ),

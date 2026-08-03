@@ -73,8 +73,8 @@ suite("Mándalo extension", () => {
       [
         [2, "▶ Send"],
         [2, "▶ Send with env…"],
-        [12, "▶ Send"],
-        [12, "▶ Send with env…"],
+        [13, "▶ Send"],
+        [13, "▶ Send with env…"],
       ],
     );
     assert.deepEqual(
@@ -113,19 +113,18 @@ suite("Mándalo extension", () => {
 
   test("reports diagnostics for a malformed request", async () => {
     const root = await workspaceRoot();
-    const uri = vscode.Uri.file(path.join(root, "collections", "broken", "bad-capture.toml"));
+    const uri = vscode.Uri.file(path.join(root, "collections", "broken", "bad-request.http"));
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
     await new Promise((resolve) => setTimeout(resolve, 500));
     const found = vscode.languages.getDiagnostics(uri).filter((d) => d.source === "mandalo");
     const codes = found.map((d) => String(d.code));
-    assert.ok(codes.includes("mandalo.kind"), `expected a kind diagnostic, got ${codes.join(",")}`);
-    assert.ok(codes.includes("mandalo.capture"));
-    assert.ok(codes.includes("mandalo.test"));
+    assert.ok(codes.includes("mandalo.parse"), `expected a parse diagnostic, got ${codes.join(",")}`);
+    assert.match(found[0]!.message, /is not an HTTP method/);
   });
 
   test("keeps healthy requests diagnostic-free", async () => {
     const root = await workspaceRoot();
-    const uri = vscode.Uri.file(path.join(root, "collections", "acme-api", "ping.toml"));
+    const uri = vscode.Uri.file(path.join(root, "collections", "acme-api", "ping.http"));
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.deepEqual(
@@ -139,7 +138,7 @@ suite("Mándalo extension", () => {
     const previous = config.get<string>("cliPath");
     await config.update("cliPath", "mandalo-does-not-exist", vscode.ConfigurationTarget.Workspace);
     const root = await workspaceRoot();
-    const uri = vscode.Uri.file(path.join(root, "collections", "acme-api", "ping.toml"));
+    const uri = vscode.Uri.file(path.join(root, "collections", "acme-api", "ping.http"));
     await assert.doesNotReject(() =>
       Promise.resolve(vscode.commands.executeCommand("mandalo.sendRequest", uri)),
     );
@@ -165,31 +164,19 @@ suite("Mándalo extension", () => {
 
     const root = await workspaceRoot();
     const dir = path.join(root, "collections", "acme-api");
-    const fsPath = path.join(dir, "inproc.toml");
+    const fsPath = path.join(dir, "inproc.http");
     await fs.writeFile(
       fsPath,
-      `schema_version = 1
-id = "inproc"
-name = "In process"
-kind = "http"
-method = "GET"
-url = "http://127.0.0.1:${address.port}/ping"
+      `### In process
+GET http://127.0.0.1:${address.port}/ping
 
-[[tests]]
-kind = "status"
-op = "eq"
-value = 200
-
-[[tests]]
-kind = "json"
-path = "$.pong"
-op = "eq"
-value = true
-
-[[captures]]
-from = "header.x-proof"
-into = "proof"
-scope = "run"
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the body came back", function () { pm.expect(pm.response.json().pong).to.equal(true); });
+pm.test("the editor process sent it", function () {
+  pm.expect(pm.response.headers.get("x-proof")).to.equal("in-process");
+});
+%}
 `,
     );
 
@@ -201,9 +188,8 @@ scope = "run"
       assert.equal(result.response?.status, 200);
       assert.deepEqual(
         result.tests.map((test) => test.passed),
-        [true, true],
+        [true, true, true],
       );
-      assert.equal(result.captures[0]?.value, "in-process");
       assert.equal(result.passed, true);
     } finally {
       await fs.rm(fsPath, { force: true });

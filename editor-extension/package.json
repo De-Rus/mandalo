@@ -252,7 +252,7 @@
         "mandalo.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Validate request TOML files (unknown kind, capture grammar, test operators, unresolved {{vars}})."
+          "description": "Validate .http, .rest and .grpc request files (format errors and unresolved {{vars}})."
         },
         "mandalo.timeoutMs": {
           "type": "number",

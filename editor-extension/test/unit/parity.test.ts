@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MandaloCli, type RequestOutcome } from "../../src/core/cli";
-import { parseRequest } from "../../src/core/parse";
+import { parseTextDocument, withFileVars } from "../../src/core/httpFormat";
 import { runMany } from "../../src/engine/run";
+import type { EngineRequest } from "../../src/engine/run";
 import { cliIsRequired, probeCli } from "./support/cliBinary";
 
 const { binary, reason } = probeCli();
@@ -17,278 +18,148 @@ let workspace: string;
 
 interface Fixture {
   path: string;
-  toml: (base: string) => string;
+  http: (base: string) => string;
 }
 
-// Each fixture exercises a different slice of the contract the two engines must agree on:
-// assertion kinds, capture sources, script tests, auth, and the failure shapes.
+// Each fixture exercises a different slice of the contract the two engines must agree
+// on: assertion kinds, script tests, auth, GraphQL and the failure shapes. Declarative
+// tests and captures are gone with the TOML format — a `.http` file asserts and chains
+// from `pm.*`, so that is what parity now covers.
 const FIXTURES: Fixture[] = [
   {
-    path: "status.toml",
-    toml: (base) => `schema_version = 1
-id = "status"
-name = "Status"
-kind = "http"
-method = "GET"
-url = "${base}/json"
+    path: "status.http",
+    http: (base) => `### Status
+GET ${base}/json
 
-[[tests]]
-kind = "status"
-op = "eq"
-value = 200
-
-[[tests]]
-kind = "status"
-op = "eq"
-value = 404
-
-[[tests]]
-kind = "status"
-op = "lt"
-value = 300
-
-[[tests]]
-kind = "duration"
-op = "lt"
-value = 30000
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("status is 404", function () { pm.response.to.have.status(404); });
+pm.test("status is below 300", function () { pm.expect(pm.response.code).to.be.below(300); });
+pm.test("under thirty seconds", function () { pm.expect(pm.response.responseTime).to.be.below(30000); });
+%}
 `,
   },
   {
-    path: "json.toml",
-    toml: (base) => `schema_version = 1
-id = "json"
-name = "Json"
-kind = "http"
-method = "GET"
-url = "${base}/json"
+    path: "json.http",
+    http: (base) => `### Json
+GET ${base}/json
 
-[[tests]]
-kind = "json"
-path = "$.id"
-op = "eq"
-value = 7
-
-[[tests]]
-kind = "json"
-path = "$.name"
-op = "eq"
-value = "nova"
-
-[[tests]]
-kind = "json"
-path = "$.name"
-op = "ne"
-value = "other"
-
-[[tests]]
-kind = "json"
-path = "$.tags"
-op = "len"
-value = 2
-
-[[tests]]
-kind = "json"
-path = "$.tags"
-op = "contains"
-value = "b"
-
-[[tests]]
-kind = "json"
-path = "$.tags[0]"
-op = "eq"
-value = "a"
-
-[[tests]]
-kind = "json"
-path = "$.nested.ok"
-op = "exists"
-
-[[tests]]
-kind = "json"
-path = "$.nope"
-op = "absent"
-
-[[tests]]
-kind = "json"
-path = "$.nope"
-op = "exists"
-
-[[tests]]
-kind = "json"
-path = "$.id"
-op = "gt"
-value = 100
-
-[[tests]]
-kind = "json"
-path = "$.name"
-op = "matches"
-value = "^no"
-
-[[tests]]
-kind = "json"
-path = "$.name"
-op = "len"
-value = 4
+> {%
+pm.test("id is seven", function () { pm.expect(pm.response.json().id).to.equal(7); });
+pm.test("name is nova", function () { pm.expect(pm.response.json().name).to.equal("nova"); });
+pm.test("two tags", function () { pm.expect(pm.response.json().tags.length).to.equal(2); });
+pm.test("first tag is a", function () { pm.expect(pm.response.json().tags[0]).to.equal("a"); });
+pm.test("nested ok", function () { pm.expect(pm.response.json().nested.ok).to.equal(true); });
+pm.test("nope is absent", function () { pm.expect(pm.response.json().nope).to.equal(undefined); });
+pm.test("id is over a hundred", function () { pm.expect(pm.response.json().id).to.be.above(100); });
+%}
 `,
   },
   {
-    path: "headers.toml",
-    toml: (base) => `schema_version = 1
-id = "headers"
-name = "Headers"
-kind = "http"
-method = "GET"
-url = "${base}/json"
+    path: "headers.http",
+    http: (base) => `### Headers
+GET ${base}/json
 
-[[tests]]
-kind = "header"
-name = "Content-Type"
-op = "exists"
-
-[[tests]]
-kind = "header"
-name = "content-type"
-op = "contains"
-value = "json"
-
-[[tests]]
-kind = "header"
-name = "x-absent"
-op = "absent"
-
-[[tests]]
-kind = "header"
-name = "x-absent"
-op = "exists"
-
-[[tests]]
-kind = "header"
-name = "x-flavour"
-op = "eq"
-value = "vanilla"
-
-[[tests]]
-kind = "header"
-name = "x-flavour"
-op = "matches"
-value = "^van"
+> {%
+pm.test("content type is json", function () {
+  pm.expect(pm.response.headers.get("content-type")).to.include("json");
+});
+pm.test("flavour is vanilla", function () {
+  pm.expect(pm.response.headers.get("x-flavour")).to.equal("vanilla");
+});
+pm.test("absent header is absent", function () {
+  pm.expect(pm.response.headers.get("x-absent")).to.equal(undefined);
+});
+pm.test("absent header is somehow present", function () {
+  pm.expect(pm.response.headers.get("x-absent")).to.equal("here");
+});
+%}
 `,
   },
   {
-    path: "captures.toml",
-    toml: (base) => `schema_version = 1
-id = "captures"
-name = "Captures"
-kind = "http"
-method = "GET"
-url = "${base}/json"
+    path: "chain.http",
+    http: (base) => `### 1 Capture
+GET ${base}/json
 
-[[captures]]
-from = "status"
-into = "code"
-scope = "run"
+> {%
+pm.environment.set("who", pm.response.json().name);
+pm.test("captured a name", function () { pm.expect(pm.environment.get("who")).to.equal("nova"); });
+%}
 
-[[captures]]
-from = "header.x-flavour"
-into = "flavour"
-scope = "run"
+### 2 Use the capture
+POST ${base}/echo
+Content-Type: application/json
 
-[[captures]]
-from = "body.$.name"
-into = "who"
-scope = "run"
+{"who": "{{who}}"}
 
-[[captures]]
-from = "body.$.id"
-into = "ident"
-scope = "run"
+> {%
+pm.test("the capture reached the next request", function () {
+  pm.expect(pm.response.json().who).to.equal("nova");
+});
+%}
 `,
   },
   {
-    path: "scripts.toml",
-    toml: (base) => `schema_version = 1
-id = "scripts"
-name = "Scripts"
-kind = "http"
-method = "POST"
-url = "${base}/echo"
-body = "{\\"seed\\": \\"{{seed}}\\"}"
+    path: "scripts.http",
+    http: (base) => `### Scripts
+< {%
+pm.variables.set("injected", "yes");
+pm.test("pre runs", function () { pm.expect(pm.variables.get("seed")).to.equal("s1"); });
+%}
+POST ${base}/echo
+Content-Type: application/json
 
-[scripts]
-pre = "pm.variables.set('injected', 'yes'); pm.test('pre runs', function () { pm.expect(pm.variables.get('seed')).to.equal('s1'); });"
-post = "pm.test('status is 200', function () { pm.response.to.have.status(200); }); pm.test('body echoes', function () { pm.expect(pm.response.json().seed).to.equal('s1'); }); pm.test('deliberate failure', function () { pm.expect(1).to.equal(2); });"
+{"seed": "{{seed}}"}
 
-[[tests]]
-kind = "status"
-op = "eq"
-value = 200
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("body echoes", function () { pm.expect(pm.response.json().seed).to.equal("s1"); });
+pm.test("deliberate failure", function () { pm.expect(1).to.equal(2); });
+%}
 `,
   },
   {
-    path: "auth.toml",
-    toml: (base) => `schema_version = 1
-id = "auth"
-name = "Auth"
-kind = "http"
-method = "GET"
-url = "${base}/echo-headers"
+    path: "auth.http",
+    http: (base) => `### Auth
+GET ${base}/echo-headers
+Authorization: Bearer {{token}}
 
-[auth]
-type = "bearer"
-token = "{{token}}"
-
-[[tests]]
-kind = "json"
-path = "$.authorization"
-op = "eq"
-value = "Bearer t0ken"
+> {%
+pm.test("the bearer header went out", function () {
+  pm.expect(pm.response.json().authorization).to.equal("Bearer t0ken");
+});
+%}
 `,
   },
   {
-    path: "graphql.toml",
-    toml: (base) => `schema_version = 1
-id = "graphql"
-name = "Graphql"
-kind = "graphql"
-method = "POST"
-url = "${base}/echo"
+    path: "graphql.http",
+    http: (base) => `### Graphql
+POST ${base}/echo
+X-REQUEST-TYPE: GraphQL
 
-[graphql]
-query = "query Me { me { id } }"
-variables = "{\\"who\\": \\"{{seed}}\\"}"
+query Me { me { id } }
 
-[[tests]]
-kind = "json"
-path = "$.query"
-op = "contains"
-value = "Me"
+{"who": "{{seed}}"}
 
-[[tests]]
-kind = "json"
-path = "$.variables.who"
-op = "eq"
-value = "s1"
+> {%
+pm.test("the document went out", function () {
+  pm.expect(pm.response.json().query).to.include("Me");
+});
+pm.test("the variables went out", function () {
+  pm.expect(pm.response.json().variables.who).to.equal("s1");
+});
+%}
 `,
   },
   {
-    path: "notjson.toml",
-    toml: (base) => `schema_version = 1
-id = "notjson"
-name = "Not json"
-kind = "http"
-method = "GET"
-url = "${base}/text"
+    path: "notjson.http",
+    http: (base) => `### Not json
+GET ${base}/text
 
-[[tests]]
-kind = "json"
-path = "$.anything"
-op = "exists"
-
-[[tests]]
-kind = "status"
-op = "eq"
-value = 200
+> {%
+pm.test("body parses as json", function () { pm.expect(pm.response.json().anything).to.exist; });
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+%}
 `,
   },
 ];
@@ -339,12 +210,25 @@ function buildWorkspace(base: string): string {
     'name = "test"\n[vars]\nseed = "s1"\ntoken = "t0ken"\n',
   );
   for (const fixture of FIXTURES) {
-    writeFileSync(join(root, "collections", "api", fixture.path), fixture.toml(base));
+    writeFileSync(join(root, "collections", "api", fixture.path), fixture.http(base));
   }
   return root;
 }
 
-const NOT_JSON = "response body is not JSON: ";
+/** The same files the CLI reads, parsed by the extension's own `.http` parser. */
+function engineRequests(only?: string): EngineRequest[] {
+  const out: EngineRequest[] = [];
+  for (const fixture of FIXTURES) {
+    if (only !== undefined && fixture.path !== only) continue;
+    const document = parseTextDocument(fixture.path, fixture.http(origin), "http");
+    for (const block of withFileVars(document)) {
+      out.push({ model: block.model, relPath: `${fixture.path}#${block.index}` });
+    }
+  }
+  return out;
+}
+
+const NOT_JSON = "response body is not valid JSON: ";
 
 // serde_json and V8 word a parse failure differently and always will. The prefix, the
 // assertion name and the pass/fail verdict are the contract; the parser's own sentence is
@@ -387,25 +271,14 @@ afterAll(async () => {
 });
 
 describe("in-process engine, with no CLI involved at all", () => {
-  it("sends a real HTTP request and evaluates every assertion kind", async () => {
-    const requests = await Promise.all(
-      FIXTURES.map(async (fixture) => ({
-        relPath: fixture.path,
-        model: parseRequest(fixture.toml(origin)),
-      })),
-    );
-    const result = await runMany(requests, "api", "test", { seed: "s1", token: "t0ken" });
-    expect(result.total).toBe(FIXTURES.length);
-    const status = result.requests.find((outcome) => outcome.path === "status.toml");
+  it("sends real requests and evaluates every script assertion", async () => {
+    const result = await runMany(engineRequests(), "api", "test", { seed: "s1", token: "t0ken" });
+    expect(result.total).toBe(engineRequests().length);
+    const status = result.requests.find((outcome) => outcome.path === "status.http#0");
     expect(status?.response?.status).toBe(200);
     expect(status?.tests.map((test) => test.passed)).toEqual([true, false, true, true]);
-    const captures = result.requests.find((outcome) => outcome.path === "captures.toml");
-    expect(captures?.captures.map((capture) => [capture.into, capture.value])).toEqual([
-      ["code", "200"],
-      ["flavour", "vanilla"],
-      ["who", "nova"],
-      ["ident", "7"],
-    ]);
+    const chained = result.requests.find((outcome) => outcome.path === "chain.http#1");
+    expect(chained?.tests.every((test) => test.passed)).toBe(true);
   }, TIMEOUT);
 });
 
@@ -413,14 +286,10 @@ describe.skipIf(binary === null)("the two engines agree", () => {
   it("produces identical test results for the same collection", async () => {
     const cli = new MandaloCli({ cliPath: () => binary as string, timeoutMs: () => 60_000 });
     const fromCli = await cli.run(workspace, "api", { env: "test" });
-
-    const requests = await Promise.all(
-      FIXTURES.map(async (fixture) => ({
-        relPath: fixture.path,
-        model: parseRequest(fixture.toml(origin)),
-      })),
-    );
-    const fromEngine = await runMany(requests, "api", "test", { seed: "s1", token: "t0ken" });
+    const fromEngine = await runMany(engineRequests(), "api", "test", {
+      seed: "s1",
+      token: "t0ken",
+    });
 
     expect(fromEngine.total).toBe(fromCli.total);
     expect(fromEngine.failed).toBe(fromCli.failed);
@@ -438,28 +307,17 @@ describe.skipIf(binary === null)("the two engines agree", () => {
   it("the only tolerated divergence is the JSON parser's own wording", async () => {
     const cli = new MandaloCli({ cliPath: () => binary as string, timeoutMs: () => 60_000 });
     const fromCli = await cli.run(workspace, "api", { env: "test" });
-    const fromEngine = await runMany(
-      [{ relPath: "notjson.toml", model: parseRequest(notJson().toml(origin)) }],
-      "api",
-      "test",
-      {},
-    );
+    const fromEngine = await runMany(engineRequests("notjson.http"), "api", "test", {});
 
     const cliDetail = fromCli.requests
-      .find((outcome) => outcome.path === "notjson.toml")
+      .find((outcome) => outcome.path === "notjson.http#0")
       ?.tests[0]?.detail;
     const engineDetail = fromEngine.requests[0]?.tests[0]?.detail;
-    expect(cliDetail).toMatch(/^response body is not JSON: /);
-    expect(engineDetail).toMatch(/^response body is not JSON: /);
+    expect(cliDetail).toMatch(/^response body is not valid JSON: /);
+    expect(engineDetail).toMatch(/^response body is not valid JSON: /);
     expect(engineDetail).not.toBe(cliDetail);
   }, TIMEOUT);
 });
-
-function notJson(): Fixture {
-  const fixture = FIXTURES.find((entry) => entry.path === "notjson.toml");
-  if (!fixture) throw new Error("the notjson fixture disappeared");
-  return fixture;
-}
 
 it.skipIf(binary !== null || cliIsRequired())(`parity skipped: ${reason}`, () => {
   expect(binary).toBeNull();

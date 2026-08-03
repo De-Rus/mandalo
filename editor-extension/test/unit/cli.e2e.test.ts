@@ -37,29 +37,12 @@ function makeWorkspace(): string {
     'schema_version = 1\nid = "api"\nname = "API"\n',
   );
   writeFileSync(
-    join(root, "collections", "api", "health.toml"),
-    `schema_version = 1
-id = "req-health"
-name = "Health"
-kind = "http"
-method = "GET"
-url = "${DEAD_PORT_URL}"
-
-[[tests]]
-kind = "status"
-op = "eq"
-value = 200
-`,
+    join(root, "collections", "api", "health.http"),
+    `### Health\nGET ${DEAD_PORT_URL}\n`,
   );
   writeFileSync(
-    join(root, "collections", "api", "auth", "login.toml"),
-    `schema_version = 1
-id = "req-login"
-name = "Login"
-kind = "http"
-method = "POST"
-url = "{{base_url}}/login"
-`,
+    join(root, "collections", "api", "auth", "login.http"),
+    "### Login\nPOST {{base_url}}/login\n",
   );
   writeFileSync(
     join(root, "environments", "staging.toml"),
@@ -88,9 +71,9 @@ describe.skipIf(!available)("MandaloCli against the real binary", () => {
     const collection = result.collections.find((entry) => entry.slug === "api");
     expect(collection).toBeDefined();
     expect(collection!.name).toBe("API");
-    expect(collection!.requests.map((request) => request.path)).toEqual(["health.toml"]);
+    expect(collection!.requests.map((request) => request.path)).toEqual(["health.http#0"]);
     expect(collection!.folders[0]?.path).toBe("auth");
-    expect(collection!.folders[0]?.requests[0]?.path).toBe("auth/login.toml");
+    expect(collection!.folders[0]?.requests[0]?.path).toBe("auth/login.http#0");
   }, E2E_TIMEOUT_MS);
 
   it("parses real `env list --reporter json` output", async () => {
@@ -105,7 +88,7 @@ describe.skipIf(!available)("MandaloCli against the real binary", () => {
     expect(result.env).toBe("staging");
     expect(result.total).toBe(result.requests.length);
     expect(result.failed).toBeGreaterThan(0);
-    const health = result.requests.find((request) => request.path === "health.toml");
+    const health = result.requests.find((request) => request.path === "health.http#0");
     expect(health).toBeDefined();
     expect(health!.passed).toBe(false);
     expect(health!.response).toBeNull();
@@ -114,8 +97,8 @@ describe.skipIf(!available)("MandaloCli against the real binary", () => {
   }, E2E_TIMEOUT_MS);
 
   it("parses a real `send --reporter json` transport failure", async () => {
-    const result = await cli.send(workspace(), "api", "health.toml");
-    expect(result.path).toBe("health.toml");
+    const result = await cli.send(workspace(), "api", "health.http#0");
+    expect(result.path).toBe("health.http#0");
     expect(result.name).toBe("Health");
     expect(result.passed).toBe(false);
     expect(result.errorCode).toBe("E_NETWORK");

@@ -2,12 +2,12 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { MandaloCli, RunResult, SendResult } from "./core/cli";
 import type { CollectionNode, FolderNode, RequestNode, WorkspaceNode } from "./core/model";
-import { parseRequest } from "./core/parse";
-import { isTextRequestPath, requestFilePath } from "./core/textFormat";
+import { parseTextDocument, withFileVars } from "./core/httpFormat";
+import { requestFilePath, requestIndexOf, textFileKind } from "./core/textFormat";
 import { EscalateError, failed, runMany, runOne, type EngineRequest } from "./engine/run";
 
-const TEXT_FORMAT_REASON =
-  "the .http/.rest/.grpc text format is parsed by the Mándalo CLI, not by the in-process engine";
+const NAMED_BLOCK_REASON =
+  "a `#name` request address is matched by the Mándalo CLI, not by the in-process engine";
 
 export type ExecutionMode = "auto" | "cli" | "in-process";
 export type Engine = "in-process" | "cli";
@@ -45,23 +45,38 @@ export function suiteRequests(collection: CollectionNode, folder?: string): Requ
 }
 
 async function load(request: { relPath: string; fsPath: string }): Promise<EngineRequest> {
+  const file = requestFilePath(request.relPath);
+  const fileKind = textFileKind(file);
+  if (fileKind === undefined) {
+    throw new Error(
+      `${file} is not a request file — Mándalo stores HTTP and GraphQL in .http and gRPC in .grpc`,
+    );
+  }
+  const index = requestIndexOf(request.relPath);
+  if (index === undefined) throw new EscalateError(NAMED_BLOCK_REASON);
   const raw = await readFile(request.fsPath, "utf8");
-  return { model: parseRequest(raw), relPath: request.relPath };
-}
-
-function isTextFormat(relPath: string): boolean {
-  return isTextRequestPath(requestFilePath(relPath));
+  const blocks = withFileVars(parseTextDocument(file, raw, fileKind));
+  const block = blocks[index];
+  if (block === undefined) {
+    throw new Error(`this file holds ${blocks.length} requests, so there is no request ${index}`);
+  }
+  return { model: block.model, relPath: request.relPath };
 }
 
 export class MandaloExecutor {
   constructor(private readonly deps: ExecutorDeps) {}
 
   /** `auto` keeps HTTP and GraphQL in the editor process; everything else needs the CLI. */
-  private engineFor(kinds: readonly string[]): Engine {
+  private engineFor(requests: readonly EngineRequest[]): Engine {
     const mode = this.deps.mode();
     if (mode === "cli") return "cli";
     if (mode === "in-process") return "in-process";
-    return kinds.every((kind) => kind === "http" || kind === "graphql") ? "in-process" : "cli";
+    return requests.every(({ model }) => {
+      if (model.kind !== "http" && model.kind !== "graphql") return false;
+      return model.bodyFile === undefined;
+    })
+      ? "in-process"
+      : "cli";
   }
 
   private escalate(where: string, reason: string): void {
@@ -85,15 +100,17 @@ export class MandaloExecutor {
     env: string | undefined,
     vars: Record<string, string>,
   ): Promise<SendResult> {
-    if (isTextFormat(relPath)) {
-      this.requireCli(relPath, TEXT_FORMAT_REASON);
+    const fsPath = path.join(collection.dirPath, requestFilePath(relPath));
+    let request: EngineRequest;
+    try {
+      request = await load({ relPath, fsPath });
+    } catch (error) {
+      if (!(error instanceof EscalateError)) throw error;
+      this.requireCli(relPath, error.reason);
       return this.deps.cli.send(workspace.rootPath, collection.slug, relPath, env);
     }
 
-    const fsPath = path.join(collection.dirPath, requestFilePath(relPath));
-    const request = await load({ relPath, fsPath });
-
-    if (this.engineFor([request.model.kind]) === "in-process") {
+    if (this.engineFor([request]) === "in-process") {
       this.deps.log(`engine: in-process · ${relPath}`);
       try {
         return await runOne(request, collection.slug, env ?? null, { ...vars }, this.deps);
@@ -118,14 +135,16 @@ export class MandaloExecutor {
     const nodes = suiteRequests(collection, options.folder);
     const label = `${collection.slug}${options.folder ? `/${options.folder}` : ""}`;
 
-    if (nodes.some((node) => isTextFormat(node.relPath))) {
-      this.requireCli(label, TEXT_FORMAT_REASON);
+    let requests: EngineRequest[];
+    try {
+      requests = await Promise.all(nodes.map(load));
+    } catch (error) {
+      if (!(error instanceof EscalateError)) throw error;
+      this.requireCli(label, error.reason);
       return this.deps.cli.run(workspace.rootPath, collection.slug, options);
     }
 
-    const requests = await Promise.all(nodes.map(load));
-
-    if (this.engineFor(requests.map((request) => request.model.kind)) === "in-process") {
+    if (this.engineFor(requests) === "in-process") {
       this.deps.log(`engine: in-process · ${label} (${requests.length} requests)`);
       try {
         return await runMany(requests, collection.slug, options.env ?? null, { ...vars }, this.deps);
