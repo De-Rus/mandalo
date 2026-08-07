@@ -2,11 +2,19 @@ import { useState } from "react";
 import { addSampleCollection, errorMessage } from "../lib/api";
 import { basename } from "../lib/backend";
 import { pickDirectory } from "../lib/pickDirectory";
+import {
+  checkForUpdate,
+  installAndRelaunch,
+  updateSummary,
+  updaterAvailable,
+  type Update,
+} from "../lib/updater";
 import { useCollection } from "../store/collection";
 import { toast } from "../store/toast";
 import { useRemote } from "../store/remote";
 import { useWorkspaces } from "../store/workspace";
 import { CloneRepoDialog } from "./CloneRepoDialog";
+import { ConfirmModal } from "./ConfirmModal";
 import { GithubReposDialog } from "./GithubReposDialog";
 import { Dropdown, MenuItem } from "./Dropdown";
 import {
@@ -27,6 +35,7 @@ export function WorkspaceActions() {
   const openRemote = useRemote((s) => s.open);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
 
   const doOpen = async (close: () => void) => {
     try {
@@ -64,6 +73,20 @@ export function WorkspaceActions() {
     }
   };
 
+  const doCheckUpdates = async (close: () => void) => {
+    close();
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        toast("success", "You’re on the latest version");
+        return;
+      }
+      setPendingUpdate(update);
+    } catch (e) {
+      toast("error", errorMessage(e));
+    }
+  };
+
   return (
     <>
       <Dropdown
@@ -92,6 +115,15 @@ export function WorkspaceActions() {
             >
               Open folder…
             </MenuItem>
+            {updaterAvailable() && (
+              <MenuItem
+                icon={<ArrowDown size={13} />}
+                hint="GitHub Releases"
+                onClick={() => void doCheckUpdates(close)}
+              >
+                Check for updates…
+              </MenuItem>
+            )}
 
             <div className="menu-sep" />
             <div className="menu-head">GitHub</div>
@@ -139,6 +171,23 @@ export function WorkspaceActions() {
       </Dropdown>
       {githubOpen && <GithubReposDialog onClose={() => setGithubOpen(false)} />}
       {cloneOpen && <CloneRepoDialog onClose={() => setCloneOpen(false)} />}
+      {pendingUpdate !== null && (
+        <ConfirmModal
+          title="Update available"
+          message={updateSummary(pendingUpdate)}
+          confirmLabel="Install & restart"
+          tone="primary"
+          onConfirm={() => {
+            const update = pendingUpdate;
+            setPendingUpdate(null);
+            toast("info", "Downloading update…");
+            void installAndRelaunch(update).catch((e) =>
+              toast("error", errorMessage(e)),
+            );
+          }}
+          onClose={() => setPendingUpdate(null)}
+        />
+      )}
     </>
   );
 }

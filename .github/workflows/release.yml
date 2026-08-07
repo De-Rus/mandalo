@@ -60,14 +60,20 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Mándalo ${{ github.ref_name }}"
           releaseDraft: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
       # workflow_dispatch has no tag to release into, so it only proves it builds.
       - uses: tauri-apps/tauri-action@v0
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
 

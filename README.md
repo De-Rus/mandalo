@@ -53,7 +53,10 @@ Three things ship from every `v*` tag, all on the same
 [GitHub release](https://github.com/De-Rus/mandalo/releases/latest).
 
 **Desktop app** — macOS `.dmg` (Apple silicon, Intel, or universal), Windows
-`.msi`, Linux `.AppImage` or `.deb`.
+`.msi`, Linux `.AppImage` or `.deb`. Once installed from a **published** GitHub
+release, the app checks for updates on launch (and via **Check for updates…**)
+and can install the next signed build itself. Draft releases do not count as
+`latest`, so auto-update only kicks in after you publish the draft.
 
 ⚠️ **The desktop builds are unsigned, and macOS does not merely warn about
 that.** There is no Apple Developer ID certificate behind this project yet, so

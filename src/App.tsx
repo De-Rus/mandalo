@@ -16,6 +16,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Splitter } from "./components/Splitter";
 import { TabStrip } from "./components/TabStrip";
 import { Toasts } from "./components/Toasts";
+import { UpdatePrompt } from "./components/UpdatePrompt";
 import { Workbench } from "./components/Workbench";
 import { WorkspaceActions } from "./components/WorkspaceActions";
 import { WorkspaceSwitcher } from "./components/WorkspaceSwitcher";
@@ -336,6 +337,7 @@ export default function App() {
         <ImportDialog key={dropSeq} dropped={dropped} onClose={closeImport} />
       )}
       <DropTarget />
+      <UpdatePrompt />
       <Toasts />
     </div>
   );
