@@ -20,6 +20,7 @@ export interface RunResult {
   captured: Record<string, string>;
   unboundSecrets: UnboundSecret[];
   secretVarSets: string[];
+  runError: string | null;
 }
 
 export type ResponseState =
@@ -42,6 +43,7 @@ export const EMPTY_RUN: RunResult = {
   captured: {},
   unboundSecrets: [],
   secretVarSets: [],
+  runError: null,
 };
 
 function toTestResult(test: ScriptTest): TestResult {
@@ -56,6 +58,7 @@ function runOf(step: StepResult): RunResult {
     captured: step.captured ?? {},
     unboundSecrets: step.unboundSecrets ?? [],
     secretVarSets: step.secretVarSets ?? [],
+    runError: step.error ?? null,
   };
 }
 
@@ -76,13 +79,15 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const step = await runRequestDraft(workspace, toSaved(draft), selected);
       const run = runOf(step);
-      if (step.error) {
+      if (step.error && !step.grpc && !step.response) {
         put({ phase: "error", message: step.error, logs: run.logs });
         return;
       }
-      if (step.grpc) put({ phase: "grpc", data: step.grpc, run });
-      else if (step.response) put({ phase: "http", data: step.response, run });
-      else {
+      if (step.grpc) {
+        put({ phase: "grpc", data: step.grpc, run });
+      } else if (step.response) {
+        put({ phase: "http", data: step.response, run });
+      } else {
         put({
           phase: "error",
           message: `${draft.name} produced no response`,

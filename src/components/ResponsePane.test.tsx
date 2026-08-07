@@ -65,6 +65,27 @@ describe("ResponsePane", () => {
     expect(body()).toBe('{"a":1}');
   });
 
+  it("renders the preview mode in a sandboxed frame instead of the code view", () => {
+    render(<ResponsePane response={http()} findSignal={0} />);
+    fireEvent.click(screen.getByText("Preview"));
+
+    const frame = screen.getByTitle("Response preview") as HTMLIFrameElement;
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toBe('{"a":1}');
+    expect(document.querySelector(".code-view")).toBeNull();
+  });
+
+  it("collapses a JSON block from the gutter and restores it", () => {
+    render(<ResponsePane response={http()} findSignal={0} />);
+
+    const collapse = screen.getByLabelText("Collapse lines 1 to 3");
+    fireEvent.click(collapse);
+    expect(body()).not.toContain('"a"');
+
+    fireEvent.click(screen.getByLabelText("Expand lines 1 to 3"));
+    expect(body()).toContain('"a"');
+  });
+
   it("counts matches when searching in the body", () => {
     render(
       <ResponsePane response={http({ body: '{"a":1,"b":"a"}' })} findSignal={0} />,
@@ -99,7 +120,28 @@ describe("ResponsePane", () => {
     expect(screen.queryByText("script")).toBeNull();
   });
 
-  it("badges the Test Results tab with the failure count", () => {
+  const testsBadge = () =>
+    screen.getByText("Test Results").closest("button")?.querySelector(".count");
+
+  it("badges the Test Results tab green when every test passed", () => {
+    render(
+      <ResponsePane
+        response={http(
+          {},
+          {
+            tests: [{ name: "status", passed: true, detail: null }],
+            scriptTests: [{ name: "a", passed: true, detail: null }],
+          },
+        )}
+        findSignal={0}
+      />,
+    );
+
+    expect(testsBadge()?.textContent).toBe("2/2");
+    expect(testsBadge()?.classList.contains("count-success")).toBe(true);
+  });
+
+  it("badges the Test Results tab red when anything failed", () => {
     render(
       <ResponsePane
         response={http(
@@ -115,14 +157,37 @@ describe("ResponsePane", () => {
       />,
     );
 
-    const tab = screen.getByText("Test Results").closest("button");
-    expect(tab?.querySelector(".count")?.textContent).toBe("1");
+    expect(testsBadge()?.textContent).toBe("1/2");
+    expect(testsBadge()?.classList.contains("count-danger")).toBe(true);
   });
 
-  it("points at the Tests tab when no pm.test ran", () => {
+  it("shows no badge at all when the request carried no tests", () => {
+    render(<ResponsePane response={http()} findSignal={0} />);
+    expect(testsBadge()).toBeFalsy();
+  });
+
+  it("reads a run that died before its tests as a failure, not a pass", () => {
+    render(
+      <ResponsePane
+        response={http({}, { runError: "ReferenceError: pm is not defined" })}
+        findSignal={0}
+      />,
+    );
+
+    expect(testsBadge()?.textContent).toBe("0/0");
+    expect(testsBadge()?.classList.contains("count-danger")).toBe(true);
+
+    fireEvent.click(screen.getByText("Test Results"));
+    expect(screen.getByText(/ReferenceError: pm is not defined/)).toBeTruthy();
+  });
+
+  it("points at the Post-response Script tab when no pm.test ran", () => {
     render(<ResponsePane response={http()} findSignal={0} />);
     fireEvent.click(screen.getByText("Test Results"));
-    expect(screen.getByText(/Write pm\.test/)).toBeTruthy();
+    // The tab it names has to be the tab that exists: it was called Tests once.
+    expect(
+      screen.getByText("No tests ran. Write pm.test(…) in the Post-response Script tab of the request."),
+    ).toBeTruthy();
   });
 
   it("shows script console output", () => {

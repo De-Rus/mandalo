@@ -6,6 +6,7 @@ import {
   formatDuration,
   statusTone,
 } from "../lib/format";
+import { tallyTests } from "../lib/testTally";
 import { useEnv } from "../store/env";
 import { EMPTY_RUN, type ResponseState, type RunResult } from "../store/session";
 import { toast } from "../store/toast";
@@ -74,17 +75,25 @@ function testsOf(run: RunResult): TestResult[] {
 
 function TestResultsView({ run }: { run: RunResult }) {
   const all = testsOf(run);
-  if (all.length === 0)
+  if (all.length === 0 && run.runError === null)
     return (
       <Placeholder
         icon={<Check size={26} />}
-        line="No tests ran. Write pm.test(…) in the Tests tab of the request."
+        line="No tests ran. Write pm.test(…) in the Post-response Script tab of the request."
       />
     );
   const passed = all.filter((t) => t.passed).length;
   const failed = all.length - passed;
   return (
     <>
+      {run.runError !== null && (
+        <div className="notice notice-error notice-wrap">
+          <Warn size={13} />
+          <span className="notice-text">
+            This run stopped before its tests could finish: {run.runError}
+          </span>
+        </div>
+      )}
       <div className="test-summary">
         <span className={`chip ${failed > 0 ? "tone-muted" : "tone-success"}`}>
           {passed} passed
@@ -181,8 +190,16 @@ interface BodyViewProps {
   onFindHandled: () => void;
 }
 
+type BodyMode = "pretty" | "raw" | "preview";
+
+const BODY_MODES: { id: BodyMode; label: string }[] = [
+  { id: "pretty", label: "Pretty" },
+  { id: "raw", label: "Raw" },
+  { id: "preview", label: "Preview" },
+];
+
 function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
-  const [pretty, setPretty] = useState(true);
+  const [mode, setMode] = useState<BodyMode>("pretty");
   const [wrap, setWrap] = useState(false);
   const [numbers, setNumbers] = useState(true);
   const [query, setQuery] = useState("");
@@ -190,13 +207,14 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
   const findRef = useRef<HTMLInputElement>(null);
 
   const text = useMemo(
-    () => (pretty ? bodyText(body, binary) : body),
-    [body, binary, pretty],
+    () => (mode === "pretty" ? bodyText(body, binary) : body),
+    [body, binary, mode],
   );
   const matches = useMemo(() => countMatches(text, query), [text, query]);
 
   useEffect(() => {
     if (!findOpen) return;
+    setMode((m) => (m === "preview" ? "pretty" : m));
     findRef.current?.focus();
     findRef.current?.select();
     onFindHandled();
@@ -208,22 +226,21 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
     <>
       <div className="response-body-toolbar">
         <div className="segmented" role="group" aria-label="Body view">
-          <button
-            className={`segment ${pretty ? "segment-active" : ""}`}
-            onClick={() => setPretty(true)}
-          >
-            Pretty
-          </button>
-          <button
-            className={`segment ${pretty ? "" : "segment-active"}`}
-            onClick={() => setPretty(false)}
-          >
-            Raw
-          </button>
+          {BODY_MODES.map((m) => (
+            <button
+              key={m.id}
+              className={`segment ${mode === m.id ? "segment-active" : ""}`}
+              aria-pressed={mode === m.id}
+              onClick={() => setMode(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
         <button
           className={`toggle ${wrap ? "toggle-on" : ""}`}
           aria-pressed={wrap}
+          disabled={mode === "preview"}
           onClick={() => setWrap((v) => !v)}
         >
           Wrap
@@ -231,6 +248,7 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
         <button
           className={`toggle ${numbers ? "toggle-on" : ""}`}
           aria-pressed={numbers}
+          disabled={mode === "preview"}
           onClick={() => setNumbers((v) => !v)}
         >
           Line numbers
@@ -246,7 +264,10 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
             placeholder="Find in body"
             aria-label="Find in body"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setMode((m) => (m === "preview" ? "pretty" : m));
+              setQuery(e.target.value);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && matches > 0)
                 setCurrent((c) => (c + (e.shiftKey ? -1 : 1) + matches) % matches);
@@ -279,16 +300,25 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
           </span>
         </div>
       )}
-      <div className="response-scroll">
-        <JsonView
-          text={text}
-          highlight={pretty && !binary}
-          lineNumbers={numbers}
-          wrap={wrap}
-          query={query}
-          current={current}
+      {mode === "preview" ? (
+        <iframe
+          className="response-preview"
+          title="Response preview"
+          sandbox=""
+          srcDoc={text}
         />
-      </div>
+      ) : (
+        <div className="response-scroll">
+          <JsonView
+            text={text}
+            highlight={mode === "pretty" && !binary}
+            lineNumbers={numbers}
+            wrap={wrap}
+            query={query}
+            current={current}
+          />
+        </div>
+      )}
     </>
   );
 }
@@ -349,12 +379,21 @@ export function ResponsePane({ response, findSignal }: ResponsePaneProps) {
   const headers = grpc ? [] : (response.data as { headers: [string, string][] }).headers;
   const body = response.data.body;
   const binary = grpc ? false : (response.data as { binary: boolean }).binary;
-  const failed = testsOf(run).filter((t) => !t.passed).length;
+  const tally = tallyTests(run.tests, run.scriptTests, run.runError);
 
   const items: TabItem[] = [
     { id: "body", label: "Body" },
     { id: "headers", label: "Headers", count: headers.length },
-    { id: "tests", label: "Test Results", count: failed, dot: failed > 0 },
+    {
+      id: "tests",
+      label: "Test Results",
+      badge: tally
+        ? {
+            text: `${tally.passed}/${tally.total}`,
+            tone: tally.ok ? "success" : "danger",
+          }
+        : undefined,
+    },
     { id: "console", label: "Console", count: run.logs.length },
   ];
 
@@ -366,7 +405,7 @@ export function ResponsePane({ response, findSignal }: ResponsePaneProps) {
           <span className="chip tone-success">OK</span>
         ) : (
           <span
-            className={`chip tone-${statusTone((response.data as { status: number }).status)}`}
+            className={`chip status-chip tone-${statusTone((response.data as { status: number }).status)}`}
           >
             {(response.data as { status: number }).status}{" "}
             {(response.data as { statusText: string }).statusText}

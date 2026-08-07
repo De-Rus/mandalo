@@ -1,9 +1,10 @@
-// INTERIM: a hand-written reader for the `.http` and `.grpc` formats, so the tree,
-// the CodeLens positions, the diagnostics and the in-process engine work without
-// spawning the CLI. It is to be replaced by a WASM build of `crates/core`, which is
-// the reference implementation; until then `test/unit/parserParity.test.ts` parses a
-// corpus with both and fails the build the moment they disagree.
-import type { Auth, RequestModel } from "./model";
+// INTERIM: the one hand-written reader for the `.http` and `.grpc` formats, shared by
+// the browser build and the editor extension, so the tree, the CodeLens positions, the
+// diagnostics and both in-process engines work without spawning the CLI. It is to be
+// replaced by a WASM build of `crates/core`, which is the reference implementation;
+// until then `editor-extension/test/unit/parserParity.test.ts` parses a corpus with
+// both and fails the build the moment they disagree.
+import type { Auth, FormDataRowModel, RequestModel } from "./model";
 
 export const HTTP_EXTENSIONS = ["http", "rest"];
 
@@ -12,6 +13,7 @@ export type TextFileKind = "http" | "grpc";
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
 const HTTP_VERSIONS = ["HTTP/1.1", "HTTP/1.0", "HTTP/2.0", "HTTP/2", "HTTP/3"];
 const GRAPHQL_MARKER = "X-REQUEST-TYPE";
+const SSE_MEDIA_TYPE = "text/event-stream";
 const PROTO_KEY = "proto";
 const GRPC_RESERVED = ["url", "service", "method", "message", "proto-path", "protos", "import"];
 
@@ -34,17 +36,28 @@ export interface SourceLine {
   number: number;
 }
 
+export interface Span {
+  start: number;
+  end: number;
+}
+
 export interface Segment {
   lines: SourceLine[];
   name: string | null;
   /** Zero-based line of the `###` separator, or 0 for a file that has none. */
   lineIndex: number;
+  /**
+   * From the first byte of the `###` line (or of the file) to the last byte of the
+   * segment, so a whole request can be cut out of the file.
+   */
+  span: Span;
 }
 
 export interface ParsedBlock {
   index: number;
   name: string;
   lineIndex: number;
+  span: Span;
   model: RequestModel;
 }
 
@@ -98,15 +111,24 @@ function validHeaderName(name: string): boolean {
   return name !== "" && /^[A-Za-z0-9\-_.{}$]+$/.test(name);
 }
 
-export function segmentsOf(lines: SourceLine[]): Segment[] {
-  const out: Segment[] = [{ lines: [], name: null, lineIndex: 0 }];
+export function segmentsOf(lines: SourceLine[], length = 0): Segment[] {
+  const out: Segment[] = [{ lines: [], name: null, lineIndex: 0, span: { start: 0, end: 0 } }];
   for (const line of lines) {
     if (isSeparator(line.text)) {
-      out.push({ lines: [], name: line.text.slice(3).trim(), lineIndex: line.number - 1 });
+      out[out.length - 1]!.span.end = line.start;
+      out.push({
+        lines: [],
+        name: line.text.slice(3).trim(),
+        lineIndex: line.number - 1,
+        span: { start: line.start, end: line.end },
+      });
       continue;
     }
-    out[out.length - 1]!.lines.push(line);
+    const last = out[out.length - 1]!;
+    last.span.end = line.end;
+    last.lines.push(line);
   }
+  out[out.length - 1]!.span.end = length;
   return out;
 }
 
@@ -184,6 +206,8 @@ interface Preamble {
   vars: [string, string][];
   named: string | null;
   pre: string | undefined;
+  autoReconnect: boolean | undefined;
+  inheritedAuth: boolean;
   consumed: number;
 }
 
@@ -208,7 +232,14 @@ function readScript(lines: SourceLine[], index: number): { text: string; next: n
 }
 
 function readPreamble(lines: SourceLine[]): Preamble {
-  const out: Preamble = { vars: [], named: null, pre: undefined, consumed: 0 };
+  const out: Preamble = {
+    vars: [],
+    named: null,
+    pre: undefined,
+    autoReconnect: undefined,
+    inheritedAuth: false,
+    consumed: 0,
+  };
   let index = 0;
   while (index < lines.length) {
     const line = lines[index]!;
@@ -224,10 +255,31 @@ function readPreamble(lines: SourceLine[]): Preamble {
         const space = directive.search(/\s/);
         const key = space === -1 ? directive : directive.slice(0, space);
         const value = space === -1 ? "" : directive.slice(space).trim();
-        if (key.toLowerCase() !== "name") {
+        const directiveKey = key.toLowerCase();
+        if (directiveKey === "auth") {
+          if (value.toLowerCase() !== "inherited") {
+            throw at(
+              line,
+              "`@auth` only takes `inherited` — write the auth itself as an Authorization header",
+            );
+          }
+          out.inheritedAuth = true;
+          index += 1;
+          continue;
+        }
+        if (directiveKey === "reconnect") {
+          const setting = value.toLowerCase();
+          if (setting !== "on" && setting !== "off" && setting !== "") {
+            throw at(line, `\`@reconnect\` is on or off, not "${value}"`);
+          }
+          out.autoReconnect = setting !== "off";
+          index += 1;
+          continue;
+        }
+        if (directiveKey !== "name") {
           throw at(
             line,
-            `Mándalo does not support the \`@${key}\` directive — a .http file it writes carries no directives beyond \`@name\``,
+            `Mándalo does not support the \`@${key}\` directive — a .http file it writes carries no directives beyond \`@name\`, \`@auth\` and \`@reconnect\``,
           );
         }
         if (value === "") throw at(line, "`@name` needs a name");
@@ -338,9 +390,13 @@ interface Tail {
   post: string | undefined;
 }
 
-function readTail(lines: SourceLine[], from: number): Tail {
+// The body is a slice of the source, never a re-join of the parsed lines: a CRLF file
+// puts `\r\n` between its body lines and those bytes go on the wire, exactly as the
+// Rust reader's span does.
+function readTail(source: string, lines: SourceLine[], from: number): Tail {
   const out: Tail = { body: undefined, bodyLine: undefined, post: undefined };
-  const collected: string[] = [];
+  let bodyStart: number | undefined;
+  let bodyEnd = 0;
   let index = from;
   while (index < lines.length) {
     const line = lines[index]!;
@@ -361,18 +417,352 @@ function readTail(lines: SourceLine[], from: number): Tail {
       }
       throw at(line, "nothing may follow a `> {% … %}` response script inside a request");
     }
-    if (trimmed === "" && collected.length === 0) {
+    if (trimmed === "" && bodyStart === undefined) {
       index += 1;
       continue;
     }
-    if (collected.length === 0) out.bodyLine = line;
-    collected.push(line.text);
+    if (bodyStart === undefined) {
+      bodyStart = line.start;
+      out.bodyLine = line;
+    }
+    bodyEnd = line.end;
     index += 1;
   }
-  const body = collected.join("\n").replace(/\s+$/, "");
+  if (bodyStart === undefined) return out;
+  const body = source.slice(bodyStart, bodyEnd).replace(/\s+$/, "");
   if (body !== "") out.body = body;
   else out.bodyLine = undefined;
   return out;
+}
+
+/** The Rust twin is `accepts_event_stream`: any Accept alternative naming the type. */
+export function acceptsEventStream(value: string): boolean {
+  return value
+    .split(",")
+    .some((part) => (part.split(";")[0] ?? "").trim().toLowerCase() === SSE_MEDIA_TYPE);
+}
+
+function headerParam(value: string, name: string): string | undefined {
+  for (const part of value.split(";").slice(1)) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim().toLowerCase() === name) {
+      return part
+        .slice(eq + 1)
+        .trim()
+        .replace(/^"|"$/g, "");
+    }
+  }
+  return undefined;
+}
+
+function isMultipartFormdata(value: string): boolean {
+  return (value.split(";")[0] ?? "").trim().toLowerCase() === "multipart/form-data";
+}
+
+/**
+ * Which of the two form-data spellings a body is written in, decided by its own first
+ * line: a boundary delimiter opens the literal wire format, anything else is the
+ * field-per-line form Mándalo writes. The Rust twin is `is_literal_multipart`.
+ */
+function isLiteralMultipart(body: string): boolean {
+  const first = body.split("\n").find((line) => line.trim() !== "");
+  return first !== undefined && first.trim().startsWith("--");
+}
+
+/**
+ * The path in a `= < ./path` value, if that is what the value is. `<` opens a file
+ * reference only when whitespace or a `.` follows it, so `k = <b>bold</b>` stays the
+ * text it looks like. The Rust twin is `form_file_ref`.
+ */
+function formFileRef(value: string): string | undefined {
+  if (!value.startsWith("<")) return undefined;
+  const rest = value.slice(1);
+  if (rest === "" || rest.startsWith(" ") || rest.startsWith("\t") || rest.startsWith(".")) {
+    return rest;
+  }
+  return undefined;
+}
+
+/** The `; type=…` a file field may carry, split off the path(s) it follows. */
+function splitFileRef(
+  line: SourceLine,
+  rest: string,
+): { pathsRaw: string; contentType: string | undefined } {
+  const semicolon = rest.indexOf(";");
+  if (semicolon === -1) return { pathsRaw: rest, contentType: undefined };
+  const params = rest.slice(semicolon + 1);
+  const eq = params.indexOf("=");
+  if (eq === -1) throw at(line, "a form file takes one parameter, written `; type=text/plain`");
+  const key = params.slice(0, eq).trim();
+  if (key.toLowerCase() !== "type") {
+    throw at(
+      line,
+      `a form file takes only \`; type=…\`, not "${key}" — every other part header belongs on the request`,
+    );
+  }
+  const value = params.slice(eq + 1).trim();
+  if (value === "") throw at(line, "`; type=` needs a content type");
+  return { pathsRaw: rest.slice(0, semicolon), contentType: value };
+}
+
+function nextFileAngle(s: string): number | undefined {
+  let from = 0;
+  while (from < s.length) {
+    const i = s.indexOf("<", from);
+    if (i === -1) return undefined;
+    if (i > 0 && !/\s/.test(s[i - 1]!)) {
+      from = i + 1;
+      continue;
+    }
+    const after = s.slice(i + 1);
+    if (after === "" || after.startsWith(" ") || after.startsWith("\t") || after.startsWith(".")) {
+      return i;
+    }
+    from = i + 1;
+  }
+  return undefined;
+}
+
+function stripLeadingFileAngle(s: string): string | undefined {
+  if (!s.startsWith("<")) return undefined;
+  const rest = s.slice(1);
+  if (rest === "" || rest.startsWith(" ") || rest.startsWith("\t") || rest.startsWith(".")) {
+    return rest;
+  }
+  return undefined;
+}
+
+/** One or more `< ./path` references on a single form field line. */
+function parseFilePaths(line: SourceLine, raw: string): string[] {
+  const paths: string[] = [];
+  let rest = raw.trim();
+  if (rest === "") throw at(line, "the form-data file needs a path");
+  while (rest !== "") {
+    rest = rest.trimStart();
+    if (rest === "") break;
+    const afterAngle = stripLeadingFileAngle(rest);
+    if (afterAngle !== undefined) rest = afterAngle.trimStart();
+    else if (paths.length > 0) {
+      throw at(line, "another file on this field starts with `< ./path`");
+    }
+    const next = nextFileAngle(rest);
+    const path = (next === undefined ? rest : rest.slice(0, next)).trim();
+    rest = next === undefined ? "" : rest.slice(next);
+    if (path === "") throw at(line, "the form-data file needs a path");
+    paths.push(workspaceRelative(line, path, "the form-data file"));
+  }
+  return paths;
+}
+
+function sameFileField(a: FormDataRowModel, b: FormDataRowModel): boolean {
+  return (
+    (a.files?.length ?? 0) > 0 &&
+    (b.files?.length ?? 0) > 0 &&
+    a.key === b.key &&
+    a.contentType === b.contentType
+  );
+}
+
+/** Repeated `name = < path` lines fold into one field with several files. */
+function pushFormRow(rows: FormDataRowModel[], row: FormDataRowModel): void {
+  const last = rows[rows.length - 1];
+  if (last !== undefined && sameFileField(last, row)) {
+    last.files = [...(last.files ?? []), ...(row.files ?? [])];
+    return;
+  }
+  rows.push(row);
+}
+
+function parseFormFields(body: string, bodyLine: SourceLine): FormDataRowModel[] {
+  const rows: FormDataRowModel[] = [];
+  const raw = body.split("\n");
+  let cursor = bodyLine.start;
+  for (let index = 0; index < raw.length; index += 1) {
+    const source = raw[index]!;
+    const start = cursor;
+    cursor += source.length + 1;
+    const text = source.trim();
+    if (text === "") continue;
+    const line: SourceLine = {
+      text,
+      start,
+      end: start + Math.max(source.length, 1),
+      number: bodyLine.number + index,
+    };
+    const eq = text.indexOf("=");
+    const angle = text.indexOf("<");
+    const found = [eq, angle].filter((position) => position !== -1);
+    if (found.length === 0) {
+      throw at(
+        line,
+        `a form field reads \`name = value\`, or \`name = < ./path\` to send a file, not "${text}"`,
+      );
+    }
+    const position = Math.min(...found);
+    const separator = text[position]!;
+    const key = text.slice(0, position).trim();
+    if (key === "") throw at(line, `this form field has no name before its \`${separator}\``);
+    const value = text.slice(position + 1).trim();
+    // `name < ./path` is the shape Mándalo wrote for one release. It still reads.
+    const reference = separator === "<" ? value : formFileRef(value);
+    if (reference === undefined) {
+      pushFormRow(rows, { key, value });
+      continue;
+    }
+    const { pathsRaw, contentType } = splitFileRef(line, reference);
+    const row: FormDataRowModel = {
+      key,
+      files: parseFilePaths(line, pathsRaw),
+    };
+    if (contentType !== undefined) row.contentType = contentType;
+    pushFormRow(rows, row);
+  }
+  return rows;
+}
+
+function multipartFileRef(content: string): string | undefined {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith("<")) return undefined;
+  const rest = trimmed.slice(1);
+  if (rest === "" || rest.startsWith(" ") || rest.startsWith("\t")) return rest;
+  return undefined;
+}
+
+function parseMultipart(
+  body: string,
+  boundary: string,
+  bodyLine: SourceLine,
+): FormDataRowModel[] {
+  const delimiter = `--${boundary}`;
+  const closing = `--${boundary}--`;
+  const raw = body.split("\n");
+  const lines = raw.map((line) => line.replace(/\r$/, ""));
+  // Offsets are walked over the unstripped lines so a CRLF file still squiggles
+  // the line the reader is looking at.
+  const starts: number[] = [];
+  let cursor = bodyLine.start;
+  for (const line of raw) {
+    starts.push(cursor);
+    cursor += line.length + 1;
+  }
+  const lineAt = (index: number): SourceLine => {
+    const start = starts[index] ?? bodyLine.start;
+    return {
+      text: lines[index] ?? "",
+      start,
+      end: start + Math.max(raw[index]?.length ?? 0, 1),
+      number: bodyLine.number + index,
+    };
+  };
+  const unclosed = (line: SourceLine): TextFormatError =>
+    at(line, `this multipart body is never closed with \`${closing}\``);
+  const rows: FormDataRowModel[] = [];
+  let index = 0;
+  while (index < lines.length && lines[index]!.trim() !== delimiter) {
+    if (lines[index]!.trim() !== "") {
+      throw at(
+        lineAt(index),
+        `a multipart body starts at its first \`${delimiter}\` line — nothing may come before it`,
+      );
+    }
+    index += 1;
+  }
+  if (index === lines.length) {
+    throw at(bodyLine, `this multipart body has no \`${delimiter}\` part`);
+  }
+  while (index < lines.length) {
+    const partAt = index;
+    index += 1;
+    let name: string | undefined;
+    let filename: string | undefined;
+    let contentType: string | undefined;
+    for (;;) {
+      const line = lines[index];
+      if (line === undefined) throw unclosed(lineAt(partAt));
+      const trimmed = line.trim();
+      if (trimmed === "") {
+        index += 1;
+        break;
+      }
+      if (trimmed === delimiter || trimmed === closing) {
+        throw at(
+          lineAt(index),
+          "a part's headers end with a blank line before its content — add one before this boundary",
+        );
+      }
+      const colon = trimmed.indexOf(":");
+      if (colon === -1) throw at(lineAt(index), "a part header reads `Name: value`");
+      const key = trimmed.slice(0, colon).trim().toLowerCase();
+      const value = trimmed.slice(colon + 1).trim();
+      if (key === "content-disposition") {
+        if (!value.toLowerCase().startsWith("form-data")) {
+          throw at(
+            lineAt(index),
+            `a form part's disposition is \`form-data\`, not "${value}"`,
+          );
+        }
+        name = headerParam(value, "name");
+        filename = headerParam(value, "filename");
+      } else if (key === "content-type") {
+        contentType = value;
+      } else {
+        throw at(
+          lineAt(index),
+          `Mándalo reads Content-Disposition and Content-Type part headers, not "${key}"`,
+        );
+      }
+      index += 1;
+    }
+    if (name === undefined || name === "") {
+      throw at(lineAt(partAt), 'every part needs `Content-Disposition: form-data; name="…"`');
+    }
+    const contentFirst = index;
+    const content: string[] = [];
+    for (;;) {
+      const line = lines[index];
+      if (line === undefined) throw unclosed(lineAt(partAt));
+      const trimmed = line.trim();
+      if (trimmed === delimiter || trimmed === closing) break;
+      content.push(line);
+      index += 1;
+    }
+    while (content.length > 0 && content[content.length - 1]!.trim() === "") content.pop();
+    const textContent = content.join("\n");
+    const fileRef = multipartFileRef(textContent);
+    if (fileRef !== undefined) {
+      if (textContent.trim().split("\n").length > 1) {
+        throw at(lineAt(contentFirst), "a `< file` part holds only the file line");
+      }
+      const row: FormDataRowModel = {
+        key: name,
+        files: [workspaceRelative(lineAt(contentFirst), fileRef, "the form-data file")],
+      };
+      if (contentType !== undefined) row.contentType = contentType;
+      pushFormRow(rows, row);
+    } else if (filename !== undefined) {
+      throw at(
+        lineAt(contentFirst),
+        "a file part references its file with `< path` — inline file content is not supported",
+      );
+    } else if (contentType !== undefined) {
+      throw at(
+        lineAt(partAt),
+        "Mándalo sends a text part as plain text — a per-part content type belongs on a `< file` part",
+      );
+    } else {
+      pushFormRow(rows, { key: name, value: textContent });
+    }
+    if (lines[index]!.trim() === closing) {
+      for (let extra = index + 1; extra < lines.length; extra += 1) {
+        if (lines[extra]!.trim() !== "") {
+          throw at(lineAt(extra), `nothing may follow the closing \`${closing}\` line`);
+        }
+      }
+      return rows;
+    }
+  }
+  throw unclosed(bodyLine);
 }
 
 function workspaceRelative(line: SourceLine, raw: string, what: string): string {
@@ -426,7 +816,12 @@ function blockName(segment: Segment, named: string | null, fallback: string): st
   return named ?? fallback;
 }
 
-function parseHttpBlock(stem: string, index: number, segment: Segment): ParsedBlock {
+function parseHttpBlock(
+  source: string,
+  stem: string,
+  index: number,
+  segment: Segment,
+): ParsedBlock {
   const lines = segment.lines;
   const preamble = readPreamble(lines);
   if (preamble.consumed >= lines.length) {
@@ -435,7 +830,7 @@ function parseHttpBlock(stem: string, index: number, segment: Segment): ParsedBl
   }
   const requestLine = readRequestLine(lines, preamble.consumed);
   const { headers, next } = readHeaders(lines, requestLine.next);
-  const tail = readTail(lines, next);
+  const tail = readTail(source, lines, next);
 
   const badMarker = headers.find(
     (header) =>
@@ -480,7 +875,35 @@ function parseHttpBlock(stem: string, index: number, segment: Segment): ParsedBl
     }
   }
 
-  const kind = isGraphql ? "graphql" : "http";
+  const isEventStream = kept.some(
+    ([name, value]) => name.toLowerCase() === "accept" && acceptsEventStream(value),
+  );
+  const kind = isGraphql ? "graphql" : isEventStream ? "sse" : "http";
+  let formdata: FormDataRowModel[] | undefined;
+  if (kind === "http" && bodyFile === undefined && tail.body !== undefined && tail.bodyLine !== undefined) {
+    const contentTypeAt = kept.findIndex(([k]) => k.toLowerCase() === "content-type");
+    if (contentTypeAt !== -1 && isMultipartFormdata(kept[contentTypeAt]![1])) {
+      const declared = headerParam(kept[contentTypeAt]![1], "boundary");
+      if (isLiteralMultipart(tail.body)) {
+        if (declared === undefined || declared === "") {
+          throw at(
+            tail.bodyLine,
+            "multipart/form-data needs a `boundary=` parameter in its Content-Type",
+          );
+        }
+        formdata = parseMultipart(tail.body, declared, tail.bodyLine);
+      } else {
+        if (declared !== undefined && declared !== "") {
+          throw at(
+            tail.bodyLine,
+            "this form body is written as `name = value` lines, which carry no boundary — remove the `boundary=` parameter, because the one on the wire is chosen when the request is sent",
+          );
+        }
+        formdata = parseFormFields(tail.body, tail.bodyLine);
+      }
+      kept.splice(contentTypeAt, 1);
+    }
+  }
   const model: RequestModel = {
     schemaVersion: 1,
     id: `${slug(stem)}-${index}`,
@@ -489,21 +912,29 @@ function parseHttpBlock(stem: string, index: number, segment: Segment): ParsedBl
     method: requestLine.method,
     url: requestLine.url,
     headers: kept,
-    auth,
+    auth: preamble.inheritedAuth && auth.type !== "none" ? { type: "inherited", auth } : auth,
     scripts: {},
     tests: [],
     captures: [],
   };
   if (preamble.pre !== undefined) model.scripts.pre = preamble.pre;
   if (tail.post !== undefined) model.scripts.post = tail.post;
+  if (preamble.autoReconnect !== undefined)
+    model.stream = { autoReconnect: preamble.autoReconnect };
   if (bodyFile !== undefined) model.bodyFile = bodyFile;
   else if (kind === "graphql") model.graphql = splitGraphql(tail.body ?? "");
+  else if (formdata !== undefined) model.formdata = formdata;
   else if (tail.body !== undefined) model.body = tail.body;
 
-  return { index, name: model.name, lineIndex: segment.lineIndex, model };
+  return { index, name: model.name, lineIndex: segment.lineIndex, span: segment.span, model };
 }
 
-function parseGrpcBlock(stem: string, index: number, segment: Segment): ParsedBlock {
+function parseGrpcBlock(
+  source: string,
+  stem: string,
+  index: number,
+  segment: Segment,
+): ParsedBlock {
   const lines = segment.lines;
   const preamble = readPreamble(lines);
   if (preamble.consumed >= lines.length) {
@@ -534,7 +965,7 @@ function parseGrpcBlock(stem: string, index: number, segment: Segment): ParsedBl
   }
 
   const { headers, next } = readHeaders(lines, preamble.consumed + 1);
-  const tail = readTail(lines, next);
+  const tail = readTail(source, lines, next);
 
   const protoPaths: string[] = [];
   const metadata: [string, string][] = [];
@@ -562,10 +993,10 @@ function parseGrpcBlock(stem: string, index: number, segment: Segment): ParsedBl
   const model: RequestModel = {
     schemaVersion: 1,
     id: `${slug(stem)}-${index}`,
-    name: blockName(segment, preamble.named, body),
+    name: blockName(segment, preamble.named, `${service}/${method}`),
     kind: "grpc",
-    method: "GRPC",
-    url: body,
+    method: "POST",
+    url: target,
     headers: [],
     auth: { type: "none" },
     grpc: { protoPaths, service, method, message: tail.body ?? "{}", metadata },
@@ -575,7 +1006,7 @@ function parseGrpcBlock(stem: string, index: number, segment: Segment): ParsedBl
   };
   if (preamble.pre !== undefined) model.scripts.pre = preamble.pre;
   if (tail.post !== undefined) model.scripts.post = tail.post;
-  return { index, name: model.name, lineIndex: segment.lineIndex, model };
+  return { index, name: model.name, lineIndex: segment.lineIndex, span: segment.span, model };
 }
 
 /**
@@ -587,7 +1018,7 @@ export function parseTextDocument(
   source: string,
   fileKind: TextFileKind,
 ): ParsedDocument {
-  const segments = segmentsOf(sourceLines(source));
+  const segments = segmentsOf(sourceLines(source), source.length);
   const vars: [string, string][] = [];
   const blocks: ParsedBlock[] = [];
   for (const segment of segments) {
@@ -598,8 +1029,8 @@ export function parseTextDocument(
     if (isDeclarative(segment) && (segment.name ?? "") === "" && preamble.named === null) continue;
     blocks.push(
       fileKind === "grpc"
-        ? parseGrpcBlock(stem, blocks.length, segment)
-        : parseHttpBlock(stem, blocks.length, segment),
+        ? parseGrpcBlock(source, stem, blocks.length, segment)
+        : parseHttpBlock(source, stem, blocks.length, segment),
     );
   }
   return { vars, blocks };
@@ -615,6 +1046,15 @@ export function withFileVars(document: ParsedDocument): ParsedBlock[] {
     model.headers = model.headers.map(([k, v]) => [substitute(k, vars), substitute(v, vars)]);
     if (model.body !== undefined) model.body = substitute(model.body, vars);
     if (model.bodyFile !== undefined) model.bodyFile = substitute(model.bodyFile, vars);
+    if (model.formdata !== undefined) {
+      model.formdata = model.formdata.map((row) => {
+        const out: typeof row = { key: substitute(row.key, vars) };
+        if (row.value !== undefined) out.value = substitute(row.value, vars);
+        if (row.files !== undefined) out.files = row.files.map((f) => substitute(f, vars));
+        if (row.contentType !== undefined) out.contentType = row.contentType;
+        return out;
+      });
+    }
     if (model.graphql) {
       model.graphql = {
         query: substitute(model.graphql.query, vars),

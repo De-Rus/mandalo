@@ -1,17 +1,24 @@
-import { importBundle, importPostman, type ImportReport } from "./api";
+import {
+  importBundle,
+  importOpenapi,
+  importPostman,
+  type ImportReport,
+} from "./api";
+import type { ImportKind } from "./importKind";
 
-export function isBundle(json: string): boolean {
-  const parsed: unknown = JSON.parse(json);
-  return (
-    typeof parsed === "object" && parsed !== null && "mandaloBundle" in parsed
-  );
-}
+const IMPORTERS: Record<
+  ImportKind,
+  (workspace: string, source: string) => Promise<ImportReport>
+> = {
+  bundle: importBundle,
+  openapi: importOpenapi,
+  postman: importPostman,
+};
 
-export function importFromText(
+export function importAs(
   workspace: string,
-  json: string,
+  kind: ImportKind,
+  source: string,
 ): Promise<ImportReport> {
-  return isBundle(json)
-    ? importBundle(workspace, json)
-    : importPostman(workspace, json);
+  return IMPORTERS[kind](workspace, source);
 }

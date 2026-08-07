@@ -1,5 +1,55 @@
-import { useRef } from "react";
+import {
+  autocompletion,
+  completionKeymap,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from "@codemirror/autocomplete";
+import { javascript, javascriptLanguage } from "@codemirror/lang-javascript";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { keymap } from "@codemirror/view";
+import { lintScriptSource, PM_SURFACE, type ScriptKind } from "../lib/script/lint";
 import { insertAt, type Snippet } from "../lib/snippets";
+import { useCodeMirror } from "./CodeMirrorEditor";
+
+function pmCompletions(kind: ScriptKind): (context: CompletionContext) => CompletionResult | null {
+  return (context) => {
+    const match = context.matchBefore(/pm\.(?:\w+\.)?\w*$/);
+    if (!match) return null;
+    const chain = match.text.slice(3).split(".");
+    const lastStart = match.to - chain[chain.length - 1]!.length;
+    if (chain.length === 1) {
+      const options: Completion[] = PM_SURFACE.filter(
+        (entry) => !(entry.postOnly === true && kind === "pre"),
+      ).map((entry) => ({ label: entry.label, type: entry.children ? "namespace" : "function", detail: entry.detail }));
+      return { from: lastStart, options, validFor: /^\w*$/ };
+    }
+    const parent = PM_SURFACE.find((entry) => entry.label === chain[0]);
+    if (!parent?.children) return null;
+    return {
+      from: lastStart,
+      options: parent.children.map((child) => ({
+        label: child.label,
+        type: "method",
+        detail: child.detail,
+      })),
+      validFor: /^\w*$/,
+    };
+  };
+}
+
+function pmLinter(kind: ScriptKind) {
+  return linter((view): Diagnostic[] =>
+    view.state.doc.toString().trim() === ""
+      ? []
+      : lintScriptSource(view.state.doc.toString(), kind).map((finding) => ({
+          from: finding.from,
+          to: finding.to,
+          severity: finding.severity,
+          message: finding.message,
+        })),
+  );
+}
 
 interface ScriptEditorProps {
   value: string;
@@ -7,6 +57,7 @@ interface ScriptEditorProps {
   snippets: Snippet[];
   placeholder: string;
   label: string;
+  kind: ScriptKind;
 }
 
 export function ScriptEditor({
@@ -15,58 +66,32 @@ export function ScriptEditor({
   snippets,
   placeholder,
   label,
+  kind,
 }: ScriptEditorProps) {
-  const areaRef = useRef<HTMLTextAreaElement>(null);
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const lines = value === "" ? 1 : value.split("\n").length;
+  const { hostRef, handle } = useCodeMirror({
+    value,
+    onChange,
+    label,
+    placeholder,
+    extensions: [
+      javascript(),
+      javascriptLanguage.data.of({ autocomplete: pmCompletions(kind) }),
+      autocompletion(),
+      keymap.of(completionKeymap),
+      pmLinter(kind),
+      lintGutter(),
+    ],
+  });
 
   const insert = (snippet: Snippet) => {
-    const area = areaRef.current;
-    const cursor = area ? area.selectionStart : value.length;
-    const next = insertAt(value, cursor, snippet.code);
-    onChange(next.text);
-    requestAnimationFrame(() => {
-      if (!area) return;
-      area.focus();
-      area.setSelectionRange(next.cursor, next.cursor);
-    });
+    const next = insertAt(handle.text(), handle.cursor(), snippet.code);
+    handle.replace(next.text, next.cursor);
   };
 
   return (
     <div className="script-layout">
       <div className="script-main">
-        <div className="code-editor">
-          <div className="code-gutter" ref={gutterRef} aria-hidden="true">
-            {Array.from({ length: lines }, (_, i) => (
-              <div key={i}>{i + 1}</div>
-            ))}
-          </div>
-          <textarea
-            ref={areaRef}
-            className="code-area"
-            value={value}
-            aria-label={label}
-            placeholder={placeholder}
-            spellCheck={false}
-            onScroll={(e) => {
-              if (gutterRef.current)
-                gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-            }}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Tab") return;
-              e.preventDefault();
-              const area = e.currentTarget;
-              const start = area.selectionStart;
-              const end = area.selectionEnd;
-              const next = `${value.slice(0, start)}  ${value.slice(end)}`;
-              onChange(next);
-              requestAnimationFrame(() =>
-                area.setSelectionRange(start + 2, start + 2),
-              );
-            }}
-          />
-        </div>
+        <div className="code-editor cm-host" ref={hostRef} />
       </div>
       <div className="snippets">
         <span className="section-title">Snippets</span>

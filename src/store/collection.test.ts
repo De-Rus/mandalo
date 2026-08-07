@@ -5,6 +5,7 @@ import { newDraft } from "../lib/draft";
 import { flushPendingSaves, useCollection } from "./collection";
 import { useSession } from "./session";
 import { useTabs } from "./tabs";
+import { useToasts } from "./toast";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -72,6 +73,7 @@ describe("collection store", () => {
     mockBackend();
     useTabs.setState({ openIds: [], dirtyIds: [] });
     useSession.setState({ responses: {} });
+    useToasts.setState({ items: [] });
     useCollection.setState({
       workspace: null,
       tree: { collections: [], skipped: [] },
@@ -167,6 +169,152 @@ describe("collection store", () => {
       path: null,
       folder: "users",
     });
+  });
+
+  it("creates a Scratch collection on the first request of an empty workspace", async () => {
+    let tree: Tree = { collections: [], skipped: [] };
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "list_workspaces")
+        return Promise.resolve({
+          items: [{ id: "w1", path: "/ws", name: "ws" }],
+          active: "w1",
+        });
+      if (cmd === "list_tree") return Promise.resolve(tree);
+      if (cmd === "create_collection") {
+        tree = TREE;
+        return Promise.resolve({ id: "c1", slug: "acme", name: "Scratch" });
+      }
+      if (cmd === "save_request")
+        return Promise.resolve({ path: "new-request.toml" });
+      return Promise.resolve(undefined);
+    });
+
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    expect(useCollection.getState().activeId).toBeNull();
+
+    useCollection.getState().addRequest();
+    await flushMicrotasks();
+
+    expect(invoke).toHaveBeenCalledWith("create_collection", {
+      workspace: "/ws",
+      name: "Scratch",
+    });
+    expect(useToasts.getState().items.map((t) => t.text)).toEqual([
+      'Created collection "Scratch"',
+    ]);
+    const id = useCollection.getState().activeId as string;
+    expect(id).toBeTruthy();
+    expect(useCollection.getState().drafts[id].collection).toBe("acme");
+    expect(useTabs.getState().openIds).toEqual([id]);
+    expect(useCollection.getState().error).toBeNull();
+    const save = invoke.mock.calls.find((c) => c[0] === "save_request");
+    expect(save?.[1]).toMatchObject({ collection: "acme", path: null, folder: "" });
+  });
+
+  it("fails loud when a request is added with no workspace at all", () => {
+    useCollection.getState().addRequest();
+    expect(useCollection.getState().error).toBe(
+      "Open a workspace before adding requests",
+    );
+    expect(invoke).not.toHaveBeenCalledWith("create_collection", expect.anything());
+  });
+
+  it("duplicates a request into the same folder and opens the copy", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+
+    await useCollection.getState().duplicateRequest("r1");
+    await flushMicrotasks();
+
+    const save = invoke.mock.calls.find((c) => c[0] === "save_request");
+    expect(save?.[1]).toMatchObject({
+      workspace: "/ws",
+      collection: "acme",
+      path: null,
+      folder: "users",
+    });
+    const request = (save?.[1] as { request: SavedRequest }).request;
+    expect(request.name).toBe("List users copy");
+    expect(request.id).not.toBe("r1");
+
+    const s = useCollection.getState();
+    expect(s.activeId).toBe(request.id);
+    expect(s.drafts[request.id].name).toBe("List users copy");
+    expect(s.drafts[request.id].url).toBe("https://api.dev/users");
+    expect(useTabs.getState().openIds).toContain(request.id);
+  });
+
+  it("flushes a pending edit before duplicating so the copy carries it", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+
+    useCollection.getState().updateActive({ url: "https://api.dev/people" });
+    const duplicating = useCollection.getState().duplicateRequest("r1");
+    await flushMicrotasks();
+    await duplicating;
+
+    const saves = invoke.mock.calls.filter((c) => c[0] === "save_request");
+    expect(saves[0][1]).toMatchObject({ path: "users/list-users.toml" });
+    expect(
+      (saves[0][1] as { request: SavedRequest }).request.url,
+    ).toBe("https://api.dev/people");
+    expect(useTabs.getState().dirtyIds).toEqual([]);
+  });
+
+  it("surfaces a duplicate failure through the store error", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+
+    invoke.mockImplementationOnce(() => Promise.reject("unreadable"));
+    await useCollection.getState().duplicateRequest("r1");
+    expect(useCollection.getState().error).toBe("unreadable");
+  });
+
+  it("moves a request to another folder and keeps it open", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+    mockBackend({ move_request: { path: "admin/list-users.toml" } });
+
+    await useCollection.getState().moveRequest("r1", "admin");
+    await flushMicrotasks();
+
+    expect(invoke).toHaveBeenCalledWith("move_request", {
+      workspace: "/ws",
+      collection: "acme",
+      from: "users/list-users.toml",
+      toFolder: "admin",
+    });
+    expect(useCollection.getState().drafts.r1.path).toBe("admin/list-users.toml");
+    expect(useTabs.getState().openIds).toEqual(["r1"]);
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("list_tree");
+  });
+
+  it("surfaces a move failure through the store error", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+    invoke.mockClear();
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "move_request") return Promise.reject("target exists");
+      return Promise.resolve(TREE);
+    });
+
+    await useCollection.getState().moveRequest("r1", "admin");
+    await flushMicrotasks();
+    expect(useCollection.getState().error).toBe("target exists");
+  });
+
+  it("refuses to move a request that has never been saved", async () => {
+    await useCollection.getState().init();
+    await flushMicrotasks();
+
+    await useCollection.getState().moveRequest("nope", "admin");
+    expect(useCollection.getState().error).toBe(
+      "This request has no saved file yet, so it cannot be moved",
+    );
   });
 
   it("deletes a request through its collection path and drops the tab", async () => {

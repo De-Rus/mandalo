@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCollection } from "../store/collection";
 import { useEnv } from "../store/env";
-import { useToasts } from "../store/toast";
+import { useTransfer } from "../store/transfer";
 import { TransferMenu } from "./TransferMenu";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -11,14 +11,32 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const { open, save } = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open, save }));
 
-const BUNDLE = '{"mandaloBundle":1,"requests":[]}';
-
-const REPORT = {
-  imported: 1,
-  environments: 0,
-  skipped: [],
+const PLAN = {
+  included: {
+    collections: [
+      {
+        slug: "acme",
+        name: "Acme API",
+        requests: [{ path: "a.toml", name: "a" }],
+      },
+    ],
+    environments: ["staging"],
+    requestCount: 3,
+  },
+  excluded: {
+    secretValues: 2,
+    localValues: 0,
+    withheldNames: ["token"],
+    collections: [],
+    requests: 0,
+    environments: [],
+  },
+  findings: [],
   warnings: [],
-  summary: "Imported 1 request",
+  bytes: 1024,
+  blocked: false,
+  token: "plan-1",
+  format: "native",
 };
 
 describe("TransferMenu", () => {
@@ -27,17 +45,33 @@ describe("TransferMenu", () => {
     open.mockReset();
     save.mockReset();
     localStorage.clear();
-    useCollection.setState({ workspace: "/ws", activeId: null });
-    useEnv.setState({ workspace: "/ws", envs: [], selected: null, error: null });
+    useCollection.setState({
+      workspace: "/ws",
+      activeId: null,
+      tree: {
+        collections: [
+          {
+            id: "1",
+            slug: "acme",
+            name: "Acme API",
+            folders: [],
+            requests: [
+              { path: "a.toml", name: "a", method: "GET", kind: "http" },
+            ],
+          },
+        ],
+        skipped: [],
+      },
+    });
+    useEnv.setState({
+      envs: [{ name: "staging", vars: {} }],
+      selected: "staging",
+      error: null,
+    } as never);
+    useTransfer.setState({ importOpen: false, dropped: null });
     invoke.mockImplementation((cmd: string) => {
-      if (cmd === "read_text_file_for_import") return Promise.resolve(BUNDLE);
-      if (cmd === "import_bundle") return Promise.resolve(REPORT);
-      if (cmd === "export_bundle")
-        return Promise.resolve({ json: BUNDLE, findings: [] });
-      if (cmd === "list_tree")
-        return Promise.resolve({ collections: [], skipped: [] });
-      if (cmd === "list_environments")
-        return Promise.resolve({ items: [], skipped: [] });
+      if (cmd === "workspace_share") return Promise.resolve(null);
+      if (cmd === "plan_export") return Promise.resolve(PLAN);
       if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
       return Promise.resolve(undefined);
     });
@@ -45,107 +79,34 @@ describe("TransferMenu", () => {
 
   afterEach(cleanup);
 
-  it("imports through read_text_file_for_import with the dialog path", async () => {
-    open.mockResolvedValue("/outside/workspace/bundle.json");
+  it("opens the import dialog rather than a bare file picker", () => {
     render(<TransferMenu />);
 
     fireEvent.click(screen.getByLabelText("Import / Export"));
     fireEvent.click(screen.getByText("Import…"));
 
+    expect(useTransfer.getState().importOpen).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("shows the export plan before anything is written", async () => {
+    render(<TransferMenu />);
+
+    fireEvent.click(screen.getByLabelText("Import / Export"));
+    fireEvent.click(screen.getByText("Export…"));
+
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("read_text_file_for_import", {
-        path: "/outside/workspace/bundle.json",
-      }),
+      expect(
+        screen.getByText("2 secret value(s) stay on this machine"),
+      ).toBeTruthy(),
     );
-    expect(invoke).toHaveBeenCalledWith("import_bundle", {
+    expect(invoke).toHaveBeenCalledWith("plan_export", {
       workspace: "/ws",
-      json: BUNDLE,
+      selection: null,
+      format: "native",
     });
-    await waitFor(() => expect(screen.getByText("Import complete")).toBeTruthy());
-  });
-
-  it("does nothing when the import dialog is cancelled", async () => {
-    open.mockResolvedValue(null);
-    render(<TransferMenu />);
-
-    fireEvent.click(screen.getByLabelText("Import / Export"));
-    fireEvent.click(screen.getByText("Import…"));
-
-    await waitFor(() => expect(open).toHaveBeenCalled());
-    expect(invoke.mock.calls.map((c) => c[0])).not.toContain(
-      "read_text_file_for_import",
-    );
-  });
-
-  it("exports through write_text_file_for_export with the dialog path", async () => {
-    save.mockResolvedValue("/outside/workspace/out.json");
-    render(<TransferMenu />);
-
-    fireEvent.click(screen.getByLabelText("Import / Export"));
-    fireEvent.click(screen.getByText("Export bundle…"));
-
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("write_text_file_for_export", {
-        path: "/outside/workspace/out.json",
-        contents: BUNDLE,
-      }),
-    );
-    expect(useToasts.getState().items.map((t) => t.text)).toContain(
-      "Bundle saved",
-    );
-  });
-
-  it("makes the user confirm an export the scanner flagged", async () => {
-    save.mockResolvedValue("/out.json");
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "export_bundle")
-        return Promise.resolve({
-          json: BUNDLE,
-          findings: [
-            {
-              path: "environments/prod.toml",
-              line: 4,
-              rule: "aws-access-key-id",
-              excerpt: "key = AKIA…",
-            },
-          ],
-        });
-      if (cmd === "default_workspace_dir") return Promise.resolve("/ws");
-      return Promise.resolve(undefined);
-    });
-    render(<TransferMenu />);
-
-    fireEvent.click(screen.getByLabelText("Import / Export"));
-    fireEvent.click(screen.getByText("Export bundle…"));
-
-    await waitFor(() =>
-      expect(screen.getByText("Review before exporting")).toBeTruthy(),
-    );
-    expect(screen.getByText("aws-access-key-id")).toBeTruthy();
-    expect(invoke.mock.calls.map((c) => c[0])).not.toContain(
-      "write_text_file_for_export",
-    );
-
-    fireEvent.click(screen.getByText("Export anyway"));
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("write_text_file_for_export", {
-        path: "/out.json",
-        contents: BUNDLE,
-      }),
-    );
-  });
-
-  it("does not write when the export dialog is cancelled", async () => {
-    save.mockResolvedValue(null);
-    render(<TransferMenu />);
-
-    fireEvent.click(screen.getByLabelText("Import / Export"));
-    fireEvent.click(screen.getByText("Export bundle…"));
-
-    await waitFor(() => expect(save).toHaveBeenCalled());
-    expect(invoke.mock.calls.map((c) => c[0])).not.toContain(
-      "write_text_file_for_export",
-    );
+    expect(screen.getByText(/Acme API/)).toBeTruthy();
+    expect(save).not.toHaveBeenCalled();
   });
 });
 

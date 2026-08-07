@@ -9,7 +9,7 @@ import {
 import type { GrpcDraft } from "../lib/draft";
 import { replaceable, skeletonFor } from "../lib/skeleton";
 import { parseProtoPaths } from "../lib/spec";
-import { BodyEditor } from "./BodyEditor";
+import { RawBodyEditor } from "./BodyEditor";
 import { KeyValueEditor } from "./KeyValueEditor";
 
 interface GrpcEditorProps {
@@ -98,7 +98,7 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
     return (
       <div className="grpc-message">
         {offerBar}
-        <BodyEditor
+        <RawBodyEditor
           value={grpc.message}
           onChange={(message) => patch({ message })}
           placeholder={'{\n  "name": "world"\n}'}

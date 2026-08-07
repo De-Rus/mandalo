@@ -101,7 +101,7 @@ function SecretRow({ envName, name, info, onError }: SecretRowProps) {
             className="input mono"
             type="password"
             autoFocus
-            placeholder="value — stored in the OS keychain, never in the file"
+            placeholder="value — kept on this machine, never in the file"
             aria-label={`Value for ${name}`}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -174,7 +174,13 @@ function SecretRow({ envName, name, info, onError }: SecretRowProps) {
   );
 }
 
-export function EnvModal({ onClose }: { onClose: () => void }) {
+export function EnvModal({
+  onClose,
+  create = false,
+}: {
+  onClose: () => void;
+  create?: boolean;
+}) {
   useModalGuard();
   const envs = useEnv((s) => s.envs);
   const save = useEnv((s) => s.save);
@@ -182,9 +188,13 @@ export function EnvModal({ onClose }: { onClose: () => void }) {
   const storeSecret = useEnv((s) => s.storeSecret);
   const selected = useEnv((s) => s.selected);
   const select = useEnv((s) => s.select);
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string | null>(
+    create ? "" : null,
+  );
   const [name, setName] = useState("");
-  const [rows, setRows] = useState<VarRow[]>([]);
+  const [rows, setRows] = useState<VarRow[]>(() =>
+    create ? toRows({}) : [],
+  );
   const [promoting, setPromoting] = useState<string | null>(null);
   const [promoteValue, setPromoteValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -225,6 +235,7 @@ export function EnvModal({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       await save({ name: newName, vars: toVars(rows) });
+      if (editingName === "") select(newName);
       if (editingName && editingName !== newName) {
         if (selected === editingName) select(newName);
         await remove(editingName);
@@ -337,7 +348,7 @@ export function EnvModal({ onClose }: { onClose: () => void }) {
                       title={
                         editingName === ""
                           ? "Save the environment before storing a secret"
-                          : "Move this value into the OS keychain"
+                          : "Keep this value on this machine instead of in the file"
                       }
                       onClick={() => {
                         setPromoteValue(row.value);
@@ -370,7 +381,7 @@ export function EnvModal({ onClose }: { onClose: () => void }) {
                   type="password"
                   autoFocus
                   aria-label={`Value for ${promoting}`}
-                  placeholder={`value for ${promoting} — stored in the OS keychain`}
+                  placeholder={`value for ${promoting} — kept on this machine`}
                   value={promoteValue}
                   onChange={(e) => setPromoteValue(e.target.value)}
                 />
@@ -397,7 +408,7 @@ export function EnvModal({ onClose }: { onClose: () => void }) {
                 <div className="section-title">
                   Secrets
                   <span className="section-hint">
-                    declared in the file, values live in this machine's keychain
+                    declared in the file, values live in ~/.config/mandalo/secrets.toml
                   </span>
                 </div>
                 {secrets.map(([key, info]) => (

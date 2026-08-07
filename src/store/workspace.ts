@@ -39,10 +39,13 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }
   },
   open: async (path) => {
-    const { workspace, migrated } = await openWorkspace(path);
-    await setActiveWorkspace(workspace.id);
+    const opened = await openWorkspace(path);
+    await setActiveWorkspace(opened.workspace.id);
     await get().load();
-    return { path: workspace.path, migrated };
+    return {
+      path: opened.workspace.path,
+      migrated: opened.migrated ?? [],
+    };
   },
   create: async (path, name) => {
     const workspace = await createWorkspace(path, name);

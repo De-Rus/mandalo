@@ -41,6 +41,8 @@ function actions(): TreeActions {
     onOpen: vi.fn(),
     onRenameRequest: vi.fn(),
     onDeleteRequest: vi.fn(),
+    onDuplicateRequest: vi.fn(),
+    onMoveRequest: vi.fn(),
     onNewRequestIn: vi.fn(),
     onRenameCollection: vi.fn(),
     onDeleteCollection: vi.fn(),
@@ -100,6 +102,25 @@ describe("CollectionTree", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(a.onRenameRequest).toHaveBeenCalledWith("r1", "All users");
+  });
+
+  it("duplicates and moves a request from its row menu", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Actions for List users"));
+    fireEvent.click(screen.getByText("Duplicate"));
+    expect(a.onDuplicateRequest).toHaveBeenCalledWith("r1");
+
+    fireEvent.click(screen.getByLabelText("Actions for List users"));
+    fireEvent.click(screen.getByText("Move to…"));
+    expect(a.onMoveRequest).toHaveBeenCalledWith("r1");
+
+    fireEvent.click(screen.getByLabelText("Actions for List users"));
+    fireEvent.click(screen.getByText("Delete"));
+    expect(a.onDeleteRequest).toHaveBeenCalledWith("r1");
   });
 
   it("offers folder and delete actions on a collection row", () => {

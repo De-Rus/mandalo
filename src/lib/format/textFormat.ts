@@ -39,6 +39,22 @@ export function isTextRequestPath(fsPath: string): boolean {
   return textFileKind(fsPath) !== undefined;
 }
 
+/**
+ * Request formats the Rust core reads that this reader does not. A file in one of
+ * them holds real requests, so it has to be reported as skipped rather than
+ * silently passed over — an invisible request looks like a lost request.
+ */
+const ENGINE_ONLY_EXTENSIONS = ["ws", "mqtt"];
+
+export function engineOnlyRequestKind(fsPath: string): string | undefined {
+  const extension = extensionOf(fsPath);
+  return ENGINE_ONLY_EXTENSIONS.includes(extension) ? extension : undefined;
+}
+
+export function engineOnlyReason(extension: string): string {
+  return `.${extension} requests run through the Mándalo desktop app or the CLI — this reader cannot open them yet`;
+}
+
 /** `auth.http#0` addresses one request inside a file; a bare path addresses the file. */
 export function requestFilePath(relPath: string): string {
   const hash = relPath.lastIndexOf("#");
@@ -51,15 +67,58 @@ export function requestPathAt(relPath: string, index: number): string {
   return `${relPath}#${index}`;
 }
 
-/**
- * The `#n` of a request path; a path without a fragment addresses the first request.
- * A `#name` fragment resolves to no index — only the CLI matches block names.
- */
-export function requestIndexOf(relPath: string): number | undefined {
+/** The `#…` of a request path, or undefined when the path addresses the whole file. */
+export function requestFragmentOf(relPath: string): string | undefined {
   const file = requestFilePath(relPath);
-  if (file === relPath) return 0;
-  const fragment = relPath.slice(file.length + 1);
-  return /^\d+$/.test(fragment) ? Number(fragment) : undefined;
+  return file === relPath ? undefined : relPath.slice(file.length + 1);
+}
+
+export class AddressError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AddressError";
+  }
+}
+
+/**
+ * Which block a `#n` or `#Name` fragment addresses. The Rust twin is
+ * `text_format::indexes_of`: an index past the end, an unknown name and an ambiguous
+ * name are all errors, never a silent block 0.
+ */
+export function indexOfFragment(
+  names: readonly string[],
+  fragment: string,
+  total: number,
+): number {
+  if (/^\d+$/.test(fragment)) {
+    const index = Number(fragment);
+    if (index < total) return index;
+    throw new AddressError(`this file holds ${total} requests, so there is no request ${index}`);
+  }
+  const matches = names.flatMap((name, index) => (name === fragment ? [index] : []));
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length === 0)
+    throw new AddressError(`no request named ${JSON.stringify(fragment)} in this file`);
+  throw new AddressError(
+    `${matches.length} requests are named ${JSON.stringify(fragment)} — address this one by index instead`,
+  );
+}
+
+/**
+ * The block a request path addresses inside a parsed file. A bare path is only an
+ * address when the file holds exactly one request; Rust refuses to guess, so neither
+ * does this.
+ */
+export function indexIn(
+  names: readonly string[],
+  relPath: string,
+  fragment: string | undefined,
+): number {
+  if (fragment !== undefined) return indexOfFragment(names, fragment, names.length);
+  if (names.length === 1) return 0;
+  throw new AddressError(
+    `${relPath} holds ${names.length} requests — address one of them as ${relPath}#0`,
+  );
 }
 
 /** A segment reparsed alone, so one bad block cannot hide the ones after it. */
@@ -99,7 +158,7 @@ function bestEffort(segment: Segment, index: number, fileKind: TextFileKind): Te
  */
 export function scanTextRequests(source: string, fileKind: TextFileKind): TextRequestBlock[] {
   const out: TextRequestBlock[] = [];
-  for (const segment of segmentsOf(sourceLines(source))) {
+  for (const segment of segmentsOf(sourceLines(source), source.length)) {
     let block;
     try {
       block = parseTextDocument("scan", segmentSource(segment), fileKind).blocks[0];

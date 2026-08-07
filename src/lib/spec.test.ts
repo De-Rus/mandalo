@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { newDraft, type KVRow } from "./draft";
 import {
   activeRows,
+  applyUrl,
   buildGrpcRequest,
   buildRequestSpec,
   mergeParams,
   parseProtoPaths,
+  splitQuery,
+  urlWithParams,
 } from "./spec";
 
 function row(key: string, value: string, enabled = true): KVRow {
@@ -51,6 +54,92 @@ describe("mergeParams", () => {
     expect(mergeParams("https://x.dev/a", [["{{key}}", "{{value}}"]])).toBe(
       "https://x.dev/a?{{key}}={{value}}",
     );
+  });
+});
+
+describe("splitQuery", () => {
+  it("returns the URL untouched when there is no query", () => {
+    expect(splitQuery("https://x.dev/a")).toEqual({
+      url: "https://x.dev/a",
+      params: [],
+    });
+  });
+
+  it("decodes pairs while leaving {{var}} tokens whole", () => {
+    expect(splitQuery("https://x.dev/a?q={{term}}%20extra&flag&p=2")).toEqual({
+      url: "https://x.dev/a",
+      params: [
+        ["q", "{{term}} extra"],
+        ["flag", ""],
+        ["p", "2"],
+      ],
+    });
+  });
+});
+
+describe("applyUrl", () => {
+  it("parses a typed query string into rows and keeps a trailing blank row", () => {
+    const result = applyUrl("https://x.dev/a?page=2&q=hi%20there", [row("", "")]);
+    expect(result.url).toBe("https://x.dev/a");
+    expect(result.params.map((r) => [r.key, r.value, r.enabled])).toEqual([
+      ["page", "2", true],
+      ["q", "hi there", true],
+      ["", "", true],
+    ]);
+  });
+
+  it("round-trips rows through the URL losslessly, {{vars}} included", () => {
+    const params = [
+      row("q", "{{term}} extra"),
+      row("page", "2"),
+      row("", ""),
+    ];
+    const url = urlWithParams("https://x.dev/search", params);
+    expect(url).toBe("https://x.dev/search?q={{term}}%20extra&page=2");
+
+    const back = applyUrl(url, params);
+    expect(back.url).toBe("https://x.dev/search");
+    expect(back.params.map((r) => [r.key, r.value])).toEqual([
+      ["q", "{{term}} extra"],
+      ["page", "2"],
+      ["", ""],
+    ]);
+    expect(back.params[0].id).toBe(params[0].id);
+    expect(urlWithParams(back.url, back.params)).toBe(url);
+  });
+
+  it("keeps rows the query string cannot carry", () => {
+    const params = [
+      row("page", "2"),
+      row("debug", "1", false),
+      row("", "orphan"),
+      row("", ""),
+    ];
+    const back = applyUrl(urlWithParams("https://x.dev/a", params), params);
+    expect(back.params.map((r) => [r.key, r.value, r.enabled])).toEqual([
+      ["page", "2", true],
+      ["debug", "1", false],
+      ["", "orphan", true],
+      ["", "", true],
+    ]);
+  });
+
+  it("drops rows deleted from the URL and appends rows typed into it", () => {
+    const params = [row("a", "1"), row("b", "2"), row("", "")];
+    const back = applyUrl("https://x.dev/a?a=1&c=3", params);
+    expect(back.params.map((r) => [r.key, r.value])).toEqual([
+      ["a", "1"],
+      ["c", "3"],
+      ["", ""],
+    ]);
+    expect(back.params[0].id).toBe(params[0].id);
+    expect(back.params[1].id).toBe(params[1].id);
+  });
+
+  it("clears every param row when the query is deleted from the URL", () => {
+    const back = applyUrl("https://x.dev/a", [row("a", "1"), row("", "")]);
+    expect(back.url).toBe("https://x.dev/a");
+    expect(back.params.map((r) => [r.key, r.value])).toEqual([["", ""]]);
   });
 });
 

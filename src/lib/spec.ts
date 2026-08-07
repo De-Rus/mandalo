@@ -1,5 +1,5 @@
 import type { Auth, GrpcSpec, RequestSpec } from "./api";
-import type { AuthDraft, KVRow, RequestDraft } from "./draft";
+import { emptyRow, uid, type AuthDraft, type KVRow, type RequestDraft } from "./draft";
 
 export function activeRows(rows: KVRow[]): [string, string][] {
   return rows
@@ -8,6 +8,11 @@ export function activeRows(rows: KVRow[]): [string, string][] {
 }
 
 export function buildAuth(draft: AuthDraft): Auth {
+  const auth = buildPlainAuth(draft);
+  return draft.inherited && auth.type !== "none" ? { type: "inherited", auth } : auth;
+}
+
+function buildPlainAuth(draft: AuthDraft): Auth {
   switch (draft.type) {
     case "bearer":
       return { type: "bearer", token: draft.token };
@@ -34,6 +39,20 @@ export function encodeKeepingVars(text: string): string {
     .join("");
 }
 
+export function decodeKeepingVars(text: string): string {
+  return text
+    .split(VAR_TOKEN)
+    .map((part) => {
+      if (VAR_TOKEN.test(part)) return part;
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    })
+    .join("");
+}
+
 export function mergeParams(url: string, params: [string, string][]): string {
   if (params.length === 0) return url;
   const query = params
@@ -41,6 +60,74 @@ export function mergeParams(url: string, params: [string, string][]): string {
     .join("&");
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}${query}`;
+}
+
+export function splitQuery(url: string): {
+  url: string;
+  params: [string, string][];
+} {
+  const qIndex = url.indexOf("?");
+  if (qIndex === -1) return { url, params: [] };
+  const params = url
+    .slice(qIndex + 1)
+    .split("&")
+    .filter((pair) => pair !== "")
+    .map((pair): [string, string] => {
+      const eq = pair.indexOf("=");
+      if (eq === -1) return [decodeKeepingVars(pair), ""];
+      return [
+        decodeKeepingVars(pair.slice(0, eq)),
+        decodeKeepingVars(pair.slice(eq + 1)),
+      ];
+    });
+  return { url: url.slice(0, qIndex), params };
+}
+
+/** What the URL bar shows: the path plus every enabled param row, re-encoded. */
+export function urlWithParams(url: string, params: KVRow[]): string {
+  return mergeParams(url, activeRows(params));
+}
+
+function isBlank(row: KVRow): boolean {
+  return row.key.trim() === "" && row.value === "";
+}
+
+/**
+ * WHY: the URL text and the params table are one value, so an edit to either
+ * must land in both. Rows the query string cannot carry — disabled ones, and
+ * value-only ones — keep their slot instead of being erased by a URL edit.
+ */
+export function applyUrl(
+  input: string,
+  params: KVRow[],
+): { url: string; params: KVRow[] } {
+  const split = splitQuery(input);
+  const rows: KVRow[] = [];
+  let next = 0;
+  for (const row of params) {
+    if (isBlank(row)) continue;
+    if (!row.enabled || row.key.trim() === "") {
+      rows.push(row);
+      continue;
+    }
+    const pair = split.params[next];
+    if (pair === undefined) continue;
+    next += 1;
+    rows.push(
+      pair[0] === row.key && pair[1] === row.value
+        ? row
+        : { ...row, key: pair[0], value: pair[1] },
+    );
+  }
+  for (; next < split.params.length; next += 1)
+    rows.push({
+      id: uid(),
+      key: split.params[next][0],
+      value: split.params[next][1],
+      enabled: true,
+    });
+  rows.push(emptyRow());
+  return { url: split.url, params: rows };
 }
 
 export function buildRequestSpec(

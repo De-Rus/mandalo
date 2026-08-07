@@ -1,3 +1,4 @@
+import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,9 +68,9 @@ async function loadAndPick(start: Partial<GrpcDraft>, value: string) {
 }
 
 function message(container: HTMLElement): string {
-  return (
-    container.querySelector(".grpc-message textarea") as HTMLTextAreaElement
-  ).value;
+  const content = container.querySelector(".grpc-message .cm-content");
+  if (content === null) throw new Error("the gRPC message editor is not mounted");
+  return EditorView.findFromDOM(content as HTMLElement)!.state.doc.toString();
 }
 
 describe("gRPC method selection", () => {

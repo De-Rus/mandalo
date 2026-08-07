@@ -18,11 +18,12 @@ describe("EnvBar", () => {
           name: "staging",
           vars: {
             baseUrl: {
+              shared: true,
               secret: false,
               value: "https://staging.dev",
               set: true,
             },
-            token: { secret: false, value: "", set: true },
+            token: { shared: true, secret: false, value: "", set: true },
           },
         },
       ],
@@ -43,52 +44,28 @@ describe("EnvBar", () => {
     expect(screen.getByText(/Skipped 1 unreadable environment file/)).toBeTruthy();
   });
 
-  it("lists the active environment variables in the quick-look popover", () => {
+  it("lists environments in a menu with delete on each row", () => {
     render(<EnvBar />);
-    expect(screen.queryByText("baseUrl")).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Environment quick look"));
+    fireEvent.click(screen.getByLabelText("Active environment"));
 
-    expect(screen.getByText("baseUrl")).toBeTruthy();
-    expect(screen.getByText("https://staging.dev")).toBeTruthy();
-    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /No Environment/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /staging/ })).toBeTruthy();
+    expect(screen.getByLabelText("Delete staging")).toBeTruthy();
   });
 
-  it("masks a secret and says when this machine has no value for it", () => {
-    useEnv.setState({
-      envs: [
-        {
-          name: "staging",
-          vars: {
-            apiKey: { secret: true, value: null, hosts: [], set: true },
-            adminKey: { secret: true, value: null, hosts: [], set: false },
-          },
-        },
-      ],
-    });
+  it("creates an environment from the menu", () => {
     render(<EnvBar />);
-    fireEvent.click(screen.getByLabelText("Environment quick look"));
 
-    expect(screen.getByText("••••••••")).toBeTruthy();
-    expect(screen.getByText("not set on this machine")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Active environment"));
+    fireEvent.click(screen.getByText("New environment…"));
+
+    expect(screen.getByPlaceholderText("staging")).toBeTruthy();
   });
 
-  it("explains the empty case when no environment is selected", () => {
-    useEnv.setState({ selected: null });
+  it("does not show the old quick-look eye", () => {
     render(<EnvBar />);
-
-    fireEvent.click(screen.getByLabelText("Environment quick look"));
-    expect(
-      screen.getByText("No environment", { selector: ".popover-title" }),
-    ).toBeTruthy();
-    expect(screen.getByText(/Select an environment/)).toBeTruthy();
-  });
-
-  it("opens the full editor from the popover", () => {
-    render(<EnvBar />);
-    fireEvent.click(screen.getByLabelText("Environment quick look"));
-    fireEvent.click(screen.getByText("Edit"));
-
-    expect(screen.getByText("Environments")).toBeTruthy();
+    expect(screen.queryByLabelText("Environment quick look")).toBeNull();
+    expect(screen.queryByLabelText("New environment")).toBeNull();
   });
 });

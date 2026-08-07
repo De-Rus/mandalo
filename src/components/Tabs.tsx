@@ -1,8 +1,14 @@
+export interface TabBadge {
+  text: string;
+  tone: "success" | "danger";
+}
+
 export interface TabItem {
   id: string;
   label: string;
   count?: number;
   dot?: boolean;
+  badge?: TabBadge;
 }
 
 interface TabsProps {
@@ -25,6 +31,11 @@ export function Tabs({ items, active, onSelect }: TabsProps) {
           {t.label}
           {t.count !== undefined && t.count > 0 && (
             <span className="count">{t.count}</span>
+          )}
+          {t.badge && (
+            <span className={`count count-${t.badge.tone}`}>
+              {t.badge.text}
+            </span>
           )}
           {t.dot && <span className="tab-dot" />}
         </button>

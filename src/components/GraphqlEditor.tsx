@@ -1,4 +1,4 @@
-import { BodyEditor } from "./BodyEditor";
+import { RawBodyEditor } from "./BodyEditor";
 
 interface GraphqlEditorProps {
   tab: "Query" | "Variables";
@@ -27,7 +27,7 @@ export function GraphqlEditor({
     );
   }
   return (
-    <BodyEditor
+    <RawBodyEditor
       value={variables}
       onChange={onVariablesChange}
       placeholder={'{\n  "id": 1\n}'}

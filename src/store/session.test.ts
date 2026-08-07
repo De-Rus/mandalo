@@ -184,7 +184,7 @@ describe("session store send", () => {
           items: [
             {
               name: "staging",
-              vars: { userId: { secret: false, value: "7", set: true } },
+              vars: { userId: { shared: true, secret: false, value: "7", set: true } },
             },
           ],
           skipped: [],
@@ -218,7 +218,7 @@ describe("session store send", () => {
       envs: [
         {
           name: "staging",
-          vars: { stale: { secret: false, value: "old", set: true } },
+          vars: { stale: { shared: true, secret: false, value: "old", set: true } },
         },
       ],
       selected: "staging",
@@ -240,7 +240,7 @@ describe("session store send", () => {
       envs: [
         {
           name: "staging",
-          vars: { token: { secret: true, value: null, hosts: [], set: true } },
+          vars: { token: { shared: false, secret: true, value: null, hosts: [], set: true } },
         },
       ],
       selected: "staging",

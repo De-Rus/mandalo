@@ -20,6 +20,11 @@ function skippedLine(skipped: string[]): string | null {
   return `Skipped ${skipped.length} unreadable environment file(s): ${skipped.join("; ")}`;
 }
 
+function fail(set: (partial: { error: string }) => void, message: string): never {
+  set({ error: message });
+  throw new Error(message);
+}
+
 export function plainVars(
   env: EnvironmentView | null | undefined,
 ): Record<string, string> {
@@ -52,6 +57,8 @@ interface EnvState {
   refresh: () => Promise<void>;
   select: (name: string | null) => void;
   save: (env: Environment) => Promise<void>;
+  createEnv: (name: string, vars?: Record<string, string>) => Promise<void>;
+  addVar: (env: string, key: string, value: string) => Promise<void>;
   remove: (name: string) => Promise<void>;
   storeSecret: (env: string, key: string, value: string) => Promise<void>;
   forgetSecret: (env: string, key: string) => Promise<void>;
@@ -85,8 +92,12 @@ export const useEnv = create<EnvState>((set, get) => ({
   refresh: async () => {
     const { workspace } = get();
     if (!workspace) return;
-    const { items: envs, skipped } = await listEnvironments(workspace);
-    set({ envs, error: skippedLine(skipped) });
+    try {
+      const { items: envs, skipped } = await listEnvironments(workspace);
+      set({ envs, error: skippedLine(skipped) });
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
   },
   select: (name) => {
     if (name) localStorage.setItem(SELECTED_KEY, name);
@@ -103,6 +114,35 @@ export const useEnv = create<EnvState>((set, get) => ({
       set({ error: errorMessage(e) });
       throw e;
     }
+  },
+  createEnv: async (name, vars = {}) => {
+    const trimmed = name.trim();
+    if (trimmed === "") fail(set, "Environment name is required");
+    if (get().envs.some((e) => e.name === trimmed))
+      fail(set, `Environment ${trimmed} already exists`);
+    await get().save({ name: trimmed, vars });
+    get().select(trimmed);
+  },
+  addVar: async (envName, key, value) => {
+    const name = key.trim();
+    if (name === "") fail(set, "Variable name is required");
+    const current = get().envs.find((e) => e.name === envName);
+    if (!current) fail(set, `Environment ${envName} is not loaded`);
+    const info = current.vars[name];
+    if (info && info.secret)
+      fail(
+        set,
+        `${envName}.${name} is declared secret — its value never goes in the environment file. Use Set value in the environment editor.`,
+      );
+    if (info && !info.shared)
+      fail(
+        set,
+        `${envName}.${name} is declared local — its value lives on this machine only. Set it in the environment editor.`,
+      );
+    await get().save({
+      name: envName,
+      vars: { ...plainVars(current), [name]: value },
+    });
   },
   remove: async (name) => {
     const { workspace } = get();

@@ -1,4 +1,4 @@
-import type { EnvironmentView } from "./api";
+import type { EnvironmentView, VarSource } from "./api";
 import type { RequestDraft } from "./draft";
 
 export interface VarSegment {
@@ -32,14 +32,32 @@ export function splitVars(
   return segments;
 }
 
-export type VarState = "value" | "secret" | "dynamic" | "missing";
+/**
+ * `value` is a variable whose value is committed to the workspace file.
+ * `local` is declared `shared = false`: kept on this machine, not confidential,
+ * and not masked — but its value is never sent to the frontend either, so the
+ * UI can say where it lives and whether it is set, not what it is.
+ * `secret` is masked everywhere and redacted out of every diagnostic.
+ */
+export type VarState = "value" | "local" | "secret" | "dynamic" | "missing";
 
 export interface VarDescription {
   name: string;
   state: VarState;
   value: string | null;
   env: string | null;
-  secretSet: boolean;
+  /** Whether a value is reachable at all — for `local` and `secret`. */
+  held: boolean;
+  source: VarSource | null;
+  hosts: string[];
+}
+
+function base(
+  name: string,
+  state: VarState,
+  env: string | null,
+): VarDescription {
+  return { name, state, value: null, env, held: false, source: null, hosts: [] };
 }
 
 export function describeVar(
@@ -48,21 +66,59 @@ export function describeVar(
   vars: Record<string, string> = {},
 ): VarDescription {
   const where = env?.name ?? null;
-  if (name.startsWith("$"))
-    return { name, state: "dynamic", value: null, env: where, secretSet: false };
+  if (name.startsWith("$")) return base(name, "dynamic", where);
   const info = env?.vars[name];
-  if (info?.secret)
-    return { name, state: "secret", value: null, env: where, secretSet: info.set };
-  if (info && info.value !== null)
-    return { name, state: "value", value: info.value, env: where, secretSet: false };
+  if (info) {
+    if (info.secret)
+      return {
+        ...base(name, "secret", where),
+        held: info.set,
+        source: info.source ?? null,
+        hosts: info.hosts ?? [],
+      };
+    if (!info.shared)
+      return {
+        ...base(name, "local", where),
+        held: info.set,
+        source: info.source ?? null,
+        hosts: info.hosts ?? [],
+      };
+    if (info.value !== null)
+      return {
+        ...base(name, "value", where),
+        value: info.value,
+        held: true,
+        source: info.source ?? "file",
+      };
+  }
   if (name in vars)
-    return { name, state: "value", value: vars[name], env: where, secretSet: false };
-  return { name, state: "missing", value: null, env: where, secretSet: false };
+    return { ...base(name, "value", where), value: vars[name], held: true };
+  return base(name, "missing", where);
+}
+
+/** True when sending would fail: nothing anywhere holds a value for this. */
+export function isUnresolved(description: VarDescription): boolean {
+  if (description.state === "missing") return true;
+  return (
+    (description.state === "secret" || description.state === "local") &&
+    !description.held
+  );
+}
+
+export function unresolvedVars(
+  names: string[],
+  env: EnvironmentView | null,
+  vars: Record<string, string> = {},
+): VarDescription[] {
+  return names
+    .map((name) => describeVar(name, env, vars))
+    .filter(isUnresolved);
 }
 
 export function varTone(state: VarState): string {
   if (state === "missing") return "var-bad";
   if (state === "secret") return "var-secret";
+  if (state === "local") return "var-local";
   if (state === "dynamic") return "var-dyn";
   return "var-ok";
 }

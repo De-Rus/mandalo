@@ -15,8 +15,13 @@ interface TabsState {
   prune: (existing: string[]) => void;
 }
 
+/**
+ * Which requests are open is per-window, like an editor: two windows on one workspace
+ * must not fight over the tab strip. The localStorage copy is only the last-session
+ * fallback, so reopening the browser still restores what was open.
+ */
 function read(): string[] {
-  const raw = localStorage.getItem(KEY);
+  const raw = sessionStorage.getItem(KEY) ?? localStorage.getItem(KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -27,7 +32,9 @@ function read(): string[] {
 }
 
 function persist(openIds: string[]): void {
-  localStorage.setItem(KEY, JSON.stringify(openIds));
+  const raw = JSON.stringify(openIds);
+  sessionStorage.setItem(KEY, raw);
+  localStorage.setItem(KEY, raw);
 }
 
 export const useTabs = create<TabsState>((set, get) => ({

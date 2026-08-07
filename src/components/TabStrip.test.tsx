@@ -103,6 +103,22 @@ describe("TabStrip", () => {
     expect(menu.textContent).toContain("Close All");
   });
 
+  it("duplicates the right clicked tab", () => {
+    const real = useCollection.getState().duplicateRequest;
+    const duplicateRequest = vi.fn().mockResolvedValue(undefined);
+    useCollection.setState({ duplicateRequest });
+    try {
+      render(<TabStrip />);
+      fireEvent.contextMenu(screen.getByText("Second"));
+      fireEvent.click(screen.getByText("Duplicate"));
+
+      expect(duplicateRequest).toHaveBeenCalledWith("b");
+      expect(useTabs.getState().openIds).toEqual(["a", "b", "c"]);
+    } finally {
+      useCollection.setState({ duplicateRequest: real });
+    }
+  });
+
   it("closes the other tabs, keeping the one clicked", () => {
     useTabs.setState({ dirtyIds: [] });
     render(<TabStrip />);

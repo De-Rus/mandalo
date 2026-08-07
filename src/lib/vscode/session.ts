@@ -50,6 +50,7 @@ export function toResponseState(outcome: CliOutcome): ResponseState {
     captured,
     unboundSecrets: [],
     secretVarSets: [],
+    runError: null,
   };
 
   if (outcome.grpc) return { phase: "grpc", data: outcome.grpc, run };

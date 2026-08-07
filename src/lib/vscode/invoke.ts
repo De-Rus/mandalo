@@ -12,7 +12,18 @@ const DESKTOP_ONLY: Record<string, string> = {
   export_bundle: "Exporting a bundle needs the desktop app or `mandalo export`.",
   list_grpc_methods:
     "Reflecting a proto file needs the desktop app. In VS Code, type the service and method and press Send — the CLI compiles the protos.",
+  stream_open:
+    "Live connections — WebSocket, SSE and MQTT — need the desktop app or the browser build. The VS Code editor speaks one request at a time over postMessage and has nowhere to keep a socket open.",
+  stream_send: "There is no live connection in the VS Code editor to send on.",
+  stream_close: "There is no live connection in the VS Code editor to close.",
+  stream_status: "There is no live connection in the VS Code editor.",
+  stream_list: "There is no live connection in the VS Code editor.",
 };
+
+/** The shape `@tauri-apps/api/core` exports, so the seam stays a pure swap. */
+export class Channel<T> {
+  onmessage: ((message: T) => void) | null = null;
+}
 
 export function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   const refusal = DESKTOP_ONLY[command];

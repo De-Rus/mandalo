@@ -22,6 +22,9 @@ describe("NewMenu", () => {
     expect(screen.getByText("gRPC Request")).toBeTruthy();
     expect(screen.getByText("Folder")).toBeTruthy();
     expect(screen.getByText("Collection")).toBeTruthy();
+    expect(screen.queryByText("Import…")).toBeNull();
+    expect(screen.queryByText("Export…")).toBeNull();
+    expect(screen.queryByText("Export bundle…")).toBeNull();
   });
 
   it("reports the chosen request kind and closes", () => {
@@ -39,6 +42,20 @@ describe("NewMenu", () => {
 
     expect(onNewRequest).toHaveBeenCalledWith("grpc");
     expect(screen.queryByText("gRPC Request")).toBeNull();
+  });
+
+  it("names the collection a first request will land in", () => {
+    render(
+      <NewMenu
+        scratch
+        onNewRequest={() => {}}
+        onNewFolder={null}
+        onNewCollection={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("New"));
+    expect(screen.getByText("Create in “Scratch”")).toBeTruthy();
   });
 
   it("hides Folder when there is no collection to put it in", () => {

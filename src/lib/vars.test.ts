@@ -6,6 +6,7 @@ import {
   draftVarNames,
   previewResolve,
   splitVars,
+  unresolvedVars,
   varTone,
 } from "./vars";
 
@@ -37,32 +38,82 @@ describe("variable segmentation", () => {
 const env: EnvironmentView = {
   name: "hosted",
   vars: {
-    baseUrl: { secret: false, value: "https://api.dev", set: true },
-    apiKey: { secret: true, value: null, hosts: [], set: true },
-    adminKey: { secret: true, value: null, hosts: [], set: false },
+    baseUrl: {
+      shared: true,
+      secret: false,
+      value: "https://api.dev",
+      set: true,
+      source: "file",
+    },
+    apiKey: {
+      shared: false,
+      secret: true,
+      value: null,
+      hosts: ["api.dev"],
+      set: true,
+      source: "local",
+    },
+    adminKey: { shared: false, secret: true, value: null, hosts: [], set: false },
+    devUrl: {
+      shared: false,
+      secret: false,
+      value: null,
+      hosts: [],
+      set: true,
+      source: "local",
+    },
+    unsetLocal: { shared: false, secret: false, value: null, hosts: [], set: false },
   },
 };
 
 describe("variable description", () => {
-  it("reports a plain value and where it came from", () => {
+  it("reports a shared value and where it came from", () => {
     expect(describeVar("baseUrl", env)).toEqual({
       name: "baseUrl",
       state: "value",
       value: "https://api.dev",
       env: "hosted",
-      secretSet: false,
+      held: true,
+      source: "file",
+      hosts: [],
     });
   });
 
-  it("never carries a secret value, only whether this machine has one", () => {
+  it("never carries a secret value, only whether a machine holds one", () => {
     expect(describeVar("apiKey", env)).toEqual({
       name: "apiKey",
       state: "secret",
       value: null,
       env: "hosted",
-      secretSet: true,
+      held: true,
+      source: "local",
+      hosts: ["api.dev"],
     });
-    expect(describeVar("adminKey", env).secretSet).toBe(false);
+    expect(describeVar("adminKey", env).held).toBe(false);
+  });
+
+  it("separates a local variable from a secret one", () => {
+    const local = describeVar("devUrl", env);
+    expect(local.state).toBe("local");
+    expect(local.held).toBe(true);
+    expect(local.source).toBe("local");
+    expect(local.value).toBeNull();
+  });
+
+  it("drops a secret value the backend should never have sent", () => {
+    const leaky: EnvironmentView = {
+      name: "hosted",
+      vars: {
+        token: {
+          shared: false,
+          secret: true,
+          value: "leaked",
+          hosts: [],
+          set: true,
+        },
+      },
+    };
+    expect(describeVar("token", leaky).value).toBeNull();
   });
 
   it("marks an unknown name missing and names the environment it is missing from", () => {
@@ -81,7 +132,9 @@ describe("variable description", () => {
       state: "value",
       value: "http://local",
       env: null,
-      secretSet: false,
+      held: true,
+      source: null,
+      hosts: [],
     });
   });
 
@@ -89,6 +142,32 @@ describe("variable description", () => {
     expect(varTone("missing")).toBe("var-bad");
     expect(varTone("value")).toBe("var-ok");
     expect(varTone("secret")).toBe("var-secret");
+    expect(varTone("local")).toBe("var-local");
+  });
+});
+
+describe("unresolved variables", () => {
+  it("is empty when everything resolves", () => {
+    expect(unresolvedVars(["baseUrl", "apiKey", "devUrl", "$guid"], env)).toEqual(
+      [],
+    );
+  });
+
+  it("catches an undefined name, an unset secret and an unset local alike", () => {
+    expect(
+      unresolvedVars(["nope", "adminKey", "unsetLocal"], env).map((d) => [
+        d.name,
+        d.state,
+      ]),
+    ).toEqual([
+      ["nope", "missing"],
+      ["adminKey", "secret"],
+      ["unsetLocal", "local"],
+    ]);
+  });
+
+  it("treats a name the resolved map already carries as resolved", () => {
+    expect(unresolvedVars(["late"], null, { late: "x" })).toEqual([]);
   });
 });
 

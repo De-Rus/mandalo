@@ -5,6 +5,7 @@ import { Dropdown, MenuItem } from "./Dropdown";
 import {
   ChevronRight,
   Collection,
+  Copy,
   Doc,
   Dots,
   Folder,
@@ -24,6 +25,8 @@ export interface TreeActions {
   onOpen: (id: string) => void;
   onRenameRequest: (id: string, name: string) => void;
   onDeleteRequest: (id: string) => void;
+  onDuplicateRequest: (id: string) => void;
+  onMoveRequest: (id: string) => void;
   onNewRequestIn: (collection: string, folder: string) => void;
   onRenameCollection: (slug: string, name: string) => void;
   onDeleteCollection: (slug: string) => void;
@@ -186,16 +189,37 @@ function RequestRow({
       onClick={() => actions.onOpen(request.id)}
       onRename={(name) => actions.onRenameRequest(request.id, name)}
       menu={(close) => (
-        <MenuItem
-          danger
-          icon={<Trash size={12} />}
-          onClick={() => {
-            close();
-            actions.onDeleteRequest(request.id);
-          }}
-        >
-          Delete
-        </MenuItem>
+        <>
+          <MenuItem
+            icon={<Copy size={12} />}
+            onClick={() => {
+              close();
+              actions.onDuplicateRequest(request.id);
+            }}
+          >
+            Duplicate
+          </MenuItem>
+          <MenuItem
+            icon={<Folder size={12} />}
+            onClick={() => {
+              close();
+              actions.onMoveRequest(request.id);
+            }}
+          >
+            Move to…
+          </MenuItem>
+          <div className="menu-sep" />
+          <MenuItem
+            danger
+            icon={<Trash size={12} />}
+            onClick={() => {
+              close();
+              actions.onDeleteRequest(request.id);
+            }}
+          >
+            Delete
+          </MenuItem>
+        </>
       )}
     />
   );

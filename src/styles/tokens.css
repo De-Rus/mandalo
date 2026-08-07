@@ -1,60 +1,91 @@
 :root {
-  --bg-app: #141619;
-  --bg-panel: #1a1d21;
-  --bg-elevated: #21242a;
-  --bg-inset: #101215;
-  --bg-hover: #262a31;
-  --bg-active: #2e333c;
-  --bg-selected: #2b3038;
+  --bg-app: #262626;
+  --bg-panel: #212121;
+  --bg-elevated: #2e2e2e;
+  --bg-inset: #1e1e1e;
+  --bg-hover: #303030;
+  --bg-active: #3a3a3a;
+  --bg-selected: #323232;
 
-  --border-subtle: #22262c;
-  --border: #2f333b;
-  --border-strong: #3d434e;
+  --bg-chrome: #1c1c1c;
+  --bg-sidebar: #212121;
+  --bg-canvas: #262626;
+  --bg-response: #212121;
+  --bg-code: #1e1e1e;
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+  --bg-stripe: #2a2a2a;
 
-  --text-primary: #e7eaee;
-  --text-secondary: #a5acb8;
-  --text-muted: #6f7783;
-  --text-inverse: #17130f;
+  --border-subtle: #2e2e2e;
+  --border: #3c3c3c;
+  --border-strong: #4d4d4d;
+  --border-focus: #ff6c37;
 
-  --brand: #f6a821;
-  --brand-hover: #ffb838;
-  --brand-press: #dd9412;
-  --brand-soft: rgba(246, 168, 33, 0.14);
-  --brand-ring: rgba(246, 168, 33, 0.45);
+  --text-primary: #f2f2f2;
+  --text-secondary: #bdbdbd;
+  --text-muted: #8a8a8a;
+  --text-disabled: #6b6b6b;
+  --text-inverse: #1a1a1a;
 
-  --success: #4bbd7a;
-  --warn: #e0a53c;
-  --danger: #ef5f5f;
-  --info: #5b9dfb;
+  --brand: #ff6c37;
+  --brand-hover: #ff7f4d;
+  --brand-press: #e05320;
+  --brand-soft: rgba(255, 108, 55, 0.16);
+  --brand-ring: rgba(255, 108, 55, 0.55);
 
-  --m-get: #4bbd7a;
-  --m-post: #f0913e;
-  --m-put: #5b9dfb;
-  --m-patch: #a371f7;
-  --m-delete: #ef5f5f;
-  --m-head: #8d95a1;
-  --m-options: #8d95a1;
-  --m-gql: #e2569b;
-  --m-grpc: #9d7bf5;
+  --accent: var(--brand);
+  --accent-hover: var(--brand-hover);
+  --accent-press: var(--brand-press);
+  --accent-soft: var(--brand-soft);
 
-  --tk-key: #7cc4ff;
+  --amber: #f6a821;
+  --amber-hover: #ffb838;
+  --amber-soft: rgba(246, 168, 33, 0.16);
+
+  --success: #6bdd9a;
+  --success-soft: rgba(107, 221, 154, 0.16);
+  --warn: #ffcf5c;
+  --warn-soft: rgba(255, 207, 92, 0.16);
+  --danger: #f37368;
+  --danger-soft: rgba(243, 115, 104, 0.16);
+  --info: #74aef6;
+  --info-soft: rgba(116, 174, 246, 0.16);
+
+  --m-get: #6bdd9a;
+  --m-post: #ffe47e;
+  --m-put: #74aef6;
+  --m-patch: #c0a8e1;
+  --m-delete: #f37368;
+  --m-head: #a3a3a3;
+  --m-options: #a3a3a3;
+  --m-gql: #e56ba6;
+  --m-grpc: #c0a8e1;
+
+  --tk-key: #9dd0ff;
   --tk-string: #a5d6a7;
-  --tk-number: #f0b27a;
-  --tk-bool: #c792ea;
-  --tk-null: #8d95a1;
-  --tk-punct: #7a828e;
+  --tk-number: #ffbb7a;
+  --tk-bool: #c0a8e1;
+  --tk-null: #8a8a8a;
+  --tk-punct: #8a8a8a;
 
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
+    Consolas, "Liberation Mono", monospace;
 
-  --fs-xs: 10.5px;
-  --fs-sm: 11.5px;
-  --fs-md: 13px;
-  --fs-lg: 14px;
-  --fs-xl: 16px;
-  --fs-2xl: 20px;
+  --fs-xs: 10px;
+  --fs-sm: 11px;
+  --fs-md: 12px;
+  --fs-lg: 13px;
+  --fs-xl: 14px;
+  --fs-2xl: 18px;
+
+  --fs-mono: 12px;
+  --lh-tight: 1.3;
+  --lh-normal: 1.45;
+  --lh-code: 1.55;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
 
   --sp-1: 4px;
   --sp-2: 8px;
@@ -62,17 +93,25 @@
   --sp-4: 16px;
   --sp-5: 24px;
 
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 10px;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  --r-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.45);
 
-  --t-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1);
-  --t: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --t-fast: 80ms cubic-bezier(0.4, 0, 0.2, 1);
+  --t: 120ms cubic-bezier(0.4, 0, 0.2, 1);
 
-  --header-h: 44px;
-  --row-h: 28px;
+  --header-h: 40px;
+  --row-h: 30px;
+  --tabstrip-h: 36px;
+  --tab-h: 34px;
+  --control-h: 30px;
+  --control-h-sm: 24px;
+  --control-h-lg: 36px;
+  --tree-row-h: 28px;
+  --toolbar-h: 34px;
 }

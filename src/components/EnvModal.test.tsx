@@ -12,7 +12,7 @@ describe("EnvModal", () => {
     localStorage.clear();
     useEnv.setState({
       workspace: "/ws",
-      envs: [{ name: "old", vars: { a: { secret: false, value: "1", set: true } } }],
+      envs: [{ name: "old", vars: { a: { shared: true, secret: false, value: "1", set: true } } }],
       selected: "old",
       error: null,
     });
@@ -25,7 +25,7 @@ describe("EnvModal", () => {
       if (cmd === "list_environments")
         return Promise.resolve({
           items: [
-            { name: "new", vars: { a: { secret: false, value: "1", set: true } } },
+            { name: "new", vars: { a: { shared: true, secret: false, value: "1", set: true } } },
           ],
           skipped: [],
         });
@@ -57,7 +57,7 @@ describe("EnvModal", () => {
       if (cmd === "list_environments")
         return Promise.resolve({
           items: [
-            { name: "old", vars: { a: { secret: false, value: "2", set: true } } },
+            { name: "old", vars: { a: { shared: true, secret: false, value: "2", set: true } } },
           ],
           skipped: [],
         });
@@ -86,14 +86,15 @@ describe("EnvModal", () => {
         {
           name: "old",
           vars: {
-            a: { secret: false, value: "1", set: true },
+            a: { shared: true, secret: false, value: "1", set: true },
             token: {
+              shared: false,
               secret: true,
               value: null,
               hosts: ["api.acme.com"],
               set: true,
             },
-            adminToken: { secret: true, value: null, hosts: [], set: false },
+            adminToken: { shared: false, secret: true, value: null, hosts: [], set: false },
           },
         },
       ],
@@ -130,7 +131,7 @@ describe("EnvModal", () => {
         {
           name: "old",
           vars: {
-            token: { secret: true, value: null, hosts: [], set: true },
+            token: { shared: false, secret: true, value: null, hosts: [], set: true },
           },
         },
       ],
@@ -161,8 +162,8 @@ describe("EnvModal", () => {
         {
           name: "old",
           vars: {
-            a: { secret: false, value: "1", set: true },
-            token: { secret: true, value: null, hosts: [], set: true },
+            a: { shared: true, secret: false, value: "1", set: true },
+            token: { shared: false, secret: true, value: null, hosts: [], set: true },
           },
         },
       ],

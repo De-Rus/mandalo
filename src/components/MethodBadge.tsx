@@ -10,6 +10,9 @@ const CLASS: Record<string, string> = {
   OPTIONS: "badge-options",
   GQL: "badge-gql",
   gRPC: "badge-grpc",
+  WS: "badge-ws",
+  SSE: "badge-sse",
+  MQTT: "badge-mqtt",
 };
 
 interface Labelled {
@@ -20,6 +23,9 @@ interface Labelled {
 export function badgeLabel(item: Labelled): string {
   if (item.kind === "graphql") return "GQL";
   if (item.kind === "grpc") return "gRPC";
+  if (item.kind === "websocket") return "WS";
+  if (item.kind === "sse") return "SSE";
+  if (item.kind === "mqtt") return "MQTT";
   return item.method;
 }
 

@@ -1,0 +1,235 @@
+/* SIDEBAR: tab set over collections / environments / history. Owned by the sidebar surface. */
+
+.sb-env-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: var(--sp-1) 0 var(--sp-4);
+}
+
+.sb-env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--tree-row-h);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  font-size: var(--fs-md);
+  color: var(--text-secondary);
+}
+
+.sb-env-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sb-env-row-active {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  font-weight: var(--fw-medium);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+.sb-env-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sb-env-count {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.sb-env-edit,
+.sb-env-remove {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--text-muted);
+}
+
+.sb-env-row:hover .sb-env-edit,
+.sb-env-row:hover .sb-env-remove,
+.sb-env-row:focus-within .sb-env-edit,
+.sb-env-row:focus-within .sb-env-remove {
+  opacity: 1;
+}
+
+.sb-env-remove:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.sb-history {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: var(--sp-1) 0 var(--sp-4);
+}
+
+.sb-hist-day {
+  padding: var(--sp-2) var(--sp-3) 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sb-hist-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--tree-row-h);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-hist-row:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sb-hist-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sb-hist-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-hist-status {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.sb-hist-status-ok {
+  color: var(--success);
+}
+
+.sb-hist-status-warn {
+  color: var(--warn);
+}
+
+.sb-hist-status-err {
+  color: var(--danger);
+}
+
+.sb-hist-time {
+  flex-shrink: 0;
+  width: 30px;
+  text-align: right;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+/* Two stacked, independently collapsible sections: Collections takes the height,
+   Environments sits under it and only grows when opened. */
+.sb-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sb-section:first-of-type {
+  border-top: none;
+}
+
+.sb-section-grow {
+  flex: 1;
+}
+
+.sb-section-head {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  flex-shrink: 0;
+}
+
+.sb-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  height: var(--toolbar-h);
+  padding: 0 var(--sp-3);
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sb-section-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sb-section-toggle:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: -2px;
+}
+
+.sb-section-chevron {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.sb-section-title {
+  flex: 1;
+  text-align: left;
+}
+
+.sb-section-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sb-section-grow > .sb-section-body {
+  flex: 1;
+}
+
+.export-format-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.export-pick-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+}
+
+.export-pick-row:hover {
+  color: var(--text-primary);
+}

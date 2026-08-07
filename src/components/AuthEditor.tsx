@@ -10,11 +10,27 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
 
   return (
     <div className="auth-editor">
+      {auth.inherited && (
+        <div className="field auth-inherited" role="note">
+          <span className="field-label">Source</span>
+          <span className="settings-hint">
+            Inherited from the collection — the type and values below come from
+            it, and follow it when it changes.{" "}
+            <button
+              className="btn btn-sm"
+              onClick={() => patch({ inherited: false })}
+            >
+              Use its own
+            </button>
+          </span>
+        </div>
+      )}
       <label className="field">
         <span className="field-label">Type</span>
         <select
           className="select"
           value={auth.type}
+          disabled={auth.inherited}
           onChange={(e) => patch({ type: e.target.value as AuthType })}
         >
           <option value="none">None</option>
@@ -32,6 +48,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
           <input
             className="input mono"
             value={auth.token}
+            readOnly={auth.inherited}
             placeholder="eyJhbGciOi…"
             onChange={(e) => patch({ token: e.target.value })}
           />
@@ -44,6 +61,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
             <input
               className="input"
               value={auth.username}
+              readOnly={auth.inherited}
               onChange={(e) => patch({ username: e.target.value })}
             />
           </label>
@@ -53,6 +71,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
               className="input"
               type="password"
               value={auth.password}
+              readOnly={auth.inherited}
               onChange={(e) => patch({ password: e.target.value })}
             />
           </label>
@@ -65,6 +84,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
             <input
               className="input mono"
               value={auth.key}
+              readOnly={auth.inherited}
               placeholder="X-Api-Key"
               onChange={(e) => patch({ key: e.target.value })}
             />
@@ -74,6 +94,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
             <input
               className="input mono"
               value={auth.value}
+              readOnly={auth.inherited}
               onChange={(e) => patch({ value: e.target.value })}
             />
           </label>
@@ -82,6 +103,7 @@ export function AuthEditor({ auth, onChange }: AuthEditorProps) {
             <select
               className="select"
               value={auth.placement}
+              disabled={auth.inherited}
               onChange={(e) =>
                 patch({ placement: e.target.value as "header" | "query" })
               }

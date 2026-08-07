@@ -26,6 +26,7 @@ export function TabStrip() {
   const activeId = useCollection((s) => s.activeId);
   const openRequest = useCollection((s) => s.openRequest);
   const addRequest = useCollection((s) => s.addRequest);
+  const duplicateRequest = useCollection((s) => s.duplicateRequest);
 
   const [menuAt, setMenuAt] = useState<{
     id: string;
@@ -89,6 +90,15 @@ export function TabStrip() {
     const last = openIds.indexOf(id) === openIds.length - 1;
     return (
       <>
+        <MenuItem
+          onClick={() => {
+            close();
+            void duplicateRequest(id);
+          }}
+        >
+          Duplicate
+        </MenuItem>
+        <div className="menu-sep" />
         <MenuItem hint="⌘W" onClick={() => fire("close")}>
           Close
         </MenuItem>

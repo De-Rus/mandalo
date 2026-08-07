@@ -159,24 +159,26 @@ export function mockEnvironments(): EnvironmentView[] {
       name: "staging",
       vars: {
         baseUrl: {
+          shared: true,
           secret: false,
           value: "https://staging.acme.dev/api/v2",
           set: true,
         },
-        userId: { secret: false, value: "42", set: true },
+        userId: { shared: true, secret: false, value: "42", set: true },
         token: {
+          shared: false,
           secret: true,
           value: null,
           hosts: ["staging.acme.dev"],
           set: true,
         },
-        adminToken: { secret: true, value: null, hosts: [], set: false },
+        adminToken: { shared: false, secret: true, value: null, hosts: [], set: false },
       },
     },
     {
       name: "production",
       vars: {
-        baseUrl: { secret: false, value: "https://api.acme.com/v2", set: true },
+        baseUrl: { shared: true, secret: false, value: "https://api.acme.com/v2", set: true },
       },
     },
   ];

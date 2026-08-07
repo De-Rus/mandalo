@@ -304,7 +304,8 @@
 .menu-item-hint {
   color: var(--text-muted);
   font-size: var(--fs-sm);
-  font-family: var(--font-mono);
+  margin-left: auto;
+  padding-left: 12px;
 }
 
 .menu-sep {
@@ -408,6 +409,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+.count-success {
+  background: rgba(75, 189, 122, 0.16);
+  color: var(--success);
+}
+
+.count-danger {
+  background: rgba(239, 95, 95, 0.16);
+  color: var(--danger);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -478,6 +489,14 @@
   gap: 6px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
 }
 
 kbd {

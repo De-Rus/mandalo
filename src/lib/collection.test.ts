@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SavedRequest } from "./api";
 import { fromSaved, toSaved } from "./collection";
 import { newDraft, uid } from "./draft";
 
@@ -66,6 +67,7 @@ describe("draft <-> SavedRequest mapping", () => {
     draft.url = "https://x.dev/a";
     draft.auth = {
       type: "apikey",
+      inherited: false,
       token: "",
       username: "",
       password: "",
@@ -230,5 +232,141 @@ describe("scripts, assertions and captures", () => {
     expect(toSaved(draft).description).toBeNull();
     draft.description = "Fetches users";
     expect(toSaved(draft).description).toBe("Fetches users");
+  });
+});
+
+describe("structured bodies", () => {
+  it("keeps a raw body as a plain string", () => {
+    const draft = newDraft("Raw");
+    draft.body = '{ "a": 1 }';
+    expect(toSaved(draft).body).toBe('{ "a": 1 }');
+  });
+
+  it("round-trips a urlencoded body", () => {
+    const draft = newDraft("Form login");
+    draft.bodyType = "urlencoded";
+    draft.formRows = [
+      { id: "1", key: "username", value: "ada lovelace", enabled: true },
+      { id: "2", key: "debug", value: "1", enabled: false },
+      { id: "3", key: "", value: "", enabled: true },
+    ];
+    const saved = toSaved(draft);
+    expect(saved.body).toEqual({
+      mode: "urlencoded",
+      rows: [
+        { key: "username", value: "ada lovelace", enabled: true },
+        { key: "debug", value: "1", enabled: false },
+      ],
+    });
+    const back = fromSaved(saved);
+    expect(back.bodyType).toBe("urlencoded");
+    expect(back.formRows.map(({ key, value, enabled }) => ({ key, value, enabled }))).toEqual([
+      { key: "username", value: "ada lovelace", enabled: true },
+      { key: "debug", value: "1", enabled: false },
+    ]);
+  });
+
+  it("round-trips a formdata body with text and file fields", () => {
+    const draft = newDraft("Upload");
+    draft.bodyType = "formdata";
+    draft.formDataRows = [
+      { id: "1", key: "title", kind: "text", value: "Avatar", files: [], contentType: "", enabled: true },
+      { id: "2", key: "photos", kind: "file", value: "", files: ["files/a.png", "files/b.png"], contentType: "image/png", enabled: true },
+      { id: "3", key: "", kind: "text", value: "", files: [], contentType: "", enabled: true },
+    ];
+    const saved = toSaved(draft);
+    expect(saved.body).toEqual({
+      mode: "formdata",
+      rows: [
+        { key: "title", value: "Avatar", enabled: true },
+        { key: "photos", files: ["files/a.png", "files/b.png"], contentType: "image/png", enabled: true },
+      ],
+    });
+    const back = fromSaved(saved);
+    expect(back.bodyType).toBe("formdata");
+    expect(back.formDataRows[0]?.kind).toBe("text");
+    expect(back.formDataRows[1]?.kind).toBe("file");
+    expect(back.formDataRows[1]?.files).toEqual(["files/a.png", "files/b.png"]);
+    expect(back.formDataRows[1]?.contentType).toBe("image/png");
+  });
+
+  it("folds repeated file keys into one multi-file field when loading", () => {
+    const back = fromSaved({
+      ...toSaved(newDraft("Upload")),
+      body: {
+        mode: "formdata",
+        rows: [
+          { key: "attachments", files: ["files/a.txt"], enabled: true },
+          { key: "attachments", files: ["files/b.txt"], enabled: true },
+        ],
+      },
+    });
+    expect(back.formDataRows.filter((row) => row.key === "attachments")).toHaveLength(1);
+    expect(back.formDataRows[0]?.files).toEqual(["files/a.txt", "files/b.txt"]);
+  });
+
+  it("round-trips a binary body", () => {
+    const draft = newDraft("Binary");
+    draft.bodyType = "binary";
+    draft.binaryFile = "files/blob.bin";
+    const saved = toSaved(draft);
+    expect(saved.body).toEqual({ mode: "binary", file: "files/blob.bin" });
+    const back = fromSaved(saved);
+    expect(back.bodyType).toBe("binary");
+    expect(back.binaryFile).toBe("files/blob.bin");
+  });
+
+  it("reads a structured raw body written by core", () => {
+    const saved = toSaved(newDraft("From disk"));
+    saved.body = { mode: "raw", language: "json", text: '{ "a": 1 }' };
+    expect(fromSaved(saved).body).toBe('{ "a": 1 }');
+  });
+
+  it("reads a graphql body written by core into the query fields", () => {
+    const saved = toSaved(newDraft("Gql"));
+    saved.kind = "graphql";
+    saved.body = { mode: "graphql", query: "{ me { id } }", variables: "{}" };
+    const back = fromSaved(saved);
+    expect(back.graphqlQuery).toBe("{ me { id } }");
+    expect(back.graphqlVariables).toBe("{}");
+  });
+
+  it("sends no body when the selected type has no content", () => {
+    const draft = newDraft("Empty");
+    draft.bodyType = "formdata";
+    expect(toSaved(draft).body).toBeNull();
+  });
+});
+
+describe("inherited auth", () => {
+  const inherited = (): SavedRequest =>
+    ({
+      id: "r1",
+      name: "Me",
+      kind: "http",
+      method: "GET",
+      url: "https://a.dev/me",
+      headers: [],
+      auth: { type: "inherited", auth: { type: "bearer", token: "{{token}}" } },
+    }) as unknown as SavedRequest;
+
+  // An autosave fires 500ms after any edit, so anything the round-trip drops is
+  // deleted from a git-tracked file without the user asking.
+  it("survives load-then-autosave instead of being downgraded to none", () => {
+    const saved = inherited();
+    expect(toSaved(fromSaved(saved)).auth).toEqual(saved.auth);
+  });
+
+  it("shows the wrapped auth in the editor", () => {
+    const draft = fromSaved(inherited());
+    expect(draft.auth.type).toBe("bearer");
+    expect(draft.auth.token).toBe("{{token}}");
+    expect(draft.auth.inherited).toBe(true);
+  });
+
+  it("stops inheriting when the request clears its auth", () => {
+    const draft = fromSaved(inherited());
+    draft.auth = { ...draft.auth, type: "none" };
+    expect(toSaved(draft).auth).toEqual({ type: "none" });
   });
 });

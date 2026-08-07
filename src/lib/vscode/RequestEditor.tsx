@@ -199,6 +199,7 @@ export function RequestEditor() {
             vars={varsOf(environment)}
             sending={response.phase === "loading"}
             dirty={dirty}
+            streamPhase={null}
             onPatch={onPatch}
             onSend={onSend}
             onSave={onSave}

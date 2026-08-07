@@ -1,82 +1,21 @@
 import { useState } from "react";
-import { useEnv, varLabel } from "../store/env";
-import { Dropdown } from "./Dropdown";
+import { errorMessage } from "../lib/api";
+import { useEnv } from "../store/env";
+import { toast } from "../store/toast";
+import { ConfirmModal } from "./ConfirmModal";
+import { Dropdown, MenuItem } from "./Dropdown";
 import { EnvModal } from "./EnvModal";
-import { Close, Eye, Warn } from "./Icons";
-
-function QuickLook({ onEdit }: { onEdit: () => void }) {
-  const envs = useEnv((s) => s.envs);
-  const selected = useEnv((s) => s.selected);
-  const vars = envs.find((e) => e.name === selected)?.vars ?? {};
-  const entries = Object.entries(vars).sort(([a], [b]) => a.localeCompare(b));
-
-  return (
-    <Dropdown
-      panel
-      align="right"
-      trigger={({ open, toggle }) => (
-        <button
-          className={`btn-ghost btn-icon ${open ? "menu-item-active" : ""}`}
-          onClick={toggle}
-          aria-label="Environment quick look"
-          title="Environment quick look"
-        >
-          <Eye size={15} />
-        </button>
-      )}
-    >
-      {(close) => (
-        <>
-          <div className="popover-head">
-            <span className="popover-title">{selected ?? "No environment"}</span>
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => {
-                close();
-                onEdit();
-              }}
-            >
-              Edit
-            </button>
-          </div>
-          <div className="popover-body">
-            {entries.length === 0 ? (
-              <p className="empty-line env-quicklook-empty">
-                {selected
-                  ? "This environment has no variables yet."
-                  : "Select an environment to see its variables."}
-              </p>
-            ) : (
-              entries.map(([key, info]) => (
-                <div className="env-quicklook-row" key={key}>
-                  <span className="env-quicklook-key">{key}</span>
-                  {info.secret && (
-                    <span className="badge badge-secret">Secret</span>
-                  )}
-                  <span
-                    className={`env-quicklook-value ${
-                      info.secret && !info.set ? "env-secret-unset" : ""
-                    }`}
-                  >
-                    {varLabel(info) || "—"}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </>
-      )}
-    </Dropdown>
-  );
-}
+import { Check, ChevronDown, Close, Plus, Trash, Warn } from "./Icons";
 
 export function EnvBar() {
   const envs = useEnv((s) => s.envs);
   const selected = useEnv((s) => s.selected);
   const select = useEnv((s) => s.select);
+  const remove = useEnv((s) => s.remove);
   const error = useEnv((s) => s.error);
   const dismissError = useEnv((s) => s.dismissError);
-  const [managing, setManaging] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [confirm, setConfirm] = useState<string | null>(null);
 
   return (
     <div className="header-right">
@@ -94,23 +33,108 @@ export function EnvBar() {
         </span>
       )}
       <div className="env-cluster">
-      <select
-        className="select env-select"
-        value={selected ?? ""}
-        title="Active environment"
-        aria-label="Active environment"
-        onChange={(e) => select(e.target.value === "" ? null : e.target.value)}
-      >
-        <option value="">No environment</option>
-        {envs.map((env) => (
-          <option key={env.name} value={env.name}>
-            {env.name}
-          </option>
-        ))}
-      </select>
-      <QuickLook onEdit={() => setManaging(true)} />
+        <Dropdown
+          align="right"
+          menuClassName="env-menu"
+          trigger={({ open, toggle }) => (
+            <button
+              type="button"
+              className={`ws-trigger env-trigger ${selected ? "" : "env-trigger-empty"} ${open ? "ws-trigger-open" : ""}`}
+              title="Active environment"
+              aria-label="Active environment"
+              aria-haspopup="menu"
+              aria-expanded={open}
+              onClick={toggle}
+            >
+              <span className="ws-name">
+                {selected ?? "No Environment"}
+              </span>
+              <ChevronDown size={12} className="ws-caret" />
+            </button>
+          )}
+        >
+          {(close) => (
+            <>
+              <div className="menu-head">Environments</div>
+              <div
+                className={`menu-item ws-item env-item ${selected === null ? "menu-item-active" : ""}`}
+                role="menuitem"
+              >
+                <button
+                  type="button"
+                  className="ws-item-pick"
+                  onClick={() => {
+                    close();
+                    select(null);
+                  }}
+                >
+                  <span className="menu-item-icon">
+                    {selected === null ? <Check size={13} /> : null}
+                  </span>
+                  <span className="menu-item-label">No Environment</span>
+                </button>
+              </div>
+              {envs.map((env) => (
+                <div
+                  key={env.name}
+                  className={`menu-item ws-item env-item ${env.name === selected ? "menu-item-active" : ""}`}
+                  role="menuitem"
+                >
+                  <button
+                    type="button"
+                    className="ws-item-pick"
+                    onClick={() => {
+                      close();
+                      select(env.name);
+                    }}
+                  >
+                    <span className="menu-item-icon">
+                      {env.name === selected ? <Check size={13} /> : null}
+                    </span>
+                    <span className="menu-item-label">{env.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost btn-icon btn-icon-sm ws-item-remove"
+                    aria-label={`Delete ${env.name}`}
+                    title="Delete environment"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      close();
+                      setConfirm(env.name);
+                    }}
+                  >
+                    <Trash size={12} />
+                  </button>
+                </div>
+              ))}
+              <div className="menu-sep" />
+              <MenuItem
+                icon={<Plus size={13} />}
+                onClick={() => {
+                  close();
+                  setCreating(true);
+                }}
+              >
+                New environment…
+              </MenuItem>
+            </>
+          )}
+        </Dropdown>
       </div>
-      {managing && <EnvModal onClose={() => setManaging(false)} />}
+      {creating && (
+        <EnvModal create onClose={() => setCreating(false)} />
+      )}
+      {confirm !== null && (
+        <ConfirmModal
+          title="Delete environment"
+          message={`“${confirm}” will be removed from disk, along with every variable it declares. This cannot be undone.`}
+          onConfirm={() => {
+            void remove(confirm).catch((e) => toast("error", errorMessage(e)));
+          }}
+          onClose={() => setConfirm(null)}
+        />
+      )}
     </div>
   );
 }

@@ -182,6 +182,17 @@ export const Code = (p: IconProps) =>
     p,
   );
 
+export const Branch = (p: IconProps) =>
+  svg(
+    <>
+      <circle cx="4.5" cy="4" r="1.6" />
+      <circle cx="4.5" cy="12" r="1.6" />
+      <circle cx="11.5" cy="8" r="1.6" />
+      <path d="M4.5 5.6v4.8M4.5 8h5.4" />
+    </>,
+    p,
+  );
+
 export const Beaker = (p: IconProps) =>
   svg(
     <>
@@ -193,3 +204,32 @@ export const Beaker = (p: IconProps) =>
 
 export const Bolt = (p: IconProps) =>
   svg(<path d="M8.8 1.6 3.4 9.1h3.6l-.6 5.3 5.4-7.5H8.2z" />, p);
+
+export const ArrowDown = (p: IconProps) =>
+  svg(<path d="M8 3v10M4 9l4 4 4-4" />, p);
+
+export const Plug = (p: IconProps) =>
+  svg(
+    <>
+      <path d="M6 1.8v3.4M10 1.8v3.4" />
+      <path d="M4.2 5.2h7.6v2.3a3.8 3.8 0 0 1-7.6 0z" />
+      <path d="M8 11.3v2.9" />
+    </>,
+    p,
+  );
+
+export const Broadcast = (p: IconProps) =>
+  svg(
+    <>
+      <circle cx="8" cy="8" r="1.6" />
+      <path d="M4.8 4.8a4.5 4.5 0 0 0 0 6.4M11.2 4.8a4.5 4.5 0 0 1 0 6.4" />
+      <path d="M2.6 2.6a7.6 7.6 0 0 0 0 10.8M13.4 2.6a7.6 7.6 0 0 1 0 10.8" />
+    </>,
+    p,
+  );
+
+export const Heart = (p: IconProps) =>
+  svg(
+    <path d="M8 13.2 2.9 8.4A3.2 3.2 0 0 1 7.4 3.6L8 4.2l.6-.6a3.2 3.2 0 0 1 4.5 4.8z" />,
+    p,
+  );

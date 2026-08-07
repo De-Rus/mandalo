@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { tokenizeLines, type Token } from "../lib/json";
+import { ChevronDown, ChevronRight } from "./Icons";
 
 const HIGHLIGHT_LIMIT = 300_000;
 
@@ -58,6 +60,41 @@ function renderLine(
   ));
 }
 
+function lineText(tokens: Token[]): string {
+  return tokens.map((t) => t.text).join("");
+}
+
+function foldRanges(lines: Token[][]): Map<number, number> {
+  const ranges = new Map<number, number>();
+  const open: number[] = [];
+  lines.forEach((tokens, i) => {
+    for (const token of tokens) {
+      if (token.type !== "punct") continue;
+      for (const char of token.text) {
+        if (char === "{" || char === "[") open.push(i);
+        else if (char === "}" || char === "]") {
+          const start = open.pop();
+          if (start !== undefined && start < i) ranges.set(start, i);
+        }
+      }
+    }
+  });
+  return ranges;
+}
+
+function hiddenLines(
+  ranges: Map<number, number>,
+  folded: ReadonlySet<number>,
+): Set<number> {
+  const hidden = new Set<number>();
+  for (const start of folded) {
+    const end = ranges.get(start);
+    if (end === undefined) continue;
+    for (let i = start + 1; i <= end; i++) hidden.add(i);
+  }
+  return hidden;
+}
+
 interface JsonViewProps {
   text: string;
   highlight: boolean;
@@ -75,28 +112,67 @@ export function JsonView({
   query,
   current,
 }: JsonViewProps) {
+  const [folded, setFolded] = useState<ReadonlySet<number>>(new Set());
+
+  useEffect(() => setFolded(new Set()), [text]);
+
   const usable = highlight && text.length <= HIGHLIGHT_LIMIT;
   const lines = usable
     ? tokenizeLines(text)
     : text.split("\n").map((line) => [{ type: "text" as const, text: line }]);
+  const ranges = usable ? foldRanges(lines) : new Map<number, number>();
+  const hidden = hiddenLines(ranges, folded);
   const cursor: Cursor = { seen: 0 };
+
+  const numbers: React.ReactNode[] = [];
+  const arrows: React.ReactNode[] = [];
+  const rows: React.ReactNode[] = [];
+
+  lines.forEach((tokens, i) => {
+    if (hidden.has(i)) {
+      cursor.seen += countMatches(lineText(tokens), query);
+      return;
+    }
+    numbers.push(<div key={i}>{i + 1}</div>);
+    const end = ranges.get(i);
+    const shut = folded.has(i);
+    arrows.push(
+      end === undefined ? (
+        <div key={i} className="code-fold-blank" />
+      ) : (
+        <button
+          key={i}
+          className="code-fold"
+          aria-expanded={!shut}
+          aria-label={`${shut ? "Expand" : "Collapse"} lines ${i + 1} to ${end + 1}`}
+          onClick={() => {
+            const next = new Set(folded);
+            if (shut) next.delete(i);
+            else next.add(i);
+            setFolded(next);
+          }}
+        >
+          {shut ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+        </button>
+      ),
+    );
+    rows.push(
+      <div key={i}>
+        {tokens.length === 0 ? "​" : renderLine(tokens, query, current, cursor)}
+        {shut && <span className="code-fold-mark">⋯</span>}
+      </div>,
+    );
+  });
 
   return (
     <div className={`code-view ${wrap ? "code-view-wrap" : ""}`}>
       {lineNumbers && (
         <div className="code-view-gutter" aria-hidden="true">
-          {lines.map((_, i) => (
-            <div key={i}>{i + 1}</div>
-          ))}
+          {numbers}
         </div>
       )}
-      <div className="code-view-body">
-        {lines.map((tokens, i) => (
-          <div key={i}>
-            {tokens.length === 0 ? "​" : renderLine(tokens, query, current, cursor)}
-          </div>
-        ))}
-      </div>
+      {ranges.size > 0 && <div className="code-view-folds">{arrows}</div>}
+      <div className="code-view-body">{rows}</div>
     </div>
   );
 }

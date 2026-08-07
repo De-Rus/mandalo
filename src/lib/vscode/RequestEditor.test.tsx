@@ -16,6 +16,7 @@ const PING: SavedRequest = {
   auth: { type: "none" },
   graphql: null,
   grpc: null,
+  stream: null,
   scripts: { pre: null, post: null },
   tests: [],
   captures: [],
