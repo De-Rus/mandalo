@@ -65,14 +65,18 @@ describe("ExportDialog", () => {
             slug: "acme",
             name: "Acme API",
             folders: [],
-            requests: [{ path: "a.toml", name: "a", method: "GET", kind: "http" }],
+            requests: [
+              { id: "a", path: "a.toml", name: "a", method: "GET", kind: "http" },
+            ],
           },
           {
             id: "2",
             slug: "billing",
             name: "Billing",
             folders: [],
-            requests: [{ path: "b.toml", name: "b", method: "POST", kind: "http" }],
+            requests: [
+              { id: "b", path: "b.toml", name: "b", method: "POST", kind: "http" },
+            ],
           },
         ],
         skipped: [],
@@ -265,7 +269,9 @@ describe("choosing what goes into the bundle", () => {
             slug: "acme",
             name: "Acme API",
             folders: [],
-            requests: [{ path: "a.toml", name: "a", method: "GET", kind: "http" }],
+            requests: [
+              { id: "a", path: "a.toml", name: "a", method: "GET", kind: "http" },
+            ],
           },
         ],
         skipped: [],

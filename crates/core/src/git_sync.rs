@@ -765,10 +765,7 @@ fn configured_remote_url(repo: &Repository) -> CoreResult<String> {
 }
 
 /// Opens `origin`, or a detached HTTPS remote when auth is a token against GitHub SSH.
-fn open_transport_remote<'a>(
-    repo: &'a Repository,
-    auth: &Auth,
-) -> CoreResult<git2::Remote<'a>> {
+fn open_transport_remote<'a>(repo: &'a Repository, auth: &Auth) -> CoreResult<git2::Remote<'a>> {
     let configured = configured_remote_url(repo)?;
     let url = transport_url(&configured, auth);
     if url != configured {
@@ -798,9 +795,9 @@ fn fetch(repo: &Repository, branch: &str, auth: &Auth) -> CoreResult<()> {
 /// out of this commit: their edits are NOT in any commit, so a forced checkout
 /// would destroy them — a safe checkout stops instead.
 fn checkout_head(repo: &Repository, keep_edits: bool) -> CoreResult<()> {
-    let workdir = repo.workdir().ok_or_else(|| {
-        CoreError::Io("the repository has no working tree".to_string())
-    })?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| CoreError::Io("the repository has no working tree".to_string()))?;
     let preserved: Vec<(PathBuf, Vec<u8>)> = if keep_edits {
         changed_files(repo)?
             .into_iter()
@@ -813,7 +810,10 @@ fn checkout_head(repo: &Repository, keep_edits: bool) -> CoreResult<()> {
         Vec::new()
     };
     let mut checkout = git2::build::CheckoutBuilder::new();
-    checkout.force().remove_untracked(false).remove_ignored(false);
+    checkout
+        .force()
+        .remove_untracked(false)
+        .remove_ignored(false);
     repo.checkout_head(Some(&mut checkout))
         .map_err(|e| map_git("cannot update the working tree", e))?;
     for (path, bytes) in preserved {
@@ -903,15 +903,13 @@ fn pending_conflict_paths(
     if remote_changed.is_empty() {
         return Ok(Vec::new());
     }
-    let mut local_touched: std::collections::BTreeSet<String> =
-        dirty.iter().cloned().collect();
+    let mut local_touched: std::collections::BTreeSet<String> = dirty.iter().cloned().collect();
     if ahead > 0 {
         for path in paths_changed_between(repo, base, local)? {
             local_touched.insert(path);
         }
     }
-    let dirty_set: std::collections::BTreeSet<&str> =
-        dirty.iter().map(String::as_str).collect();
+    let dirty_set: std::collections::BTreeSet<&str> = dirty.iter().map(String::as_str).collect();
     let marked = read_resolved(repo);
     Ok(remote_changed
         .into_iter()
@@ -1083,10 +1081,7 @@ pub fn conflict_previews(workspace: &Path, files: &[String]) -> CoreResult<Vec<C
 /// Write the Mandalo-resolved file bodies into the working tree. This is not a
 /// git merge — the UI already diffed requests/config; Sync picks the result up
 /// from disk afterwards.
-pub fn apply_conflict_choices(
-    workspace: &Path,
-    decisions: &[ConflictDecision],
-) -> CoreResult<()> {
+pub fn apply_conflict_choices(workspace: &Path, decisions: &[ConflictDecision]) -> CoreResult<()> {
     let repo = open_required(workspace)?;
     let head_info = head(&repo)?;
     let Some(local) = head_info.oid else {
@@ -1810,8 +1805,7 @@ pub fn run_sync(
     let mut local = match head_oid {
         Some(oid) => oid,
         None => {
-            let committed =
-                commit_selected(&repo, workspace, &files, message, &id, &head(&repo)?)?;
+            let committed = commit_selected(&repo, workspace, &files, message, &id, &head(&repo)?)?;
             committed.ok_or_else(|| {
                 CoreError::Conflict(
                     "the branch has no commits yet — there is nothing to sync".to_string(),
@@ -1826,18 +1820,9 @@ pub fn run_sync(
 
     // Integrate remote first. Overlaps are Mandalo diffs (Resolve), not git pulls.
     if behind > 0 {
-        let dirty_paths: Vec<String> = changed_files(&repo)?
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
-        let pending = pending_conflict_paths(
-            &repo,
-            workspace,
-            local,
-            remote_oid,
-            ahead,
-            &dirty_paths,
-        )?;
+        let dirty_paths: Vec<String> = changed_files(&repo)?.into_iter().map(|(p, _)| p).collect();
+        let pending =
+            pending_conflict_paths(&repo, workspace, local, remote_oid, ahead, &dirty_paths)?;
         if !pending.is_empty() {
             let items = conflict_items(&repo, workspace, local, remote_oid, &pending)?;
             return Ok(SyncOutcome::Conflicted {
@@ -1855,28 +1840,22 @@ pub fn run_sync(
             local = remote_oid;
         } else {
             // libgit2 refuses rebase with a dirty workdir — merge instead.
-            let needs_merge = dirty
-                || rebase_onto(&repo, remote_oid, &id, preserve)?.is_some();
+            let needs_merge = dirty || rebase_onto(&repo, remote_oid, &id, preserve)?.is_some();
             if needs_merge {
-                if let Some(files) =
-                    merge_onto(&repo, local, remote_oid, &branch, &id, preserve)?
-                {
+                if let Some(files) = merge_onto(&repo, local, remote_oid, &branch, &id, preserve)? {
                     if files.iter().all(|path| marked.contains(path)) {
                         finish_merge_with_workdir(
                             &repo, workspace, local, remote_oid, &branch, &id, &files,
                         )?;
                     } else {
-                        let items =
-                            conflict_items(&repo, workspace, local, remote_oid, &files)?;
+                        let items = conflict_items(&repo, workspace, local, remote_oid, &files)?;
                         return Ok(SyncOutcome::Conflicted { files, items });
                     }
                 }
             }
             local = head(&repo)?
                 .oid
-                .ok_or_else(|| {
-                    CoreError::Io("the branch lost its tip during the merge".into())
-                })?;
+                .ok_or_else(|| CoreError::Io("the branch lost its tip during the merge".into()))?;
         }
     }
 

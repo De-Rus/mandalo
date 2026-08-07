@@ -314,11 +314,7 @@ fn directory_label(workspace: &Path) -> String {
         .to_string()
 }
 
-fn scaffold_with(
-    workspace: &Path,
-    name: &str,
-    preferred_id: Option<&str>,
-) -> CoreResult<Manifest> {
+fn scaffold_with(workspace: &Path, name: &str, preferred_id: Option<&str>) -> CoreResult<Manifest> {
     let manifest = match read_manifest(workspace)? {
         Some(existing) => Manifest {
             schema_version: SCHEMA_VERSION,

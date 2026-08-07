@@ -1453,14 +1453,8 @@ fn export(ctx: &Ctx, file: &Path, flags: ExportFlags, yes: bool, force: bool) ->
         ctx.say("nothing was written");
         return Ok(false);
     }
-    let receipt = bundle::run_export_as(
-        &ctx.workspace,
-        &selection,
-        format,
-        &plan.token,
-        file,
-        force,
-    )?;
+    let receipt =
+        bundle::run_export_as(&ctx.workspace, &selection, format, &plan.token, file, force)?;
     ctx.say(&ctx.style.pass(&format!(
         "exported {} to {}",
         plural(receipt.requests, "request", "requests"),

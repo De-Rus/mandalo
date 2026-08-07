@@ -1256,7 +1256,11 @@ fn render_auth(auth: &Auth) -> Option<Value> {
             value,
             placement,
         } => {
-            let placement = if placement == "query" { "query" } else { "header" };
+            let placement = if placement == "query" {
+                "query"
+            } else {
+                "header"
+            };
             Some(serde_json::json!({
                 "type": "apikey",
                 "apikey": [

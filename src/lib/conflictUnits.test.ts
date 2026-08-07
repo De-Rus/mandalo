@@ -3,6 +3,7 @@ import {
   buildRequestMerge,
   matchRequestUnits,
   splitRequestUnits,
+  type UnitPick,
 } from "./conflictUnits";
 
 describe("conflictUnits", () => {
@@ -49,11 +50,11 @@ GET /a2
 GET /c
 `;
     const units = matchRequestUnits(ours, theirs);
-    const picks = Object.fromEntries(
+    const picks: Record<string, UnitPick> = Object.fromEntries(
       units.map((u) => {
-        if (u.kind === "changed") return [u.id, "both"];
-        if (u.kind === "oursOnly") return [u.id, "ours"];
-        return [u.id, "theirs"];
+        if (u.kind === "changed") return [u.id, "both" as const];
+        if (u.kind === "oursOnly") return [u.id, "ours" as const];
+        return [u.id, "theirs" as const];
       }),
     );
     const merged = buildRequestMerge(units, picks);

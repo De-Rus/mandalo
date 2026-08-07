@@ -1,6 +1,9 @@
 import { context } from "esbuild";
 import { glob } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const root = dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes("--watch");
 const withTests = process.argv.includes("--tests");
 const production = process.argv.includes("--production") || process.env["NODE_ENV"] === "production";
@@ -13,6 +16,7 @@ const shared = {
   external: ["vscode"],
   sourcemap: !production,
   logLevel: "info",
+  nodePaths: [join(root, "node_modules")],
 };
 
 const builds = [

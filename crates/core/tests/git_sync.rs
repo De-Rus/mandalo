@@ -326,7 +326,11 @@ fn divergent_edits_to_different_files_rebase_cleanly() {
 fn divergent_edits_to_the_same_request_surface_a_full_text_diff() {
     let box_ = sandbox();
     let alice = box_.workspace("alice");
-    write(&alice, "collections/api/shared.http", "### Base\n\nGET {{baseUrl}}/x\n");
+    write(
+        &alice,
+        "collections/api/shared.http",
+        "### Base\n\nGET {{baseUrl}}/x\n",
+    );
     assert!(matches!(sync(&alice, "seed"), SyncOutcome::Pushed { .. }));
 
     let bob = box_.clone("bob");
@@ -350,7 +354,10 @@ fn divergent_edits_to_the_same_request_surface_a_full_text_diff() {
             let theirs = items[0].theirs.text.as_deref().unwrap_or("");
             assert!(ours.contains("Create user") && ours.contains("POST"));
             assert!(theirs.contains("List users") && theirs.contains("GET"));
-            assert!(ours.contains("Ada"), "full request body must be in the diff");
+            assert!(
+                ours.contains("Ada"),
+                "full request body must be in the diff"
+            );
             assert!(theirs.contains("Accept: application/json"));
         }
         other => panic!("expected Conflicted with full request text, got {other:?}"),
@@ -371,7 +378,10 @@ fn resolving_then_syncing_with_local_commits_merges_cleanly() {
 
     let bob = box_.clone("bob");
     write(&bob, "collections/api/bob.toml", "name = \"bob\"\n");
-    assert!(matches!(sync(&bob, "bob local"), SyncOutcome::Pushed { .. }));
+    assert!(matches!(
+        sync(&bob, "bob local"),
+        SyncOutcome::Pushed { .. }
+    ));
 
     write(
         &alice,

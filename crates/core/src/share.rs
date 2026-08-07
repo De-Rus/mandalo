@@ -91,11 +91,7 @@ fn prune_stale(root: &Path, dir_name: &str, keep: &[String]) -> CoreResult<()> {
         let rel_inside = entry
             .strip_prefix(root)
             .map_err(|_| {
-                CoreError::PathEscape(format!(
-                    "{} is outside {}",
-                    entry.display(),
-                    root.display()
-                ))
+                CoreError::PathEscape(format!("{} is outside {}", entry.display(), root.display()))
             })?
             .display()
             .to_string()

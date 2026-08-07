@@ -56,7 +56,7 @@ describe("TransferMenu", () => {
             name: "Acme API",
             folders: [],
             requests: [
-              { path: "a.toml", name: "a", method: "GET", kind: "http" },
+              { id: "a", path: "a.toml", name: "a", method: "GET", kind: "http" },
             ],
           },
         ],

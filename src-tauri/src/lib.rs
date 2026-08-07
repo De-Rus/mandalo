@@ -457,9 +457,7 @@ fn parse_share_format(
     match format.as_deref() {
         None => Ok(None),
         Some("postman") => Ok(Some(mandalo_core::workspace::ShareFormat::Postman)),
-        Some("bundle") | Some("native") => {
-            Ok(Some(mandalo_core::workspace::ShareFormat::Native))
-        }
+        Some("bundle") | Some("native") => Ok(Some(mandalo_core::workspace::ShareFormat::Native)),
         Some(other) => Err(format!(
             "unknown export format {other:?} — use bundle or postman"
         )),
@@ -821,10 +819,7 @@ fn run_sync(
 }
 
 #[tauri::command]
-fn conflict_previews(
-    workspace: String,
-    files: Vec<String>,
-) -> Reply<Vec<git_sync::ConflictItem>> {
+fn conflict_previews(workspace: String, files: Vec<String>) -> Reply<Vec<git_sync::ConflictItem>> {
     edge(git_sync::conflict_previews(&ws(&workspace)?, &files))
 }
 

@@ -398,11 +398,7 @@ async fn github_get(url: &str, token: &str) -> CoreResult<String> {
     read_github_body(response, "GET").await
 }
 
-async fn github_post_json(
-    url: &str,
-    token: &str,
-    body: &serde_json::Value,
-) -> CoreResult<String> {
+async fn github_post_json(url: &str, token: &str, body: &serde_json::Value) -> CoreResult<String> {
     let response = crate::request::client()?
         .post(url)
         .header("accept", "application/vnd.github+json")
