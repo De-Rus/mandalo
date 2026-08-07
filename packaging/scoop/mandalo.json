@@ -1,13 +1,13 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fast, offline, git-native API client — HTTP, GraphQL and gRPC from the terminal",
   "homepage": "https://mandalo.dev",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/De-Rus/mandalo/releases/download/v0.1.0/mandalo-v0.1.0-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/De-Rus/mandalo/releases/download/v0.2.0/mandalo-v0.2.0-x86_64-pc-windows-msvc.zip",
       "hash": "REPLACE_WITH_SHA256_x86_64-pc-windows-msvc",
-      "extract_dir": "mandalo-v0.1.0-x86_64-pc-windows-msvc"
+      "extract_dir": "mandalo-v0.2.0-x86_64-pc-windows-msvc"
     }
   },
   "bin": "mandalo.exe",

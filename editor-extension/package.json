@@ -2,7 +2,7 @@
   "name": "mandalo",
   "displayName": "Mándalo",
   "description": "Git-native API client in your editor — send HTTP/GraphQL/gRPC requests stored as plain .http and .grpc files in your repo, and run them as native tests.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "de-rus",
   "license": "MIT",
   "icon": "icon.png",

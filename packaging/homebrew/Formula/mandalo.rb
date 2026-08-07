@@ -1,7 +1,7 @@
 class Mandalo < Formula
   desc "Fast, offline, git-native API client — HTTP, GraphQL and gRPC from the terminal"
   homepage "https://mandalo.dev"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   on_macos do
