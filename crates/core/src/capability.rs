@@ -1,15 +1,38 @@
 use crate::error::{CoreError, CoreResult};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Mutex;
 
+/// Where the value a variable resolves to actually comes from. The UI and
+/// `mandalo env get` show it, so a value arriving from an unexpected layer is
+/// visible instead of surprising.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VarSource {
+    /// The committed environment file.
+    File,
+    /// `$HOME/.config/mandalo/secrets.toml` — this machine only.
+    Local,
+    /// `MANDALO_SECRET__<ENV>__<KEY>` in the process environment.
+    Environment,
+}
+
 pub trait SecretStore: Send + Sync {
     fn get(&self, env: &str, key: &str) -> CoreResult<Option<String>>;
+
+    /// Which layer would answer, without materialising the value. A view that
+    /// only needs to say "this machine holds it" never has to hold it.
+    fn source(&self, env: &str, key: &str) -> CoreResult<Option<VarSource>>;
 }
 
 impl<T: SecretStore + ?Sized> SecretStore for Box<T> {
     fn get(&self, env: &str, key: &str) -> CoreResult<Option<String>> {
         (**self).get(env, key)
+    }
+
+    fn source(&self, env: &str, key: &str) -> CoreResult<Option<VarSource>> {
+        (**self).source(env, key)
     }
 }
 
@@ -39,6 +62,82 @@ impl SecretStore for NoSecrets {
     fn get(&self, _env: &str, _key: &str) -> CoreResult<Option<String>> {
         Ok(None)
     }
+
+    fn source(&self, _env: &str, _key: &str) -> CoreResult<Option<VarSource>> {
+        Ok(None)
+    }
+}
+
+/// For write paths that have no machine-local store to divert a value into —
+/// importers, which only ever carry shared values. It refuses loudly rather
+/// than letting a value that must not be shared reach a committed file.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RefuseLocalWrites;
+
+impl SecretStore for RefuseLocalWrites {
+    fn get(&self, _env: &str, _key: &str) -> CoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self, _env: &str, _key: &str) -> CoreResult<Option<VarSource>> {
+        Ok(None)
+    }
+}
+
+impl SecretWriter for RefuseLocalWrites {
+    fn set(&self, env: &str, key: &str, _value: &str) -> CoreResult<()> {
+        Err(CoreError::Secret(format!(
+            "{env}.{key} is declared not shared, so an import cannot give it a value — \
+             run `mandalo env set-secret {env} {key}` afterwards"
+        )))
+    }
+
+    fn delete(&self, _env: &str, _key: &str) -> CoreResult<()> {
+        Ok(())
+    }
+}
+
+/// Asks each layer in order and takes the first answer.
+///
+/// The order is deliberate: **environment variable, then local file**. The
+/// process environment is the more explicit and more ephemeral act — the same
+/// rule dotenv, direnv and compose follow — and it is the layer CI injects, so
+/// a stale local file that somehow reached a build agent can never shadow the
+/// credential the pipeline was given.
+pub struct LayeredSecrets {
+    layers: Vec<Box<dyn SecretStore>>,
+}
+
+impl LayeredSecrets {
+    pub fn new(layers: Vec<Box<dyn SecretStore>>) -> Self {
+        LayeredSecrets { layers }
+    }
+
+    /// The chain every entry point uses: exported variable first, then the
+    /// values this machine keeps in `secrets.toml`.
+    pub fn over(local: impl SecretStore + 'static) -> Self {
+        LayeredSecrets::new(vec![Box::new(EnvVarStore), Box::new(local)])
+    }
+}
+
+impl SecretStore for LayeredSecrets {
+    fn get(&self, env: &str, key: &str) -> CoreResult<Option<String>> {
+        for layer in &self.layers {
+            if let Some(value) = layer.get(env, key)? {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
+    fn source(&self, env: &str, key: &str) -> CoreResult<Option<VarSource>> {
+        for layer in &self.layers {
+            if let Some(found) = layer.source(env, key)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -64,19 +163,26 @@ impl EnvVarStore {
 
 impl SecretStore for EnvVarStore {
     fn get(&self, env: &str, key: &str) -> CoreResult<Option<String>> {
-        match std::env::var(Self::variable_name(env, key)) {
+        let name = Self::variable_name(env, key);
+        match std::env::var(&name) {
+            Ok(value) if value.is_empty() => Err(CoreError::Secret(format!(
+                "{name} is set but empty; unset it or give it a value"
+            ))),
             Ok(value) => Ok(Some(value)),
             Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(std::env::VarError::NotUnicode(_)) => Err(CoreError::Secret(format!(
-                "{} is not valid UTF-8",
-                Self::variable_name(env, key)
-            ))),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(CoreError::Secret(format!("{name} is not valid UTF-8")))
+            }
         }
+    }
+
+    fn source(&self, env: &str, key: &str) -> CoreResult<Option<VarSource>> {
+        Ok(self.get(env, key)?.map(|_| VarSource::Environment))
     }
 }
 
-/// A process-local secret store. The desktop app uses [`KeyringStore`]; this is
-/// what tests and CI-less callers drive so no keychain is ever required.
+/// An in-process stand-in for the machine-local file, so tests and callers that
+/// must not touch `$HOME` drive the same code paths.
 #[derive(Debug, Default)]
 pub struct MemorySecrets {
     values: Mutex<BTreeMap<(String, String), String>>,
@@ -105,6 +211,10 @@ impl SecretStore for MemorySecrets {
             .get(&(env.to_string(), key.to_string()))
             .cloned())
     }
+
+    fn source(&self, env: &str, key: &str) -> CoreResult<Option<VarSource>> {
+        Ok(self.get(env, key)?.map(|_| VarSource::Local))
+    }
 }
 
 impl SecretWriter for MemorySecrets {
@@ -122,78 +232,6 @@ impl SecretWriter for MemorySecrets {
             .expect("memory secret lock")
             .remove(&(env.to_string(), key.to_string()));
         Ok(())
-    }
-}
-
-/// The OS keychain, keyed by workspace **id** so moving or cloning the workspace
-/// directory keeps the binding.
-#[cfg(feature = "keychain")]
-#[derive(Debug, Clone)]
-pub struct KeyringStore {
-    service: String,
-    workspace_id: String,
-}
-
-#[cfg(feature = "keychain")]
-pub const KEYRING_SERVICE: &str = "com.drus.mandalo";
-
-#[cfg(feature = "keychain")]
-impl KeyringStore {
-    pub fn new(workspace_id: impl Into<String>) -> Self {
-        KeyringStore {
-            service: KEYRING_SERVICE.to_string(),
-            workspace_id: workspace_id.into(),
-        }
-    }
-
-    pub fn with_service(service: impl Into<String>, workspace_id: impl Into<String>) -> Self {
-        KeyringStore {
-            service: service.into(),
-            workspace_id: workspace_id.into(),
-        }
-    }
-
-    pub fn entry_key(workspace_id: &str, env: &str, key: &str) -> String {
-        format!("{workspace_id}/{env}/{key}")
-    }
-
-    fn entry(&self, env: &str, key: &str) -> CoreResult<keyring::Entry> {
-        keyring::Entry::new(
-            &self.service,
-            &Self::entry_key(&self.workspace_id, env, key),
-        )
-        .map_err(|e| CoreError::Secret(format!("cannot open the keychain for {env}.{key}: {e}")))
-    }
-}
-
-#[cfg(feature = "keychain")]
-impl SecretStore for KeyringStore {
-    fn get(&self, env: &str, key: &str) -> CoreResult<Option<String>> {
-        match self.entry(env, key)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(CoreError::Secret(format!(
-                "cannot read {env}.{key} from the keychain: {e}"
-            ))),
-        }
-    }
-}
-
-#[cfg(feature = "keychain")]
-impl SecretWriter for KeyringStore {
-    fn set(&self, env: &str, key: &str, value: &str) -> CoreResult<()> {
-        self.entry(env, key)?.set_password(value).map_err(|e| {
-            CoreError::Secret(format!("cannot store {env}.{key} in the keychain: {e}"))
-        })
-    }
-
-    fn delete(&self, env: &str, key: &str) -> CoreResult<()> {
-        match self.entry(env, key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(CoreError::Secret(format!(
-                "cannot remove {env}.{key} from the keychain: {e}"
-            ))),
-        }
     }
 }
 
@@ -388,33 +426,42 @@ mod tests {
         store.delete("prod", "token").unwrap();
     }
 
-    #[cfg(feature = "keychain")]
     #[test]
-    fn keyring_entries_are_scoped_by_workspace_id() {
+    fn an_exported_variable_wins_over_the_local_file() {
+        // Tests share one process environment and run in parallel, so this key is
+        // its own: another test exporting the same name would decide this one.
+        let local = MemorySecrets::with(&[("prod", "layered-token", "from-the-file")]);
+        let chain = LayeredSecrets::over(local);
         assert_eq!(
-            KeyringStore::entry_key("11111111-2222-4333-8444-555555555555", "prod", "token"),
-            "11111111-2222-4333-8444-555555555555/prod/token"
+            chain.get("prod", "layered-token").unwrap(),
+            Some("from-the-file".to_string())
         );
+        assert_eq!(
+            chain.source("prod", "layered-token").unwrap(),
+            Some(VarSource::Local)
+        );
+
+        let name = EnvVarStore::variable_name("prod", "layered-token");
+        std::env::set_var(&name, "from-the-shell");
+        assert_eq!(
+            chain.get("prod", "layered-token").unwrap(),
+            Some("from-the-shell".to_string())
+        );
+        assert_eq!(
+            chain.source("prod", "layered-token").unwrap(),
+            Some(VarSource::Environment)
+        );
+        std::env::remove_var(&name);
     }
 
-    /// The real keychain prompts and needs a session, so CI never touches it.
-    /// Run with `MANDALO_KEYRING_TESTS=1 cargo test -p mandalo-core keyring_round_trip`.
-    #[cfg(feature = "keychain")]
     #[test]
-    fn keyring_round_trip_against_the_real_keychain() {
-        if std::env::var("MANDALO_KEYRING_TESTS").as_deref() != Ok("1") {
-            return;
-        }
-        let store =
-            KeyringStore::with_service("com.drus.mandalo.test", uuid::Uuid::new_v4().to_string());
-        assert_eq!(store.get("prod", "token").unwrap(), None);
-        store.set("prod", "token", "keychain-value").unwrap();
-        assert_eq!(
-            store.get("prod", "token").unwrap(),
-            Some("keychain-value".to_string())
-        );
-        store.delete("prod", "token").unwrap();
-        assert_eq!(store.get("prod", "token").unwrap(), None);
+    fn an_empty_exported_variable_is_refused_rather_than_sent() {
+        let name = EnvVarStore::variable_name("prod", "empty-token");
+        std::env::set_var(&name, "");
+        let error = EnvVarStore.get("prod", "empty-token").unwrap_err();
+        assert_eq!(error.code(), "E_SECRET");
+        assert!(error.to_string().contains("set but empty"), "{error}");
+        std::env::remove_var(&name);
     }
 
     #[test]
