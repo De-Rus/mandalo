@@ -4,7 +4,9 @@
 #   scripts/package-cli.sh <rust-target> [version]
 #
 # Reads target/<triple>/release-cli/mandalo and writes
-# target/dist/mandalo-<version>-<triple>.tar.gz (.zip on Windows).
+# target/dist/mandalo-<version>-<triple>.tar.gz (.zip on Windows). The archive
+# holds one directory, mandalo-<version>-<triple>/, so extracting it in a
+# populated directory cannot scatter files over what is already there.
 # Only "asset=<path>" goes to stdout so the caller can append it to $GITHUB_OUTPUT.
 set -euo pipefail
 
@@ -37,13 +39,13 @@ if [ -f "target/$target/release-cli/mandalo.exe" ]; then
     cp "target/$target/release-cli/mandalo.exe" "$stage/"
     asset="$out/${name}.zip"
     rm -f "$asset"
-    (cd "$stage" && 7z a -tzip "$root/$asset" ./* >/dev/null)
+    (cd target/staging && 7z a -tzip "$root/$asset" "$name" >/dev/null)
 else
     cp "target/$target/release-cli/mandalo" "$stage/"
     chmod 0755 "$stage/mandalo"
     asset="$out/${name}.tar.gz"
     rm -f "$asset"
-    tar -czf "$asset" -C "$stage" .
+    tar -czf "$asset" -C target/staging "$name"
 fi
 
 ls -l "$asset" >&2

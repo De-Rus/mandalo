@@ -14,6 +14,12 @@ mandalo-v<version>-aarch64-unknown-linux-gnu.tar.gz
 mandalo-v<version>-x86_64-pc-windows-msvc.zip
 ```
 
+Each archive holds one directory named after itself
+(`mandalo-v<version>-<triple>/mandalo`), so extracting one in a populated
+directory cannot scatter files over what is already there. Homebrew strips that
+single root directory by itself; the Scoop manifest names it in `extract_dir`,
+and `sync-packaging.sh` keeps that in step with the version.
+
 The digests they need are the ones in `SHA256SUMS` on the same release, and
 nobody should be typing those by hand:
 

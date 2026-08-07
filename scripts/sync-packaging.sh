@@ -64,6 +64,7 @@ asset = f"mandalo-{tag}-x86_64-pc-windows-msvc.zip"
 m["version"] = version
 m["architecture"]["64bit"]["url"] = f"https://github.com/De-Rus/mandalo/releases/download/{tag}/{asset}"
 m["architecture"]["64bit"]["hash"] = digest(asset)
+m["architecture"]["64bit"]["extract_dir"] = asset.removesuffix(".zip")
 with open(scoop_path, "w") as fh:
     json.dump(m, fh, indent=2, ensure_ascii=False)
     fh.write("\n")

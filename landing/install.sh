@@ -168,14 +168,17 @@ main() {
     fi
     say "  checksum ok ($actual)"
 
+    # The archive holds one directory, mandalo-<version>-<target>/, so it can be
+    # unpacked anywhere without scattering files.
     tar -xzf "$tmp/$asset" -C "$tmp"
-    [ -f "$tmp/$BIN" ] || die "the archive did not contain a \`$BIN\` binary"
-    chmod 0755 "$tmp/$BIN"
+    unpacked="$tmp/$BIN-$version-$target/$BIN"
+    [ -f "$unpacked" ] || die "the archive did not contain \`$BIN-$version-$target/$BIN\`"
+    chmod 0755 "$unpacked"
 
     dir=$(choose_dir)
     mkdir -p "$dir"
     # Replace by rename so a running mandalo is never rewritten underneath itself.
-    mv -f "$tmp/$BIN" "$dir/$BIN"
+    mv -f "$unpacked" "$dir/$BIN"
 
     say ""
     say "Installed $dir/$BIN"

@@ -37,6 +37,14 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build -p mandalo-cli
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The wire pins the browser engine is tested against are still what Rust sends
+        run: node src/lib/web/parity-derive.mjs target/debug/mandalo
 
   editor-extension:
     runs-on: ubuntu-latest

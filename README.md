@@ -7,13 +7,45 @@
 ## Why
 
 - **Offline, no account** — everything lives on your machine. No sign-in wall, no telemetry.
-- **Git-native** — requests are plain-text [`.http`](docs/http-format.md) and [`.grpc`](docs/grpc-format.md) files in a workspace directory; environments and manifests are TOML. Diff them, review them, PR them.
+- **Nothing to publish** — a collection is a git repository of `.http` files, so any public repo already is one. `mandalo open owner/name`, or share `mandalo.dev/app?repo=owner/name`. It opens [read-only, after a review, with nothing running](docs/remote-collections.md).
+- **Git-native** — requests are plain-text [`.http`](docs/http-format.md), [`.grpc`](docs/grpc-format.md), [`.ws` and `.mqtt`](docs/stream-formats.md) files in a [workspace directory](docs/workspace.md); environments and manifests are TOML. Diff them, review them, PR them.
+- **Bring what you have** — import an [OpenAPI or Swagger specification](docs/openapi-import.md) or a [Postman collection](docs/postman-compatibility.md) with `mandalo import`; both report exactly what did not survive the trip.
 - **Fast** — Tauri + Rust core. Instant startup, tiny footprint.
-- **HTTP · GraphQL · gRPC** — one workbench. gRPC compiles your `.proto` files at runtime (no `protoc` needed).
+- **HTTP · GraphQL · gRPC · WebSocket · SSE · MQTT** — one workbench. gRPC compiles your `.proto` files at runtime (no `protoc` needed), and a [stream is a saved request](docs/stream-formats.md) like any other: it lives in a collection, carries named messages, and runs with `mandalo listen`.
 - **Auth built in** — Bearer, Basic, API key (header or query).
 - **Environments** — `{{variable}}` interpolation across URL, headers, body, and auth. Unresolved variables fail loud, never silently.
 
 - **Runs in CI** — the same engine ships as `mandalo`, a command line runner with pretty/JSON/JUnit reporters, secret redaction and a credential scanner.
+
+## Try it in two minutes
+
+The repository ships a ready-to-run workspace at `examples/mock-workspace` —
+collections for HTTP, GraphQL, gRPC, uploads (including a multipart form with
+two files under one field) and realtime streams, plus two environments. The `hosted` environment
+points at a public mock, so nothing has to run locally:
+
+```bash
+git clone https://github.com/De-Rus/mandalo
+mandalo --workspace mandalo/examples/mock-workspace run mock --env hosted
+```
+
+Or open the canonical [Swagger Petstore](https://petstore3.swagger.io) spec —
+it ships at `examples/petstore/openapi.json`. Opening that folder as a workspace
+in the desktop app imports it automatically (19 requests under `pet/`, `store/`,
+`user/`). From the CLI, import into any workspace:
+
+```bash
+mandalo --workspace ~/Mandalo import examples/petstore/openapi.json
+```
+
+Every compromise the import made — an OAuth flow it will not run, a body format
+it had to pick — is printed, never swallowed.
+
+Prefer everything on your machine? Start the local mock with `make mock-api` and
+swap `--env hosted` for `--env local`. To browse the mock collection in a GUI,
+open `examples/mock-workspace` as a workspace in the desktop app, or open it in
+VS Code with the Mándalo extension installed — every request gets a Send lens
+above it.
 
 ## Install
 
@@ -21,8 +53,36 @@ Three things ship from every `v*` tag, all on the same
 [GitHub release](https://github.com/De-Rus/mandalo/releases/latest).
 
 **Desktop app** — macOS `.dmg` (Apple silicon, Intel, or universal), Windows
-`.msi`, Linux `.AppImage` or `.deb`. The builds are not signed with a paid
-certificate, so Gatekeeper and SmartScreen ask you to confirm the first launch.
+`.msi`, Linux `.AppImage` or `.deb`.
+
+⚠️ **The desktop builds are unsigned, and macOS does not merely warn about
+that.** There is no Apple Developer ID certificate behind this project yet, so
+the `.dmg` is ad-hoc signed with no sealed resources. macOS treats a downloaded
+copy as *broken*, not as untrusted: you get
+
+> “mandalo is damaged and can’t be opened. You should move it to the Trash.”
+
+and the usual right-click → Open escape does **not** appear. The dialog is about
+the missing signature, not about the file being corrupt.
+
+If you want to run it anyway, that is your decision to make knowingly — you are
+choosing to trust a binary whose origin nothing has verified for you. Check the
+download against the release's `SHA256SUMS` first, then remove the quarantine
+flag by hand:
+
+```bash
+shasum -a 256 ~/Downloads/mandalo_0.1.0_aarch64.dmg   # compare with SHA256SUMS
+xattr -d com.apple.quarantine ~/Downloads/mandalo_0.1.0_aarch64.dmg
+```
+
+If you would rather not do that — a reasonable position — use the CLI below, or
+build from source with `pnpm tauri build`.
+
+What would actually fix it: an Apple Developer ID certificate ($99/year) to sign
+and notarize the `.dmg`, and an EV or Azure Trusted Signing certificate for the
+Windows `.msi`. Both are purchases, not code. Until then Windows SmartScreen
+also asks for a confirmation, though there the “More info → Run anyway” escape
+does exist.
 
 **Command line** —
 
@@ -59,11 +119,16 @@ pnpm tauri dev
 ## Command line
 
 ```bash
+mandalo init ./my-api --name "Acme API"    # mandalo.toml + collections/ + environments/
 mandalo run api --env staging --reporter junit > results.xml
 mandalo send api auth.http#0 --env staging
 mandalo ls
 mandalo env list
 mandalo scan --staged                     # git hygiene guard, exit 1 on a hit
+
+mandalo open acme/collections              # somebody's public repo, read-only
+mandalo open acme/collections --review-only
+mandalo save-copy ~/work/billing           # make a read-only copy yours
 
 mandalo listen wss://stream.example.com/socket --header "Authorization: Bearer $TOKEN"
 mandalo listen https://api.example.com/events --max 10 --json
@@ -90,9 +155,74 @@ counting from zero, the file path being collection-relative POSIX, e.g.
 `auth.http#0`. A name works too when it is unique in the file
 (`auth.http#Bearer auth`); the index is canonical. `mandalo ls` prints both.
 
-Secrets never live in the workspace files: `mandalo` reads them from
-`MANDALO_SECRET__<ENV>__<KEY>` and scrubs every resolved value from its own
-output (and emits `::add-mask::` under GitHub Actions).
+## Shared values and yours
+
+An environment file is meant to be committed, so every variable declares
+whether its value is **shared** with the team. Two orthogonal questions:
+`shared` says where the value lives, `secret` says how it is treated.
+
+```toml
+# environments/prod.toml — committed
+schema_version = 1
+name = "prod"
+
+[vars.baseUrl]
+value = "https://api.acme.com"   # shared — the common case stays a one-liner
+
+[vars.devUrl]
+shared = false                   # yours only; not masked
+
+[vars.access_token]
+secret = true                    # implies shared = false; masked and redacted
+hosts = ["api.acme.com"]
+```
+
+A `secret = true` variable can never also be `shared = true`, and neither kind
+has anywhere to put a `value` — the file format cannot express a value that is
+not shared, so one cannot be committed by accident.
+
+Everything that is not shared lives in one file, outside every workspace:
+
+```toml
+# ~/.config/mandalo/secrets.toml — 0600, never in any repository
+schema_version = 1
+
+[auth.github]
+token = "gho_…"
+
+[workspaces.550e8400-e29b-41d4-a716-446655440000.prod]
+access_token = "…"
+devUrl = "http://localhost:3000"
+baseUrl = "http://localhost:8080"   # may override a shared value too
+```
+
+It is keyed by workspace **id**, so moving or re-cloning a workspace keeps its
+values attached. `MANDALO_SECRETS_FILE` points it elsewhere.
+
+```bash
+pbpaste | mandalo env set-secret prod access_token   # never as an argument: ps is public
+echo http://localhost:3000 | mandalo env set-local prod devUrl
+mandalo env clear-secret prod access_token           # forgets the value, keeps the declaration
+mandalo env get prod                                 # says which layer each value came from
+```
+
+**Precedence: `MANDALO_SECRET__<ENV>__<KEY>` → `secrets.toml` → the committed
+value.** The exported variable wins because it is the more explicit and more
+ephemeral act — the rule dotenv, direnv and compose all follow — and because it
+is the layer CI injects: a stale local file that reached a build agent must
+never shadow the credential the pipeline was given. `mandalo env get` names the
+layer, so a value arriving from an unexpected one is visible rather than a
+surprise.
+
+A variable that is not shared and has no value anywhere fails before the
+request leaves, naming the environment, the variable and every place a value
+could come from. An empty value is never substituted. Every resolved secret is
+scrubbed from `mandalo`'s own output (and emitted as `::add-mask::` under
+GitHub Actions).
+
+A workspace cloned from a colleague arrives with the declarations and none of
+the values, which is the correct onboarding state — `mandalo env get` lists
+what is still missing.
 
 ## Test
 
@@ -170,5 +300,5 @@ inside the VSIX.
 - GitHub login (Supabase Auth, PKCE) + commit/push collections to a shared repo — collaboration is just git
 - Request collections persisted as workspace files (currently localStorage)
 - gRPC streaming, server reflection
-- Request history, cookie jar, OpenAPI import
+- Request history, cookie jar
 - AI-assisted request generation
