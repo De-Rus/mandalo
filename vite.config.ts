@@ -18,6 +18,8 @@ const web = {
     alias: {
       "@tauri-apps/api/core": at("src/lib/web/invoke.ts"),
       "@tauri-apps/plugin-dialog": at("src/lib/web/dialog.ts"),
+      "@tauri-apps/plugin-updater": at("src/lib/web/tauri-updater.ts"),
+      "@tauri-apps/plugin-process": at("src/lib/web/tauri-process.ts"),
     },
   },
   build: {
@@ -37,6 +39,8 @@ const vscode = {
     alias: {
       "@tauri-apps/api/core": at("src/lib/vscode/invoke.ts"),
       "@tauri-apps/plugin-dialog": at("src/lib/vscode/dialog.ts"),
+      "@tauri-apps/plugin-updater": at("src/lib/web/tauri-updater.ts"),
+      "@tauri-apps/plugin-process": at("src/lib/web/tauri-process.ts"),
     },
   },
   build: {
