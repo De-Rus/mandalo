@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import App from "../../App";
 import { dismiss, snapshot, subscribe, type Report } from "./bus";
 import { DOWNLOAD_URL } from "./config";
-import { activeVfs, reset, supportsFolders } from "./mounts";
+import { activeVfs, supportsFolders } from "./mounts";
+import { Notices } from "./Notices";
 import { PROTO_DIR, store } from "./protos";
+import { StoragePanel } from "./StoragePanel";
+import { useWorkspaceSync } from "./useWorkspaceSync";
+import { sourceFromLocation } from "./remote";
+import { useRemote } from "../../store/remote";
 
 function ProtoImport() {
   const input = useRef<HTMLInputElement>(null);
@@ -47,21 +52,19 @@ function ProtoImport() {
   );
 }
 
-function Ribbon({ onReset }: { onReset: () => void }) {
+function Ribbon() {
   const folders = supportsFolders();
   return (
     <div className="web-ribbon">
       <span className="web-ribbon-tag">Web</span>
       <span className="web-ribbon-text">
         {folders
-          ? "Mándalo in the browser. Open a folder to keep your collections as TOML in your own repo."
-          : "Mándalo in the browser. Collections are stored in this browser; open a folder in a Chromium browser to keep them in your repo."}
+          ? "Mándalo in the browser. Open a folder to keep your collections as .http and .grpc files in your own repo — browser storage is a scratchpad."
+          : "Mándalo in the browser. Collections live in this browser only; Firefox and Safari cannot open a folder, so download a copy or use the desktop app."}
       </span>
       <div className="web-ribbon-spacer" />
+      <StoragePanel />
       <ProtoImport />
-      <button className="web-ribbon-link" onClick={onReset}>
-        Reset sample workspace
-      </button>
       <a className="web-ribbon-cta" href={DOWNLOAD_URL}>
         Get the desktop app
       </a>
@@ -180,13 +183,24 @@ export function WebShell() {
     [],
   );
 
-  const onReset = () => {
-    void reset().then(() => location.reload());
-  };
+  useWorkspaceSync();
+
+  // `mandalo.dev/app?repo=owner/name` is what makes a collection shareable with a
+  // link. It opens the review — never the collection itself, and never a request.
+  useEffect(() => {
+    const source = sourceFromLocation(window.location.search);
+    if (source === null) return;
+    useRemote.getState().open(source);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("repo");
+    url.searchParams.delete("bundle");
+    window.history.replaceState(null, "", url.toString());
+  }, []);
 
   return (
     <div className="web-root">
-      <Ribbon onReset={onReset} />
+      <Ribbon />
+      <Notices />
       <div className="web-app">
         <App />
       </div>

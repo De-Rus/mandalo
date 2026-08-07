@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SavedRequest } from "../api";
 import {
   decodeEnvDoc,
   decodeManifest,
-  decodeRequest,
   encodeCollectionManifest,
   encodeEnvDoc,
-  encodeRequest,
   encodeWorkspaceManifest,
   parseToml,
   stringifyToml,
@@ -302,341 +299,13 @@ describe("stringifyToml", () => {
   });
 });
 
-const fullRequest: SavedRequest = {
-  id: "01H8-abc_DEF",
-  name: "Create User",
-  kind: "http",
-  method: "POST",
-  url: "{{base}}/users",
-  description: "Creates a user and\ncaptures the token",
-  body: '{\n  "name": "nova",\n  "note": "he said \\"hi\\"",\n  "tabbed": "\\t"\n}\n',
-  headers: [
-    ["Accept", "application/json"],
-    ["Content-Type", "application/json"],
-  ],
-  auth: { type: "bearer", token: "{{token}}" },
-  graphql: null,
-  grpc: {
-    protoPaths: ["/protos/echo.proto", "/protos/other.proto"],
-    service: "test.v1.Echo",
-    method: "Say",
-    message: '{\n  "text": "hi"\n}',
-    metadata: [
-      ["x-trace", "1"],
-      ["x-tenant", "acme"],
-    ],
-  },
-  scripts: {
-    pre: 'pm.environment.set("a", 1)\nif (a > 1) {\n  console.log("big \\"one\\"")\n}',
-    post: "console.log(pm.response.code)\nconsole.log('done')",
-  },
-  tests: [
-    { kind: "status", op: "eq", value: 201 },
-    { kind: "json", path: "$.token", op: "exists" },
-    { kind: "json", path: "$.count", op: "gt", value: 3 },
-    { kind: "header", name: "Content-Type", op: "contains", value: "json" },
-    { kind: "header", name: "X-Legacy", op: "absent" },
-    { kind: "duration", op: "lt", value: 1000 },
-  ],
-  captures: [{ from: "body.$.token", into: "token", scope: "session" }],
-};
-
-describe("request codec", () => {
-  it("round-trips a realistic request through TOML", () => {
-    const text = encodeRequest(fullRequest);
-    expect(decodeRequest(text)).toEqual(fullRequest);
-    expect(encodeRequest(decodeRequest(text))).toBe(text);
-  });
-
-  it("writes the multi-line body and scripts as multi-line strings", () => {
-    const text = encodeRequest(fullRequest);
-    expect(text).toContain('body = """\n');
-    expect(text).toContain('pre = """\n');
-    expect(text).toContain('post = """\n');
-  });
-
-  it("keeps the header ordering the Rust parser expects", () => {
-    const text = encodeRequest(fullRequest);
-    const scalars = text.slice(0, text.indexOf("["));
-    expect(scalars).toContain("id = ");
-    expect(text.indexOf("[auth]")).toBeLessThan(text.indexOf("[[tests]]"));
-    expect(text.indexOf("[grpc]")).toBeLessThan(text.indexOf("[[tests]]"));
-    expect(text.indexOf("[[tests]]")).toBeLessThan(text.indexOf("[[captures]]"));
-  });
-
-  it("round-trips a graphql request", () => {
-    const gql: SavedRequest = {
-      id: "gql-1",
-      name: "Gql",
-      kind: "graphql",
-      method: "POST",
-      url: "https://x.dev/graphql",
-      description: null,
-      body: null,
-      headers: [],
-      auth: { type: "apikey", key: "X-Api-Key", value: "{{k}}", placement: "header" },
-      graphql: {
-        query: "query User($id: ID!) {\n  user(id: $id) {\n    name\n  }\n}",
-        variables: '{\n  "id": "7"\n}',
-      },
-      grpc: null,
-      scripts: { pre: null, post: null },
-      tests: [],
-      captures: [],
-    };
-    const text = encodeRequest(gql);
-    expect(decodeRequest(text)).toEqual(gql);
-    expect(encodeRequest(decodeRequest(text))).toBe(text);
-  });
-
-  it("round-trips every auth variant", () => {
-    const auths: SavedRequest["auth"][] = [
-      { type: "none" },
-      { type: "bearer", token: "t" },
-      { type: "basic", username: "u", password: "p" },
-      { type: "apikey", key: "k", value: "v", placement: "query" },
-    ];
-    for (const auth of auths) {
-      const req: SavedRequest = { ...fullRequest, auth };
-      expect(decodeRequest(encodeRequest(req)).auth).toEqual(auth);
-    }
-  });
-
-  it("omits absent optionals rather than writing empty strings", () => {
-    const minimal: SavedRequest = {
-      id: "a",
-      name: "Ping",
-      kind: "http",
-      method: "GET",
-      url: "https://x.dev",
-      headers: [],
-      auth: { type: "none" },
-    };
-    const text = encodeRequest(minimal);
-    expect(text).not.toContain("body =");
-    expect(text).not.toContain("description =");
-    expect(text).not.toContain("[graphql]");
-    expect(text).not.toContain("[grpc]");
-    expect(text).not.toContain("[scripts]");
-    expect(text).not.toContain("[[tests]]");
-    expect(decodeRequest(text)).toEqual({
-      ...minimal,
-      description: null,
-      body: null,
-      graphql: null,
-      grpc: null,
-      scripts: { pre: null, post: null },
-      tests: [],
-      captures: [],
-    });
-  });
-
-  it("applies serde defaults for every missing optional section", () => {
-    const text = [
-      'id = "a"',
-      'name = "Ping"',
-      'kind = "http"',
-      'method = "GET"',
-      'url = "https://x.dev"',
-    ].join("\n");
-    expect(decodeRequest(text)).toEqual({
-      id: "a",
-      name: "Ping",
-      kind: "http",
-      method: "GET",
-      url: "https://x.dev",
-      description: null,
-      body: null,
-      headers: [],
-      auth: { type: "none" },
-      graphql: null,
-      grpc: null,
-      scripts: { pre: null, post: null },
-      tests: [],
-      captures: [],
-    });
-  });
-
-  it("reads a file written the way the Rust toml crate writes it", () => {
-    const text = [
-      'id = "abc"',
-      'name = "List Users"',
-      'kind = "http"',
-      'method = "GET"',
-      'url = "https://x.dev/users"',
-      'headers = [["Accept", "application/json"]]',
-      "",
-      "[auth]",
-      'type = "bearer"',
-      'token = "{{token}}"',
-      "",
-      "[scripts]",
-      'pre = "console.log(1)"',
-      "",
-      "[[tests]]",
-      'kind = "status"',
-      'op = "eq"',
-      "value = 200",
-      "",
-      "[[captures]]",
-      'from = "body.$.token"',
-      'into = "token"',
-      'scope = "persist"',
-      "",
-    ].join("\n");
-    const req = decodeRequest(text);
-    expect(req.headers).toEqual([["Accept", "application/json"]]);
-    expect(req.auth).toEqual({ type: "bearer", token: "{{token}}" });
-    expect(req.scripts).toEqual({ pre: "console.log(1)", post: null });
-    expect(req.tests).toEqual([{ kind: "status", op: "eq", value: 200 }]);
-    expect(req.captures).toEqual([{ from: "body.$.token", into: "token", scope: "persist" }]);
-  });
-
-  it("round-trips a json assertion with a string, boolean and array value", () => {
-    const req: SavedRequest = {
-      ...fullRequest,
-      tests: [
-        { kind: "json", path: "$.a", op: "eq", value: "text" },
-        { kind: "json", path: "$.b", op: "eq", value: true },
-        { kind: "json", path: "$.c", op: "contains", value: [1, 2] },
-      ],
-    };
-    expect(decodeRequest(encodeRequest(req)).tests).toEqual(req.tests);
-  });
-});
-
-describe("request decoder fails loud", () => {
-  const base = [
-    'id = "a"',
-    'name = "Ping"',
-    'kind = "http"',
-    'method = "GET"',
-    'url = "https://x.dev"',
-  ];
-  const withExtra = (...lines: string[]) => base.concat(lines).join("\n");
-
-  it("rejects a missing or non-string required field", () => {
-    expect(() => decodeRequest('name = "x"\nkind = "http"\nmethod = "GET"\nurl = "u"')).toThrow(
-      /missing required key "id"/,
-    );
-    expect(() => decodeRequest('id = 7\nname = "x"\nkind = "http"\nmethod = "G"\nurl = "u"')).toThrow(
-      /"id" must be a string/,
-    );
-    expect(() => decodeRequest('id = "a"\nname = "x"\nkind = "http"\nmethod = "G"')).toThrow(
-      /missing required key "url"/,
-    );
-  });
-
-  it("rejects an unknown kind naming the value", () => {
-    expect(() =>
-      decodeRequest('id = "a"\nname = "x"\nkind = "soap"\nmethod = "G"\nurl = "u"'),
-    ).toThrow(/unknown value "soap" \(expected http, graphql, grpc\)/);
-  });
-
-  it("rejects malformed headers", () => {
-    expect(() => decodeRequest(withExtra('headers = "Accept: json"'))).toThrow(
-      /headers must be an array/,
-    );
-    expect(() => decodeRequest(withExtra('headers = [["a", "b", "c"]]'))).toThrow(
-      /headers\[0\] must be a two-element array of strings/,
-    );
-    expect(() => decodeRequest(withExtra('headers = [["a", 1]]'))).toThrow(/headers\[0\]/);
-    expect(() => decodeRequest(withExtra('headers = ["a"]'))).toThrow(/headers\[0\]/);
-    expect(() =>
-      decodeRequest(withExtra("[grpc]", 'service = "s"', 'method = "m"', 'message = "{}"', "metadata = [[1, 2]]")),
-    ).toThrow(/grpc\.metadata\[0\]/);
-  });
-
-  it("rejects a bad auth type and missing auth fields", () => {
-    expect(() => decodeRequest(withExtra("[auth]", 'type = "oauth3"'))).toThrow(
-      /unknown type "oauth3" \(expected none, bearer, basic, apikey\)/,
-    );
-    expect(() => decodeRequest(withExtra("[auth]", 'type = "bearer"'))).toThrow(
-      /auth: missing required key "token"/,
-    );
-    expect(() => decodeRequest(withExtra("[auth]", 'type = "basic"', 'username = "u"'))).toThrow(
-      /auth: missing required key "password"/,
-    );
-    expect(() =>
-      decodeRequest(
-        withExtra("[auth]", 'type = "apikey"', 'key = "k"', 'value = "v"', 'placement = "cookie"'),
-      ),
-    ).toThrow(/unknown value "cookie" \(expected header, query\)/);
-  });
-
-  it("rejects unknown assertion kinds and ops", () => {
-    expect(() => decodeRequest(withExtra("[[tests]]", 'kind = "vibes"'))).toThrow(
-      /unknown assertion kind "vibes"/,
-    );
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "status"', 'op = "approx"', "value = 200")),
-    ).toThrow(/tests\[0\]\.op: unknown value "approx" \(expected eq, ne, lt, gt\)/);
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "json"', 'path = "$.a"', 'op = "startswith"')),
-    ).toThrow(/unknown value "startswith"/);
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "header"', 'name = "A"', 'op = "len"')),
-    ).toThrow(/unknown value "len"/);
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "duration"', 'op = "eq"', "value = 1")),
-    ).toThrow(/unknown value "eq" \(expected lt, gt\)/);
-  });
-
-  it("requires numeric values for status and duration", () => {
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "status"', 'op = "eq"', 'value = "200"')),
-    ).toThrow(/"value" must be an integer/);
-    expect(() =>
-      decodeRequest(withExtra("[[tests]]", 'kind = "duration"', 'op = "lt"')),
-    ).toThrow(/missing required key "value"/);
-  });
-
-  it("accepts an optional value on json and header assertions", () => {
-    const req = decodeRequest(
-      withExtra("[[tests]]", 'kind = "json"', 'path = "$.a"', 'op = "exists"'),
-    );
-    expect(req.tests).toEqual([{ kind: "json", path: "$.a", op: "exists" }]);
-  });
-
-  it("rejects a bad capture scope", () => {
-    expect(() =>
-      decodeRequest(
-        withExtra("[[captures]]", 'from = "status"', 'into = "s"', 'scope = "forever"'),
-      ),
-    ).toThrow(/captures\[0\]\.scope: unknown value "forever" \(expected run, session, persist\)/);
-    expect(() =>
-      decodeRequest(withExtra("[[captures]]", 'from = "status"', 'scope = "run"')),
-    ).toThrow(/captures\[0\]: missing required key "into"/);
-  });
-
-  it("rejects a malformed section type", () => {
-    expect(() => decodeRequest(withExtra('auth = "bearer"'))).toThrow(/auth must be a table/);
-    expect(() => decodeRequest(withExtra('scripts = "x"'))).toThrow(/scripts must be a table/);
-    expect(() => decodeRequest(withExtra('tests = "x"'))).toThrow(/tests must be an array/);
-    expect(() => decodeRequest(withExtra('graphql = "x"'))).toThrow(/"graphql" must be a table/);
-    expect(() => decodeRequest(withExtra("[graphql]", 'query = "{ ping }"'))).toThrow(
-      /graphql: missing required key "variables"/,
-    );
-  });
-
-  it("propagates parser errors with a line number", () => {
-    expect(() => decodeRequest('id = "a"\nid = "b"\n')).toThrow(/TOML line 2: duplicate key: id/);
-  });
-
-  it("rejects encoding an unknown kind", () => {
-    expect(() => encodeRequest({ ...fullRequest, kind: "soap" as never })).toThrow(
-      /unknown value "soap"/,
-    );
-  });
-});
-
 describe("environment codec", () => {
   it("round-trips plain declarations", () => {
     const doc = {
       name: "staging",
       vars: {
-        base: { secret: false as const, value: "https://staging.x.dev" },
-        "odd key": { secret: false as const, value: "a\nb" },
+        base: { shared: true as const, secret: false as const, value: "https://staging.x.dev" },
+        "odd key": { shared: true as const, secret: false as const, value: "a\nb" },
       },
     };
     const text = encodeEnvDoc(doc);
@@ -651,8 +320,8 @@ describe("environment codec", () => {
     const text = encodeEnvDoc({
       name: "prod",
       vars: {
-        access_token: { secret: true, hosts: ["api.acme.com"] },
-        base: { secret: false, value: "https://api.acme.com" },
+        access_token: { shared: false as const, secret: true as const, hosts: ["api.acme.com"] },
+        base: { shared: true as const, secret: false as const, value: "https://api.acme.com" },
       },
     });
     expect(text).toBe(
@@ -666,16 +335,56 @@ describe("environment codec", () => {
     ).toThrow(/declared secret = true and also carries a value/);
   });
 
-  it("rejects a host-bound variable that is not a secret", () => {
+  it("rejects a host-bound variable that is shared", () => {
     expect(() =>
       decodeEnvDoc("prod", '[vars.token]\nvalue = "v"\nhosts = ["a.dev"]\n'),
-    ).toThrow(/binds hosts but is not declared secret/);
+    ).toThrow(/binds hosts but is shared/);
   });
 
-  it("rejects a declaration with neither a value nor secret = true", () => {
+  it("rejects a declaration that says nothing about where its value lives", () => {
     expect(() => decodeEnvDoc("prod", "[vars.token]\n")).toThrow(
-      /neither a value nor secret = true/,
+      /has none of a value/,
     );
+  });
+
+  it("refuses a secret that claims to be shared", () => {
+    expect(() =>
+      decodeEnvDoc("prod", "[vars.token]\nsecret = true\nshared = true\n"),
+    ).toThrow(/a secret is never shared/);
+  });
+
+  it("refuses a value on a variable declared not shared", () => {
+    expect(() =>
+      decodeEnvDoc("prod", '[vars.devUrl]\nshared = false\nvalue = "http://x"\n'),
+    ).toThrow(/shared = false and also carries a value/);
+  });
+
+  it("reads shared = false as a local declaration that is not a secret", () => {
+    const doc = decodeEnvDoc(
+      "prod",
+      '[vars.devUrl]\nshared = false\nhosts = ["Local.Dev"]\n',
+    );
+    expect(doc.vars.devUrl).toEqual({
+      shared: false,
+      secret: false,
+      hosts: ["local.dev"],
+    });
+  });
+
+  it("round-trips a local declaration through the encoder", () => {
+    const text = encodeEnvDoc({
+      name: "prod",
+      vars: {
+        devUrl: { shared: false, secret: false, hosts: [] },
+      },
+    });
+    expect(text).toContain("shared = false");
+    expect(text).not.toContain("secret = true");
+    expect(decodeEnvDoc("prod", text).vars.devUrl).toEqual({
+      shared: false,
+      secret: false,
+      hosts: [],
+    });
   });
 
   it("reads the legacy flat shape as a plain declaration", () => {
@@ -683,7 +392,7 @@ describe("environment codec", () => {
       decodeEnvDoc("prod", 'name = "prod"\n\n[vars]\nbase = "https://x.dev"\n'),
     ).toEqual({
       name: "prod",
-      vars: { base: { secret: false, value: "https://x.dev" } },
+      vars: { base: { shared: true, secret: false, value: "https://x.dev" } },
     });
   });
 
@@ -692,13 +401,13 @@ describe("environment codec", () => {
       "prod",
       '[vars.t]\nsecret = true\nhosts = ["API.Acme.COM"]\n',
     );
-    expect(doc.vars.t).toEqual({ secret: true, hosts: ["api.acme.com"] });
+    expect(doc.vars.t).toEqual({ shared: false as const, secret: true as const, hosts: ["api.acme.com"] });
   });
 
   it("falls back to the file stem when the file carries no name", () => {
     expect(decodeEnvDoc("staging", '[vars]\na = "1"\n')).toEqual({
       name: "staging",
-      vars: { a: { secret: false, value: "1" } },
+      vars: { a: { shared: true, secret: false, value: "1" } },
     });
   });
 

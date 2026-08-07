@@ -83,3 +83,45 @@ describe("what the browser says when a request never leaves", () => {
     expect(snapshot()).toMatchObject({ kind: "unreachable", cors: false });
   });
 });
+
+describe("what a browser primitive would get wrong", () => {
+  // btoa is Latin-1: `añá:pß` comes out as different credentials, and anything above
+  // U+00FF throws. Rust and the extension base64 the UTF-8 bytes.
+  it("base64s basic credentials from UTF-8, not Latin-1", () => {
+    const prepared = prepare(
+      spec({ auth: { type: "basic", username: "añá", password: "pß" } }),
+    );
+
+    expect(prepared.headers).toEqual([["Authorization", "Basic YcOxw6E6cMOf"]]);
+  });
+
+  it("survives a credential above U+00FF, which btoa cannot encode at all", () => {
+    const prepared = prepare(
+      spec({ auth: { type: "basic", username: "日本", password: "語" } }),
+    );
+
+    const [, value] = prepared.headers[0] as [string, string];
+    expect(value).toBe("Basic 5pel5pysOuiqng==");
+    expect(new TextDecoder().decode(Uint8Array.from(atob(value.slice(6)), (c) => c.charCodeAt(0)))).toBe(
+      "日本:語",
+    );
+  });
+
+  // `key in vars` walks the prototype chain, so every Object.prototype member would
+  // resolve to a value nobody put in the environment.
+  it("resolves only own properties, so {{constructor}} fails loud", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(() => prepare(spec({ url: `https://a.dev/{{${name}}}` }))).toThrow(
+        `unresolved variable: ${name}`,
+      );
+    }
+  });
+
+  it("still resolves a variable that shadows a prototype member", () => {
+    const prepared = prepare(
+      spec({ url: "https://a.dev/{{constructor}}", vars: { constructor: "ok" } }),
+    );
+
+    expect(prepared.url).toBe("https://a.dev/ok");
+  });
+});

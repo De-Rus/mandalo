@@ -45,12 +45,12 @@ function request(patch: Partial<SavedRequest> = {}): SavedRequest {
 }
 
 describe("the browser run pipeline", () => {
-  it("names the keychain when a request needs a secret", async () => {
+  it("names the secrets file when a request needs a secret", async () => {
     const req = request({ auth: { type: "bearer", token: "{{token}}" } });
 
     await expect(
       webRunRequest(await workspace(), req, "prod"),
-    ).rejects.toThrow(/secret stored in your OS keychain/);
+    ).rejects.toThrow(/secrets\.toml/);
   });
 
   it("sends a request that only uses plain variables", async () => {
@@ -58,5 +58,38 @@ describe("the browser run pipeline", () => {
 
     expect(step.response?.status).toBe(200);
     expect(step.error).toBeNull();
+  });
+
+  // The browser has no assertion engine. Reporting `passed: true` with an empty
+  // `tests` array is the one failure mode a run cannot see from its own output.
+  it("refuses a request carrying declarative tests instead of reporting a pass", async () => {
+    const req = request({
+      tests: [
+        { kind: "status", op: "eq", value: 999 },
+        { kind: "json", path: "$.nope", op: "exists" },
+      ],
+    });
+
+    await expect(webRunRequest(await workspace(), req, "prod")).rejects.toThrow(
+      /2 declarative test\(s\).*report a pass nobody checked/s,
+    );
+  });
+
+  it("refuses a request carrying captures", async () => {
+    const req = request({
+      captures: [{ from: "body.$.token", into: "token", scope: "run" }],
+    });
+
+    await expect(webRunRequest(await workspace(), req, "prod")).rejects.toThrow(
+      /1 capture\(s\)/,
+    );
+  });
+
+  it("refuses a `< file` body it cannot read", async () => {
+    const req = request({ bodyFile: "files/payload.json" });
+
+    await expect(webRunRequest(await workspace(), req, "prod")).rejects.toThrow(
+      /cannot read a file off the workspace/,
+    );
   });
 });

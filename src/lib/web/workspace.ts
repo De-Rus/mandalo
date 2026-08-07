@@ -13,13 +13,24 @@ import type {
 import {
   decodeEnvDoc,
   decodeManifest,
-  decodeRequest,
   encodeCollectionManifest,
   encodeEnvDoc,
-  encodeRequest,
   encodeWorkspaceManifest,
 } from "./toml";
 import type { EnvDoc, VarDef } from "./toml";
+import { blockNames, parseFile, removeBlock, replaceBlock } from "../format/edit";
+import { withFileVars } from "../format/httpFormat";
+import type { RequestModel } from "../format/model";
+import { extensionForKind, renderRequest } from "../format/render";
+import {
+  indexIn,
+  requestFilePath,
+  requestFragmentOf,
+  engineOnlyReason,
+  engineOnlyRequestKind,
+  textFileKind,
+  type TextFileKind,
+} from "../format/textFormat";
 import type { Vfs } from "./vfs";
 
 export const SCHEMA_VERSION = 1;
@@ -42,14 +53,6 @@ export function slugify(name: string): string {
 export function validateEnvName(name: string): void {
   if (name === "" || !/^[A-Za-z0-9_-]+$/.test(name))
     throw new Error(`invalid environment name: "${name}"`);
-}
-
-function parentOf(path: string): string {
-  return path.split("/").slice(0, -1).join("/");
-}
-
-function fileName(path: string): string {
-  return path.split("/").pop() ?? path;
 }
 
 function assertComponent(part: string): void {
@@ -83,6 +86,93 @@ function requestPath(slug: string, rel: string): string {
   if (parts.length === 0) throw new Error("a request needs a path");
   return `${collectionDir(slug)}/${parts.join("/")}`;
 }
+
+function toSaved(model: RequestModel): SavedRequest {
+  return {
+    id: model.id,
+    name: model.name,
+    kind: model.kind as SavedRequest["kind"],
+    method: model.method,
+    url: model.url,
+    description: model.description ?? null,
+    body: model.body ?? null,
+    bodyFile: model.bodyFile ?? null,
+    headers: model.headers,
+    auth: model.auth as SavedRequest["auth"],
+    graphql: model.graphql ?? null,
+    grpc: model.grpc ?? null,
+    scripts: { pre: model.scripts.pre ?? null, post: model.scripts.post ?? null },
+    tests: [],
+    captures: [],
+  };
+}
+
+/** The web engine applies the auth a request effectively sends, which is what the
+ * Rust runner's `Auth::effective()` does with an inherited wrapper. */
+function effectiveAuth(auth: SavedRequest["auth"] | undefined): RequestModel["auth"] {
+  if (!auth) return { type: "none" };
+  return auth.type === "inherited" ? effectiveAuth(auth.auth) : auth;
+}
+
+function toModel(request: SavedRequest): RequestModel {
+  const model: RequestModel = {
+    schemaVersion: SCHEMA_VERSION,
+    id: request.id,
+    name: request.name,
+    kind: request.kind,
+    method: request.method,
+    url: request.url,
+    headers: request.headers ?? [],
+    auth: effectiveAuth(request.auth),
+    scripts: {},
+    tests: request.tests ?? [],
+    captures: request.captures ?? [],
+  };
+  if (request.description !== undefined && request.description !== null)
+    model.description = request.description;
+  if (request.bodyFile !== undefined && request.bodyFile !== null)
+    model.bodyFile = request.bodyFile;
+  else if (typeof request.body === "string") model.body = request.body;
+  else if (request.body !== undefined && request.body !== null) {
+    if (request.body.mode !== "raw")
+      throw new Error(
+        `"${request.name}" has a ${request.body.mode} body, and a web page cannot send one. Open this workspace in the Mándalo desktop app or run it with the CLI.`,
+      );
+    model.body = request.body.text;
+  }
+  if (request.graphql) model.graphql = request.graphql;
+  if (request.grpc) model.grpc = request.grpc;
+  if (request.scripts?.pre) model.scripts.pre = request.scripts.pre;
+  if (request.scripts?.post) model.scripts.post = request.scripts.post;
+  return model;
+}
+
+const TOML_REQUEST =
+  "requests are .http and .grpc files now — this TOML request has to be converted";
+
+interface RequestFile {
+  file: string;
+  kind: TextFileKind;
+  source: string;
+}
+
+async function readRequestFile(
+  vfs: Vfs,
+  slug: string,
+  rel: string,
+): Promise<RequestFile> {
+  const file = requestFilePath(rel);
+  const kind = textFileKind(file);
+  if (kind === undefined)
+    throw new Error(
+      `${file} is not a request file — Mándalo stores HTTP and GraphQL in .http and gRPC in .grpc`,
+    );
+  const source = await vfs.read(requestPath(slug, file));
+  if (source === null) throw new Error(`unknown request: ${rel}`);
+  return { file, kind, source };
+}
+
+
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -168,20 +258,28 @@ async function readFolder(
       });
       continue;
     }
-    if (!entry.name.endsWith(".toml")) continue;
-    if (rel === "" && entry.name === MANIFEST) continue;
+    if (entry.name.startsWith(".")) continue;
     const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    const kind = textFileKind(entry.name);
+    if (kind === undefined) {
+      if (entry.name.endsWith(".toml") && !(rel === "" && entry.name === MANIFEST))
+        skipped.push(`${COLLECTIONS}/${slug}/${path}: ${TOML_REQUEST}`);
+      const engineOnly = engineOnlyRequestKind(entry.name);
+      if (engineOnly !== undefined)
+        skipped.push(`${COLLECTIONS}/${slug}/${path}: ${engineOnlyReason(engineOnly)}`);
+      continue;
+    }
     try {
       const raw = await vfs.read(`${collectionDir(slug)}/${path}`);
       if (raw === null) continue;
-      const request = decodeRequest(raw);
-      requests.push({
-        id: request.id,
-        name: request.name,
-        kind: request.kind,
-        method: request.method,
-        path,
-      });
+      for (const block of parseFile(path, raw, kind).blocks)
+        requests.push({
+          id: block.model.id,
+          name: block.name,
+          kind: block.model.kind as RequestSummary["kind"],
+          method: block.model.method,
+          path: `${path}#${block.index}`,
+        });
     } catch (e) {
       skipped.push(`${COLLECTIONS}/${slug}/${path}: ${message(e)}`);
     }
@@ -199,15 +297,22 @@ export async function listTree(vfs: Vfs): Promise<Tree> {
   return { collections, skipped };
 }
 
+function isReservedCollectionSlug(slug: string): boolean {
+  return slug === COLLECTIONS || slug === ENVIRONMENTS;
+}
+
 export async function createCollection(
   vfs: Vfs,
   name: string,
 ): Promise<CollectionInfo> {
   const trimmed = name.trim();
   if (trimmed === "") throw new Error("a collection needs a name");
+  const base = slugify(trimmed);
+  if (isReservedCollectionSlug(base))
+    throw new Error(`collection name "${base}" is reserved`);
   const existing = (await vfs.list(COLLECTIONS)).map((e) => e.name);
-  let slug = slugify(trimmed);
-  for (let n = 2; existing.includes(slug); n += 1) slug = `${slugify(trimmed)}-${n}`;
+  let slug = base;
+  for (let n = 2; existing.includes(slug); n += 1) slug = `${base}-${n}`;
   const id = slug;
   await vfs.mkdirp(collectionDir(slug));
   await vfs.write(
@@ -241,30 +346,39 @@ export async function deleteCollection(vfs: Vfs, slug: string): Promise<void> {
   await vfs.removeDir(collectionDir(slug));
 }
 
+/** The request the runner sends: the file's own `@vars` already applied. */
 export async function loadRequest(
   vfs: Vfs,
   slug: string,
   rel: string,
 ): Promise<SavedRequest> {
-  const raw = await vfs.read(requestPath(slug, rel));
-  if (raw === null) throw new Error(`request not found: ${rel}`);
-  return decodeRequest(raw);
+  const found = await readRequestFile(vfs, slug, rel);
+  const file = parseFile(found.file, found.source, found.kind);
+  const index = indexIn(blockNames(file), found.file, requestFragmentOf(rel));
+  const resolved = withFileVars(file)[index];
+  if (resolved === undefined) throw new Error(`unknown request: ${rel}`);
+  return toSaved(resolved.model);
 }
 
-async function freePath(
+async function freeFile(
   vfs: Vfs,
   slug: string,
-  desired: string,
-  keep: string | null,
+  dir: string,
+  base: string,
+  extension: string,
 ): Promise<string> {
-  const stem = desired.replace(/\.toml$/, "");
   for (let n = 1; ; n += 1) {
-    const candidate = n === 1 ? desired : `${stem}-${n}.toml`;
-    if (candidate === keep) return candidate;
+    const name = n === 1 ? `${base}.${extension}` : `${base}-${n}.${extension}`;
+    const candidate = dir === "" ? name : `${dir}/${name}`;
     if ((await vfs.read(requestPath(slug, candidate))) === null) return candidate;
   }
 }
 
+/**
+ * Saves one request. An existing one is rewritten inside the file that holds it, so
+ * every other block keeps its bytes; a new one gets its own file. The returned path
+ * always carries the block index, exactly as the Rust twin's does.
+ */
 export async function saveRequest(
   vfs: Vfs,
   slug: string,
@@ -272,21 +386,26 @@ export async function saveRequest(
   folder: string | null,
   request: SavedRequest,
 ): Promise<string> {
-  const dir = (folder ?? (previous === null ? "" : parentOf(previous))).replace(
-    /^\/+|\/+$/g,
-    "",
-  );
+  const extension = extensionForKind(request.kind);
+  const model = toModel(request);
+
+  if (previous !== null) {
+    const found = await readRequestFile(vfs, slug, previous);
+    if (found.kind !== extension)
+      throw new Error(
+        `${found.file} holds ${found.kind} requests, so a ${request.kind} request cannot be saved into it`,
+      );
+    const file = parseFile(found.file, found.source, found.kind);
+    const index = indexIn(blockNames(file), found.file, requestFragmentOf(previous));
+    await vfs.write(requestPath(slug, found.file), replaceBlock(file, index, model));
+    return `${found.file}#${index}`;
+  }
+
+  const dir = (folder ?? "").replace(/^\/+|\/+$/g, "");
   assertRelative(dir);
-  const base = `${slugify(request.name)}.toml`;
-  const desired = dir === "" ? base : `${dir}/${base}`;
-  const target =
-    previous !== null && fileName(previous) === base && parentOf(previous) === dir
-      ? previous
-      : await freePath(vfs, slug, desired, previous);
-  await vfs.write(requestPath(slug, target), encodeRequest(request));
-  if (previous !== null && previous !== target)
-    await vfs.remove(requestPath(slug, previous));
-  return target;
+  const target = await freeFile(vfs, slug, dir, slugify(request.name), extension);
+  await vfs.write(requestPath(slug, target), renderRequest(model));
+  return `${target}#0`;
 }
 
 export async function deleteRequest(
@@ -294,7 +413,15 @@ export async function deleteRequest(
   slug: string,
   rel: string,
 ): Promise<void> {
-  await vfs.remove(requestPath(slug, rel));
+  const found = await readRequestFile(vfs, slug, rel);
+  const fragment = requestFragmentOf(rel);
+  const file = parseFile(found.file, found.source, found.kind);
+  if (fragment === undefined || file.blocks.length === 1) {
+    await vfs.remove(requestPath(slug, found.file));
+    return;
+  }
+  const index = indexIn(blockNames(file), found.file, fragment);
+  await vfs.write(requestPath(slug, found.file), removeBlock(file, index));
 }
 
 export async function createFolder(
@@ -357,14 +484,27 @@ export async function renameFolder(
   return to;
 }
 
+/**
+ * Cuts one request out of its file and lands it in its own file in the target folder.
+ * The block is moved exactly as written — resolving the file's `@vars` first would
+ * bake them into literals the move was never asked to make.
+ */
 export async function moveRequest(
   vfs: Vfs,
   slug: string,
   from: string,
   toFolder: string,
 ): Promise<string> {
-  const request = await loadRequest(vfs, slug, from);
-  return saveRequest(vfs, slug, from, toFolder, request);
+  const found = await readRequestFile(vfs, slug, from);
+  const file = parseFile(found.file, found.source, found.kind);
+  const index = indexIn(blockNames(file), found.file, requestFragmentOf(from));
+  const block = file.blocks[index]!;
+  const dir = toFolder.replace(/^\/+|\/+$/g, "");
+  assertRelative(dir);
+  const target = await freeFile(vfs, slug, dir, slugify(block.name), found.kind);
+  await vfs.write(requestPath(slug, target), renderRequest(block.model, file.newline));
+  await deleteRequest(vfs, slug, from);
+  return `${target}#0`;
 }
 
 async function readEnvDoc(vfs: Vfs, name: string): Promise<EnvDoc | null> {
@@ -373,15 +513,23 @@ async function readEnvDoc(vfs: Vfs, name: string): Promise<EnvDoc | null> {
 }
 
 /**
- * The browser has no keychain: a secret is a declaration the desktop app can
- * fill, so `set` is always false here rather than pretending a value exists.
+ * A page cannot read this machine's secrets file, so anything not shared has no
+ * value here and `set` is false — saying "not set" rather than pretending a
+ * value exists is what keeps the browser from reporting a run as sendable when
+ * it is not.
  */
 function viewOf(doc: EnvDoc): EnvironmentView {
   const vars: EnvironmentView["vars"] = {};
   for (const [key, def] of Object.entries(doc.vars)) {
-    vars[key] = def.secret
-      ? { secret: true, value: null, hosts: def.hosts, set: false }
-      : { secret: false, value: def.value, set: true };
+    vars[key] = def.shared
+      ? { shared: true, secret: false, value: def.value, set: true, source: "file" }
+      : {
+          shared: false,
+          secret: def.secret,
+          value: null,
+          hosts: def.hosts,
+          set: false,
+        };
   }
   return { name: doc.name, vars };
 }
@@ -412,15 +560,15 @@ export async function saveEnvironment(
   const existing = await readEnvDoc(vfs, env.name);
   const vars: Record<string, VarDef> = {};
   for (const [key, def] of Object.entries(existing?.vars ?? {})) {
-    if (!def.secret) continue;
+    if (def.shared) continue;
     if (key in env.vars)
       throw new Error(
-        `${env.name}.${key} is declared secret; its value never goes in the environment file — write it with Set value`,
+        `${env.name}.${key} is declared ${def.secret ? "secret" : "shared = false"}; its value never goes in the environment file — write it on the machine that holds it`,
       );
     vars[key] = def;
   }
   for (const [key, value] of Object.entries(env.vars))
-    vars[key] = { secret: false, value };
+    vars[key] = { shared: true, secret: false, value };
   await vfs.write(
     `${ENVIRONMENTS}/${env.name}.toml`,
     encodeEnvDoc({ name: env.name, vars }),

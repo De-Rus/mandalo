@@ -1,18 +1,4 @@
-import type {
-  Auth,
-  Capture,
-  CaptureScope,
-  DurationOp,
-  Environment,
-  HeaderOp,
-  JsonOp,
-  Kind,
-  SavedGrpc,
-  SavedRequest,
-  Scripts,
-  StatusOp,
-  TestAssertion,
-} from "../api";
+import type { Environment } from "../api";
 
 export type TomlValue = string | number | boolean | TomlValue[] | TomlTable;
 
@@ -655,23 +641,6 @@ export function stringifyToml(value: TomlTable): string {
   return out.length === 0 ? "" : `${out.join("\n")}\n`;
 }
 
-const KINDS: Kind[] = ["http", "graphql", "grpc"];
-const STATUS_OPS: StatusOp[] = ["eq", "ne", "lt", "gt"];
-const JSON_OPS: JsonOp[] = [
-  "eq",
-  "ne",
-  "exists",
-  "absent",
-  "contains",
-  "matches",
-  "lt",
-  "gt",
-  "len",
-];
-const HEADER_OPS: HeaderOp[] = ["exists", "absent", "eq", "contains", "matches"];
-const DURATION_OPS: DurationOp[] = ["lt", "gt"];
-const SCOPES: CaptureScope[] = ["run", "session", "persist"];
-
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -706,21 +675,6 @@ function optionalTable(table: TomlTable, key: string, where: string): TomlTable 
   return value;
 }
 
-function decodePairs(value: TomlValue | undefined, where: string): [string, string][] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) fail(`${where} must be an array of [name, value] pairs`);
-  return value.map((entry, i) => {
-    if (!Array.isArray(entry) || entry.length !== 2) {
-      fail(`${where}[${i}] must be a two-element array of strings`);
-    }
-    const [name, item] = entry;
-    if (typeof name !== "string" || typeof item !== "string") {
-      fail(`${where}[${i}] must be a two-element array of strings`);
-    }
-    return [name, item] as [string, string];
-  });
-}
-
 function decodeStringArray(value: TomlValue | undefined, where: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) fail(`${where} must be an array of strings`);
@@ -730,269 +684,65 @@ function decodeStringArray(value: TomlValue | undefined, where: string): string[
   });
 }
 
-function oneOf<T extends string>(value: string, allowed: readonly T[], where: string): T {
-  if ((allowed as readonly string[]).includes(value)) return value as T;
-  fail(`${where}: unknown value "${value}" (expected ${allowed.join(", ")})`);
-}
-
-function decodeAuth(value: TomlValue | undefined): Auth {
-  if (value === undefined) return { type: "none" };
-  if (!isTable(value)) fail(`auth must be a table`);
-  const type = requiredString(value, "type", "auth");
-  switch (type) {
-    case "none":
-      return { type: "none" };
-    case "bearer":
-      return { type: "bearer", token: requiredString(value, "token", "auth") };
-    case "basic":
-      return {
-        type: "basic",
-        username: requiredString(value, "username", "auth"),
-        password: requiredString(value, "password", "auth"),
-      };
-    case "apikey":
-      return {
-        type: "apikey",
-        key: requiredString(value, "key", "auth"),
-        value: requiredString(value, "value", "auth"),
-        placement: oneOf(
-          requiredString(value, "placement", "auth"),
-          ["header", "query"] as const,
-          "auth.placement",
-        ),
-      };
-    default:
-      fail(`auth: unknown type "${type}" (expected none, bearer, basic, apikey)`);
-  }
-}
-
-function decodeAssertion(entry: TomlValue, index: number): TestAssertion {
-  const where = `tests[${index}]`;
-  if (!isTable(entry)) fail(`${where} must be a table`);
-  const kind = requiredString(entry, "kind", where);
-  switch (kind) {
-    case "status":
-      return {
-        kind: "status",
-        op: oneOf(requiredString(entry, "op", where), STATUS_OPS, `${where}.op`),
-        value: requiredInteger(entry, "value", where),
-      };
-    case "duration":
-      return {
-        kind: "duration",
-        op: oneOf(requiredString(entry, "op", where), DURATION_OPS, `${where}.op`),
-        value: requiredInteger(entry, "value", where),
-      };
-    case "json": {
-      const assertion: Extract<TestAssertion, { kind: "json" }> = {
-        kind: "json",
-        path: requiredString(entry, "path", where),
-        op: oneOf(requiredString(entry, "op", where), JSON_OPS, `${where}.op`),
-      };
-      if (entry.value !== undefined) assertion.value = entry.value;
-      return assertion;
-    }
-    case "header": {
-      const assertion: Extract<TestAssertion, { kind: "header" }> = {
-        kind: "header",
-        name: requiredString(entry, "name", where),
-        op: oneOf(requiredString(entry, "op", where), HEADER_OPS, `${where}.op`),
-      };
-      const value = optionalString(entry, "value", where);
-      if (value !== null) assertion.value = value;
-      return assertion;
-    }
-    default:
-      fail(`${where}: unknown assertion kind "${kind}" (expected status, json, header, duration)`);
-  }
-}
-
-function decodeTests(value: TomlValue | undefined): TestAssertion[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) fail("tests must be an array of tables");
-  return value.map(decodeAssertion);
-}
-
-function decodeCaptures(value: TomlValue | undefined): Capture[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) fail("captures must be an array of tables");
-  return value.map((entry, i) => {
-    const where = `captures[${i}]`;
-    if (!isTable(entry)) fail(`${where} must be a table`);
-    return {
-      from: requiredString(entry, "from", where),
-      into: requiredString(entry, "into", where),
-      scope: oneOf(requiredString(entry, "scope", where), SCOPES, `${where}.scope`),
-    };
-  });
-}
-
-function decodeScripts(value: TomlValue | undefined): Scripts {
-  if (value === undefined) return { pre: null, post: null };
-  if (!isTable(value)) fail("scripts must be a table");
-  return {
-    pre: optionalString(value, "pre", "scripts"),
-    post: optionalString(value, "post", "scripts"),
-  };
-}
-
-function decodeGrpc(value: TomlTable | null): SavedGrpc | null {
-  if (value === null) return null;
-  return {
-    protoPaths: decodeStringArray(value.protoPaths, "grpc.protoPaths"),
-    service: requiredString(value, "service", "grpc"),
-    method: requiredString(value, "method", "grpc"),
-    message: requiredString(value, "message", "grpc"),
-    metadata: decodePairs(value.metadata, "grpc.metadata"),
-  };
-}
-
-export function decodeRequest(text: string): SavedRequest {
-  const table = parseToml(text);
-  const kind = oneOf(requiredString(table, "kind", "request"), KINDS, "request.kind");
-  const graphql = optionalTable(table, "graphql", "request");
-  return {
-    id: requiredString(table, "id", "request"),
-    name: requiredString(table, "name", "request"),
-    kind,
-    method: requiredString(table, "method", "request"),
-    url: requiredString(table, "url", "request"),
-    description: optionalString(table, "description", "request"),
-    body: optionalString(table, "body", "request"),
-    headers: decodePairs(table.headers, "headers"),
-    auth: decodeAuth(table.auth),
-    graphql:
-      graphql === null
-        ? null
-        : {
-            query: requiredString(graphql, "query", "graphql"),
-            variables: requiredString(graphql, "variables", "graphql"),
-          },
-    grpc: decodeGrpc(optionalTable(table, "grpc", "request")),
-    scripts: decodeScripts(table.scripts),
-    tests: decodeTests(table.tests),
-    captures: decodeCaptures(table.captures),
-  };
-}
-
-function authTable(auth: Auth): TomlTable {
-  switch (auth.type) {
-    case "none":
-      return { type: "none" };
-    case "bearer":
-      return { type: "bearer", token: auth.token };
-    case "basic":
-      return { type: "basic", username: auth.username, password: auth.password };
-    case "apikey":
-      return {
-        type: "apikey",
-        key: auth.key,
-        value: auth.value,
-        placement: auth.placement,
-      };
-  }
-}
-
-function assertionTable(assertion: TestAssertion): TomlTable {
-  switch (assertion.kind) {
-    case "status":
-    case "duration":
-      return { kind: assertion.kind, op: assertion.op, value: assertion.value };
-    case "json": {
-      const out: TomlTable = { kind: "json", path: assertion.path, op: assertion.op };
-      if (assertion.value !== undefined && assertion.value !== null) {
-        out.value = assertion.value as TomlValue;
-      }
-      return out;
-    }
-    case "header": {
-      const out: TomlTable = { kind: "header", name: assertion.name, op: assertion.op };
-      if (assertion.value !== undefined && assertion.value !== null) out.value = assertion.value;
-      return out;
-    }
-  }
-}
-
-export function encodeRequest(request: SavedRequest): string {
-  oneOf(request.kind, KINDS, "request.kind");
-  const table: TomlTable = {
-    id: request.id,
-    name: request.name,
-    kind: request.kind,
-    method: request.method,
-    url: request.url,
-  };
-  if (request.description !== undefined && request.description !== null) {
-    table.description = request.description;
-  }
-  if (request.body !== undefined && request.body !== null) table.body = request.body;
-  table.headers = (request.headers ?? []).map(([k, v]) => [k, v]);
-  table.auth = authTable(request.auth ?? { type: "none" });
-  if (request.graphql) {
-    table.graphql = { query: request.graphql.query, variables: request.graphql.variables };
-  }
-  if (request.grpc) {
-    table.grpc = {
-      protoPaths: request.grpc.protoPaths.slice(),
-      service: request.grpc.service,
-      method: request.grpc.method,
-      message: request.grpc.message,
-      metadata: request.grpc.metadata.map(([k, v]) => [k, v]),
-    };
-  }
-  const scripts = request.scripts;
-  if (scripts && (scripts.pre !== null || scripts.post !== null)) {
-    const out: TomlTable = {};
-    if (scripts.pre !== null && scripts.pre !== undefined) out.pre = scripts.pre;
-    if (scripts.post !== null && scripts.post !== undefined) out.post = scripts.post;
-    table.scripts = out;
-  }
-  if (request.tests && request.tests.length > 0) table.tests = request.tests.map(assertionTable);
-  if (request.captures && request.captures.length > 0) {
-    table.captures = request.captures.map((c) => ({ from: c.from, into: c.into, scope: c.scope }));
-  }
-  return stringifyToml(table);
-}
-
 export const ENV_SCHEMA_VERSION = 1;
 
 export type VarDef =
-  | { secret: false; value: string }
-  | { secret: true; hosts: string[] };
+  | { shared: true; secret: false; value: string }
+  | { shared: false; secret: false; hosts: string[] }
+  | { shared: false; secret: true; hosts: string[] };
 
 export interface EnvDoc {
   name: string;
   vars: Record<string, VarDef>;
 }
 
+/**
+ * The same matrix `validate_var` enforces in the core, refused here for the same
+ * reason: a file that says something impossible about a credential is not a file
+ * to guess at, and a browser that accepted one Rust rejects would be teaching
+ * people to write files the desktop app cannot open.
+ */
 function decodeVarDef(key: string, raw: TomlValue): VarDef {
-  if (typeof raw === "string") return { secret: false, value: raw };
+  if (typeof raw === "string")
+    return { shared: true, secret: false, value: raw };
   if (!isTable(raw))
     fail(`environment: vars.${key} must be a string or a table`);
   const value = optionalString(raw, "value", `vars.${key}`);
   const secret = raw.secret;
   if (secret !== undefined && typeof secret !== "boolean")
     fail(`environment: vars.${key}.secret must be a boolean`);
-  const hosts =
+  const shared = raw.shared;
+  if (shared !== undefined && typeof shared !== "boolean")
+    fail(`environment: vars.${key}.shared must be a boolean`);
+  const rawHosts =
     raw.hosts === undefined
       ? null
       : decodeStringArray(raw.hosts, `vars.${key}.hosts`);
-  if (secret === true) {
-    if (value !== null)
-      fail(
-        `environment: variable "${key}" is declared secret = true and also carries a value; secret values never live in a workspace file — delete the value and store it with Set value`,
-      );
-    return { secret: true, hosts: (hosts ?? []).map((h) => h.toLowerCase()) };
-  }
+  const hosts = (rawHosts ?? []).map((h) => h.toLowerCase());
+
+  if (secret === true && shared === true)
+    fail(
+      `environment: variable "${key}" is declared secret = true and shared = true; a secret is never shared — its value stays on this machine. Remove \`shared = true\``,
+    );
+  if (secret === true && value !== null)
+    fail(
+      `environment: variable "${key}" is declared secret = true and also carries a value; a secret value never lives in a workspace file — delete the value and store it with Set value`,
+    );
+  if (shared === false && value !== null)
+    fail(
+      `environment: variable "${key}" is declared shared = false and also carries a value; a value that is not shared never lives in a workspace file — delete the value and store it on this machine`,
+    );
+  if (secret === true) return { shared: false, secret: true, hosts };
+  if (shared === false) return { shared: false, secret: false, hosts };
   if (value === null)
     fail(
-      `environment: variable "${key}" has neither a value nor secret = true`,
+      `environment: variable "${key}" has none of a value, \`secret = true\` or \`shared = false\``,
     );
-  if (hosts !== null)
+  if (rawHosts !== null)
     fail(
-      `environment: variable "${key}" binds hosts but is not declared secret = true; a host-bound value belongs in the keychain, not in this file`,
+      `environment: variable "${key}" binds hosts but is shared; a value already committed to git has nothing left to protect. Declare it \`secret = true\` or \`shared = false\` to bind it to a host`,
     );
-  return { secret: false, value };
+  return { shared: true, secret: false, value };
 }
 
 export function decodeEnvDoc(name: string, text: string): EnvDoc {
@@ -1020,9 +770,11 @@ export function encodeEnvDoc(doc: EnvDoc): string {
   const vars: TomlTable = {};
   for (const key of Object.keys(doc.vars).sort()) {
     const def = doc.vars[key];
-    vars[key] = def.secret
-      ? { secret: true, hosts: def.hosts.slice() }
-      : { value: def.value };
+    vars[key] = def.shared
+      ? { value: def.value }
+      : def.secret
+        ? { secret: true, hosts: def.hosts.slice() }
+        : { shared: false, hosts: def.hosts.slice() };
   }
   return stringifyToml({
     schema_version: ENV_SCHEMA_VERSION,
@@ -1031,10 +783,11 @@ export function encodeEnvDoc(doc: EnvDoc): string {
   });
 }
 
+/** Only shared values: nothing else has a value in a workspace file to read. */
 export function plainViewOf(doc: EnvDoc): Environment {
   const vars: Record<string, string> = {};
   for (const [key, def] of Object.entries(doc.vars)) {
-    if (!def.secret) vars[key] = def.value;
+    if (def.shared) vars[key] = def.value;
   }
   return { name: doc.name, vars };
 }

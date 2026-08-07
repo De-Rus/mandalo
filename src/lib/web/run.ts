@@ -14,13 +14,35 @@ import type { Vfs } from "./vfs";
 import { listEnvironments } from "./workspace";
 
 /**
- * The browser has no OS keychain, so a declared secret has no value here. Saying
+ * A page cannot read the machine-local secrets file, so a declared secret has no
+ * value here. Saying
  * "unresolved variable" would send the user hunting for a typo that does not
  * exist — name the real reason and where the value lives.
  */
 function noKeychain(env: string, name: string): Error {
   return new Error(
-    `${env}.${name} is a secret stored in your OS keychain, which a web page cannot read. Open this workspace in the Mándalo desktop app to send a request that uses it.`,
+    `${env}.${name} is a secret kept on the machine that stores it (~/.config/mandalo/secrets.toml), which a web page cannot read. Open this workspace in the Mándalo desktop app to send a request that uses it.`,
+  );
+}
+
+/**
+ * The assertion engine lives in `crates/core`. Reporting a step green when nobody
+ * evaluated its `tests` would be a lie the run itself cannot see, so a request that
+ * carries any refuses to run here rather than passing silently.
+ */
+function noAssertionEngine(req: SavedRequest): Error {
+  const carried = [
+    (req.tests?.length ?? 0) > 0 ? `${req.tests!.length} declarative test(s)` : null,
+    (req.captures?.length ?? 0) > 0 ? `${req.captures!.length} capture(s)` : null,
+  ].filter((part): part is string => part !== null);
+  return new Error(
+    `"${req.name}" carries ${carried.join(" and ")}, which a web page has no engine for — it would report a pass nobody checked. Open this workspace in the Mándalo desktop app or run it with the CLI, or assert from a \`> {% … %}\` response script.`,
+  );
+}
+
+function noBodyFile(req: SavedRequest): Error {
+  return new Error(
+    `"${req.name}" reads its body from ${req.bodyFile}, and a web page cannot read a file off the workspace. Open this workspace in the Mándalo desktop app or run it with the CLI.`,
   );
 }
 
@@ -75,12 +97,21 @@ function secretNames(view: EnvironmentView | undefined): Set<string> {
   );
 }
 
+function bodyText(req: SavedRequest): string | null {
+  const body = req.body ?? null;
+  if (body === null || typeof body === "string") return body;
+  if (body.mode === "raw") return body.text;
+  throw new Error(
+    `"${req.name}" has a ${body.mode} body, and a web page cannot send one. Open this workspace in the Mándalo desktop app or run it with the CLI.`,
+  );
+}
+
 function wireOf(req: SavedRequest): ScriptRequest {
   return {
     method: req.method,
     url: req.url,
     headers: req.headers ?? [],
-    body: req.body ?? null,
+    body: bodyText(req),
   };
 }
 
@@ -170,13 +201,16 @@ function record(
  * The browser twin of `Runner::run_one`: same order — pre-script, send,
  * post-script — over the request the editor holds. Declarative tests and
  * captures stay with the desktop app and the CLI, which own the assertion
- * engine; a browser run reports what it actually did and nothing more.
+ * engine; a request that carries any is refused, never reported green.
  */
 export async function webRunRequest(
   vfs: Vfs,
   req: SavedRequest,
   env: string | null,
 ): Promise<StepResult> {
+  if ((req.tests?.length ?? 0) > 0 || (req.captures?.length ?? 0) > 0)
+    throw noAssertionEngine(req);
+  if (req.bodyFile !== undefined && req.bodyFile !== null) throw noBodyFile(req);
   const started = performance.now();
   const step = empty(req);
   const views = env ? (await listEnvironments(vfs)).items : [];

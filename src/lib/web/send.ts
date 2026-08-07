@@ -31,7 +31,10 @@ export function interpolate(
     const end = after.indexOf("}}");
     if (end === -1) throw new Error(`unclosed {{ in: ${template}`);
     const key = after.slice(0, end).trim();
-    if (!(key in vars)) throw new Error(`unresolved variable: ${key}`);
+    // Own properties only: `key in vars` walks the prototype chain, so `{{constructor}}`
+    // would interpolate a function where Rust's BTreeMap lookup fails loud.
+    if (!Object.prototype.hasOwnProperty.call(vars, key))
+      throw new Error(`unresolved variable: ${key}`);
     out += vars[key];
     rest = after.slice(end + 2);
   }
@@ -104,6 +107,15 @@ function formEncode(value: string): string {
     .replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+// btoa is Latin-1: it mangles every codepoint above U+007F and throws above U+00FF,
+// so the credentials on the wire would differ from the ones Rust base64s from UTF-8.
+export function base64Utf8(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export function hostOf(url: string): string {
   try {
     return new URL(url).host;
@@ -173,7 +185,7 @@ export function prepare(spec: RequestSpec): Prepared {
     case "basic": {
       const user = interpolate(spec.auth.username, vars);
       const pass = interpolate(spec.auth.password, vars);
-      headers = [...headers, ["Authorization", `Basic ${btoa(`${user}:${pass}`)}`]];
+      headers = [...headers, ["Authorization", `Basic ${base64Utf8(`${user}:${pass}`)}`]];
       break;
     }
     case "apikey": {

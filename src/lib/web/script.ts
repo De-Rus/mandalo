@@ -1,6 +1,5 @@
 import type { ScriptContext, ScriptOutcome } from "../api";
-
-const TIMEOUT_MS = 2000;
+import { LIMITS } from "./limits.generated";
 
 interface WorkerReply {
   ok: boolean;
@@ -11,6 +10,10 @@ interface WorkerReply {
 function explain(error: string): string {
   if (/eval|unsafe-eval|Content Security Policy/i.test(error))
     return `${error} — this browser's content security policy blocked the script engine. Scripts run normally in the desktop app.`;
+  // A worker cannot be given a heap cap the way rquickjs can, so the browser reports
+  // the budget it could not enforce instead of pretending it did.
+  if (/out of memory|Array buffer allocation failed|Maximum call stack/i.test(error))
+    return `${error} — the desktop engine caps a script at ${LIMITS.memoryBytes} bytes; a web page cannot cap it, only report it.`;
   return error;
 }
 
@@ -39,8 +42,8 @@ export function webExecuteScript(
 
     const timer = setTimeout(() => {
       stop();
-      reject(new Error(`script exceeded ${TIMEOUT_MS}ms`));
-    }, TIMEOUT_MS);
+      reject(new Error(`script exceeded ${LIMITS.timeoutMs}ms`));
+    }, LIMITS.timeoutMs);
 
     worker.onmessage = (event: MessageEvent<WorkerReply>) => {
       stop();

@@ -69,11 +69,14 @@ describe("web environments", () => {
         name: "prod",
         vars: {
           base: {
+            shared: true,
             secret: false,
             value: "https://api.acme.com",
             set: true,
+            source: "file",
           },
           token: {
+            shared: false,
             secret: true,
             value: null,
             hosts: ["api.acme.com"],

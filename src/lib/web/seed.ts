@@ -1,10 +1,10 @@
 /**
  * The workspace every browser session starts with is `examples/mock-workspace`
- * itself — the same TOML the desktop app and the CLI use as a fixture, inlined
+ * itself — the same files the desktop app and the CLI use as a fixture, inlined
  * at build time. There is no second copy of it to drift.
  */
 const FILES = import.meta.glob(
-  "../../../examples/mock-workspace/**/*.{toml,proto}",
+  "../../../examples/mock-workspace/**/*.{toml,http,rest,grpc,ws,mqtt,proto,json,txt}",
   {
     query: "?raw",
     import: "default",

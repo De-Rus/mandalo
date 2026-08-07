@@ -1,9 +1,10 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RequestSpec, ScriptOutcome, ScriptTest } from "../api";
 import fixtures from "./parity.fixtures.json";
-import scriptRs from "../../../crates/core/src/script.rs?raw";
+import { parseTextDocument, withFileVars } from "../format/httpFormat";
 import { prepare, prepareRequest } from "./send";
 import { webExecuteScript } from "./script";
+import { useGeneratedWorker } from "./worker.testkit";
 
 /**
  * The browser half of the two-engine contract. Every expectation lives in
@@ -26,6 +27,7 @@ interface Fixture {
   name: string;
   spec: RequestSpec;
   wire: Wire;
+  http?: string;
   pre?: string;
   scriptTests?: [string, boolean][];
 }
@@ -38,50 +40,19 @@ const FIXTURES: Fixture[] = fixtures.fixtures.map((fixture) => ({
   name: fixture.name,
   spec: { ...withBase(fixture.spec), vars: VARS } as unknown as RequestSpec,
   wire: withBase(fixture.wire) as Wire,
+  http: (fixture as { http?: string }).http,
   pre: (fixture as { pre?: string }).pre,
   scriptTests: (fixture as { scriptTests?: [string, boolean][] }).scriptTests,
 }));
 
-const PRELUDE_OPEN = 'const PRELUDE: &str = r#"';
-
-function prelude(): string {
-  const start = scriptRs.indexOf(PRELUDE_OPEN);
-  const end = start === -1 ? -1 : scriptRs.indexOf('"#;', start + PRELUDE_OPEN.length);
-  if (end === -1) throw new Error("the pm.* prelude moved inside crates/core/src/script.rs");
-  return scriptRs.slice(start + PRELUDE_OPEN.length, end);
-}
-
-/**
- * jsdom has no Worker, so the suite runs the Rust prelude itself — the same
- * bytes the browser build ships — inside a `with` scope that stands in for the
- * worker's global. Faking the generated values instead would leave the one
- * thing this fixture is here to prove untested.
- */
-class PreludeWorker {
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onerror: ((event: { message: string }) => void) | null = null;
-
-  postMessage(payload: { source: string; context: unknown }): void {
-    const scope: Record<string, unknown> = { __ctx_json: JSON.stringify(payload.context) };
-    scope["globalThis"] = scope;
-    let reply: unknown;
-    try {
-      const run = new Function(
-        "__scope",
-        `with (__scope) { ${prelude()}\n${payload.source}\n; return __mandalo.outcome(); }`,
-      ) as (scope: Record<string, unknown>) => string;
-      reply = { ok: true, outcome: JSON.parse(run(scope)) };
-    } catch (e) {
-      reply = { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-    this.onmessage?.({ data: reply });
-  }
-
-  terminate(): void {}
-}
+let restoreWorker: () => void;
 
 beforeAll(() => {
-  globalThis.Worker = PreludeWorker as unknown as typeof Worker;
+  restoreWorker = useGeneratedWorker();
+});
+
+afterAll(() => {
+  restoreWorker();
 });
 
 const PLUMBING = new Set(["accept", "accept-encoding", "connection", "content-length", "host"]);
@@ -194,5 +165,31 @@ describe("the browser engine sends what the Rust engine sends", () => {
     };
 
     await expect(prepareRequest(spec)).rejects.toThrow(/\$randomBankAccount/);
+  });
+
+  // The fixture's `.http` source is what the CLI was given when the wire pin below was
+  // captured. If the browser's reader saw a different request in it, the two halves of
+  // this file would be testing two different things.
+  it("reads the same request out of the .http source the CLI was given", () => {
+    for (const fixture of FIXTURES) {
+      if (fixture.http === undefined) continue;
+      const source = fixture.http.split("{{BASE}}").join(ORIGIN);
+      const blocks = withFileVars(parseTextDocument(`${fixture.name}.http`, source, "http"));
+      expect(blocks.length, fixture.name).toBe(1);
+      const model = blocks[0].model;
+      expect(model.method === "GET" ? "GET" : model.method, fixture.name).toBe(
+        fixture.spec.kind === "graphql" ? "POST" : fixture.spec.method,
+      );
+      expect(model.url, fixture.name).toBe(fixture.spec.url);
+    }
+  });
+
+  it("has a .http source for every fixture the CLI can be asked to send", () => {
+    const derivable = fixtures.fixtures.filter(
+      (fixture) => (fixture as { derivable?: boolean }).derivable !== false,
+    );
+    expect(derivable.length).toBeGreaterThan(8);
+    for (const fixture of derivable)
+      expect((fixture as { http?: string }).http, fixture.name).toBeTypeOf("string");
   });
 });

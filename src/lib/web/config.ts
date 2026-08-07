@@ -17,4 +17,7 @@ export const DEFAULT_ENV_NAME =
 
 export const DOWNLOAD_URL = "https://github.com/De-Rus/mandalo/releases/latest";
 
+/** GitHub Sponsors page for the maintainer. */
+export const DONATE_URL = "https://github.com/sponsors/De-Rus";
+
 export const BUILD_ID = "202608032340";

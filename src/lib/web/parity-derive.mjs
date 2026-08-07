@@ -4,6 +4,9 @@
 //
 //   node src/lib/web/parity-derive.mjs [path/to/mandalo]
 //
+// CI runs this on every push (see .github/workflows), so a change to either engine that
+// moves the bytes on the wire fails the build instead of ageing into a fossil.
+//
 // A mismatch prints both sides and exits 1. Pass --write to adopt what Rust sent.
 
 import { execFile } from "node:child_process";
@@ -79,8 +82,12 @@ writeFileSync(
     .map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`)
     .join("")}`,
 );
+const derivable = fixtures.fixtures.filter((fixture) => fixture.derivable !== false);
+for (const fixture of derivable)
+  writeFileSync(join(root, "collections", "api", `${fixture.name}.http`), base(fixture.http));
 for (const fixture of fixtures.fixtures)
-  writeFileSync(join(root, "collections", "api", `${fixture.name}.toml`), base(fixture.toml));
+  if (fixture.derivable === false)
+    process.stdout.write(`- ${fixture.name}: not derivable — ${fixture.why}\n`);
 
 let report = "{}";
 try {
@@ -98,10 +105,11 @@ try {
 await new Promise((done) => server.close(done));
 rmSync(root, { recursive: true, force: true });
 
-if (JSON.parse(report).total === 0) {
+const total = JSON.parse(report).total;
+if (total !== derivable.length) {
   process.stderr.write(
-    `${cli} ran none of these requests — the CLI's on-disk request format has moved on and ` +
-      "these fixtures have to be rewritten in it before Rust can be compared again\n",
+    `${cli} ran ${total} of ${derivable.length} fixtures — the CLI's on-disk request format ` +
+      "has moved on and these fixtures have to be rewritten in it before Rust can be compared again\n",
   );
   process.exit(2);
 }
@@ -136,7 +144,7 @@ function diff(fixture, actual) {
 }
 
 let failed = 0;
-for (const fixture of fixtures.fixtures) {
+for (const fixture of derivable) {
   const actual = byCase.get(fixture.name);
   if (!actual) {
     process.stdout.write(`✗ ${fixture.name}: the CLI never sent it\n`);

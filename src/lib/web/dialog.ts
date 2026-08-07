@@ -6,12 +6,28 @@ import { openFolder } from "./mounts";
  * folder happens inside open_workspace / create_workspace and this only has to
  * hand back a stable identifier for it.
  */
-export async function open(options?: { directory?: boolean }): Promise<string> {
+export async function open(options?: {
+  directory?: boolean;
+  multiple?: boolean;
+  title?: string;
+  filters?: { name: string; extensions: string[] }[];
+}): Promise<string | string[] | null> {
   if (!options?.directory)
     throw new Error(
       "Picking a file to import needs the desktop app. In the browser, use “Open folder…” to work on a real directory instead.",
     );
-  return (await openFolder()).path;
+  try {
+    return (await openFolder()).path;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "name" in error &&
+      error.name === "AbortError"
+    )
+      return null;
+    throw error;
+  }
 }
 
 export function save(): Promise<string | null> {
