@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import type { CollectionNode, RequestKind, WorkspaceNode } from "./core/model";
-import { REQUEST_KINDS } from "./core/model";
+import type { CollectionNode, WorkspaceNode } from "./core/model";
+import type { RequestKind } from "../../src/lib/format/model";
+import { REQUEST_KINDS } from "../../src/lib/format/model";
 import { defaultRequestRelPath, findCollectionFor } from "./core/scan";
 import { pickEnvironment, pickWorkspace } from "./env";
 import type { Logger } from "./logger";
@@ -95,11 +96,16 @@ async function requireTarget(
   return target;
 }
 
-async function send(deps: CommandDeps, input: unknown, envOverride?: string | null): Promise<void> {
-  const target = await requireTarget(deps.store, input);
-  if (!target) return;
-  const env =
-    envOverride === undefined ? deps.store.selectedEnv(target.workspace) : (envOverride ?? undefined);
+// A resend repeats what was sent, so it keeps the environment of the original
+// send rather than picking up whatever is selected now.
+let lastSend: { target: RequestTarget; env: string | undefined } | undefined;
+
+async function sendTarget(
+  deps: CommandDeps,
+  target: RequestTarget,
+  env: string | undefined,
+): Promise<void> {
+  lastSend = { target, env };
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: `Mándalo · ${target.relPath}` },
     async () => {
@@ -117,6 +123,24 @@ async function send(deps: CommandDeps, input: unknown, envOverride?: string | nu
       }
     },
   );
+}
+
+async function resendLast(deps: CommandDeps): Promise<void> {
+  if (!lastSend) {
+    void vscode.window.showInformationMessage(
+      "Mándalo: nothing has been sent yet in this window — send a request first.",
+    );
+    return;
+  }
+  await sendTarget(deps, lastSend.target, lastSend.env);
+}
+
+async function send(deps: CommandDeps, input: unknown, envOverride?: string | null): Promise<void> {
+  const target = await requireTarget(deps.store, input);
+  if (!target) return;
+  const env =
+    envOverride === undefined ? deps.store.selectedEnv(target.workspace) : (envOverride ?? undefined);
+  await sendTarget(deps, target, env);
 }
 
 async function runCollection(deps: CommandDeps, input: unknown, folder?: string): Promise<void> {
@@ -283,6 +307,7 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
 
   return [
     register("mandalo.sendRequest", (input) => send(deps, input)),
+    register("mandalo.resendLastRequest", () => resendLast(deps)),
     register("mandalo.sendRequestWithEnv", async (input) => {
       const target = await requireTarget(deps.store, input);
       if (!target) return;

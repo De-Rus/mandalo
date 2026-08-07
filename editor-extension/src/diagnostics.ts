@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { lintRequestDocument } from "./core/rules";
 import type { Finding } from "./core/rules";
 import { findCollectionFor } from "./core/scan";
-import { textFileKind } from "./core/textFormat";
+import { textFileKind } from "../../src/lib/format/textFormat";
 import type { MandaloStore } from "./store";
 
 const UNRESOLVED_VAR = "mandalo.unresolvedVar";

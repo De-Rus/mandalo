@@ -6,7 +6,7 @@ import {
   requestPathAt,
   scanTextRequests,
   textFileKind,
-} from "../../src/core/textFormat";
+} from "../../../src/lib/format/textFormat";
 
 const MULTI = `@host = api.dev
 
@@ -167,24 +167,24 @@ x-trace: mandalo
       {
         index: 0,
         name: "Say hello",
-        method: "GRPC",
-        url: "{{grpcUrl}}/mock.v1.Mock/Say",
+        method: "POST",
+        url: "{{grpcUrl}}",
         kind: "grpc",
         lineNumber: 0,
       },
       {
         index: 1,
         name: "Say again",
-        method: "GRPC",
-        url: "{{grpcUrl}}/mock.v1.Mock/SayAgain",
+        method: "POST",
+        url: "{{grpcUrl}}",
         kind: "grpc",
         lineNumber: 7,
       },
     ]);
   });
 
-  it("names an unnamed gRPC block after its target", () => {
-    expect(scanTextRequests("{{u}}/p.S/M\n", "grpc")[0]?.name).toBe("{{u}}/p.S/M");
+  it("names an unnamed gRPC block after its service and method, as the CLI does", () => {
+    expect(scanTextRequests("{{u}}/p.S/M\n", "grpc")[0]?.name).toBe("p.S/M");
   });
 });
 

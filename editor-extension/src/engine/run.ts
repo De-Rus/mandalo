@@ -1,5 +1,5 @@
 import type { RequestOutcome, RunResult, SendResult, TestOutcome } from "../core/cli";
-import type { RequestModel } from "../core/model";
+import type { RequestModel } from "../../../src/lib/format/model";
 import { applyCaptures, evaluateTests, type ResponseFacts } from "./assert";
 import { UnsupportedJsonPathError } from "./jsonpath";
 import { UnresolvedVarError } from "./interpolate";
@@ -55,6 +55,11 @@ export async function runRequest(
   if (model.kind === "grpc") {
     throw new EscalateError(
       "gRPC needs HTTP/2 trailers, which the editor's Node runtime cannot read — it runs through the Mándalo CLI",
+    );
+  }
+  if (model.formdata !== undefined) {
+    throw new EscalateError(
+      "a multipart form-data body reads files off the workspace, which only the Mándalo CLI does",
     );
   }
 

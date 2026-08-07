@@ -1,4 +1,5 @@
-import { parseTextDocument, resolveVars, TextFormatError, type TextFileKind } from "./httpFormat";
+import { parseTextDocument, resolveVars, TextFormatError, type TextFileKind } from "../../../src/lib/format/httpFormat";
+import { lintScripts } from "./scripts";
 import { collectVarReferences } from "./validate";
 
 export type Severity = "error" | "warning";
@@ -48,6 +49,8 @@ export function lintRequestDocument(
     }
     return findings;
   }
+
+  findings.push(...lintScripts(raw));
 
   if (context.envVars) {
     for (const reference of collectVarReferences(raw)) {

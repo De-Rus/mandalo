@@ -2,12 +2,14 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { MandaloCli, RunResult, SendResult } from "./core/cli";
 import type { CollectionNode, FolderNode, RequestNode, WorkspaceNode } from "./core/model";
-import { parseTextDocument, withFileVars } from "./core/httpFormat";
-import { requestFilePath, requestIndexOf, textFileKind } from "./core/textFormat";
+import { parseTextDocument, withFileVars } from "../../src/lib/format/httpFormat";
+import {
+  indexIn,
+  requestFilePath,
+  requestFragmentOf,
+  textFileKind,
+} from "../../src/lib/format/textFormat";
 import { EscalateError, failed, runMany, runOne, type EngineRequest } from "./engine/run";
-
-const NAMED_BLOCK_REASON =
-  "a `#name` request address is matched by the Mándalo CLI, not by the in-process engine";
 
 export type ExecutionMode = "auto" | "cli" | "in-process";
 export type Engine = "in-process" | "cli";
@@ -52,29 +54,42 @@ async function load(request: { relPath: string; fsPath: string }): Promise<Engin
       `${file} is not a request file — Mándalo stores HTTP and GraphQL in .http and gRPC in .grpc`,
     );
   }
-  const index = requestIndexOf(request.relPath);
-  if (index === undefined) throw new EscalateError(NAMED_BLOCK_REASON);
   const raw = await readFile(request.fsPath, "utf8");
   const blocks = withFileVars(parseTextDocument(file, raw, fileKind));
-  const block = blocks[index];
-  if (block === undefined) {
-    throw new Error(`this file holds ${blocks.length} requests, so there is no request ${index}`);
-  }
-  return { model: block.model, relPath: request.relPath };
+  const index = indexIn(
+    blocks.map((block) => block.name),
+    file,
+    requestFragmentOf(request.relPath),
+  );
+  return { model: blocks[index]!.model, relPath: request.relPath };
 }
 
 export class MandaloExecutor {
   constructor(private readonly deps: ExecutorDeps) {}
 
-  /** `auto` keeps HTTP and GraphQL in the editor process; everything else needs the CLI. */
-  private engineFor(requests: readonly EngineRequest[]): Engine {
+  /**
+   * `auto` keeps HTTP and GraphQL in the editor process; everything else needs the
+   * CLI. The verdict is per request: one `.grpc` file in a collection must not move
+   * the unrelated requests around it onto a different engine, because the two put
+   * different bytes on the wire.
+   */
+  private engineFor(request: EngineRequest): Engine {
     const mode = this.deps.mode();
     if (mode === "cli") return "cli";
     if (mode === "in-process") return "in-process";
-    return requests.every(({ model }) => {
-      if (model.kind !== "http" && model.kind !== "graphql") return false;
-      return model.bodyFile === undefined;
-    })
+    const { model } = request;
+    if (model.kind !== "http" && model.kind !== "graphql") return "cli";
+    return model.bodyFile === undefined && model.formdata === undefined ? "in-process" : "cli";
+  }
+
+  /**
+   * A suite shares one variable scope, so a capture in request 3 has to reach request
+   * 7; splitting it across two engines would break that chain. One request that needs
+   * the CLI therefore still moves the whole suite — which is only safe because both
+   * engines now put the same bytes on the wire for the requests they share.
+   */
+  private engineForSuite(requests: readonly EngineRequest[]): Engine {
+    return requests.every((request) => this.engineFor(request) === "in-process")
       ? "in-process"
       : "cli";
   }
@@ -110,7 +125,7 @@ export class MandaloExecutor {
       return this.deps.cli.send(workspace.rootPath, collection.slug, relPath, env);
     }
 
-    if (this.engineFor([request]) === "in-process") {
+    if (this.engineFor(request) === "in-process") {
       this.deps.log(`engine: in-process · ${relPath}`);
       try {
         return await runOne(request, collection.slug, env ?? null, { ...vars }, this.deps);
@@ -144,7 +159,7 @@ export class MandaloExecutor {
       return this.deps.cli.run(workspace.rootPath, collection.slug, options);
     }
 
-    if (this.engineFor(requests) === "in-process") {
+    if (this.engineForSuite(requests) === "in-process") {
       this.deps.log(`engine: in-process · ${label} (${requests.length} requests)`);
       try {
         return await runMany(requests, collection.slug, options.env ?? null, { ...vars }, this.deps);

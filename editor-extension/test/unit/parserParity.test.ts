@@ -5,16 +5,32 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MandaloCli, type LsCollection, type LsRequest } from "../../src/core/cli";
-import { parseTextDocument, TextFormatError, withFileVars } from "../../src/core/httpFormat";
+import { parseTextDocument, TextFormatError, withFileVars } from "../../../src/lib/format/httpFormat";
 import { runOne } from "../../src/engine/run";
-import { textFileKind } from "../../src/core/textFormat";
+import {
+  engineOnlyReason,
+  engineOnlyRequestKind,
+  textFileKind,
+} from "../../../src/lib/format/textFormat";
+import type { RequestModel } from "../../../src/lib/format/model";
+import { renderFile, renderRequest } from "../../../src/lib/format/render";
 import { cliIsRequired, probeCli } from "./support/cliBinary";
 
-// The TypeScript reader in src/core/httpFormat.ts is an interim implementation; the
-// Rust parser in crates/core is the reference. This suite is what keeps the stopgap
+// The TypeScript reader in src/lib/format/httpFormat.ts is an interim implementation;
+// the Rust parser in crates/core is the reference. This suite is what keeps the stopgap
 // honest — every corpus file is parsed by both and the two views must agree.
 const { binary, reason } = probeCli();
 const TIMEOUT = 120_000;
+
+/** Request formats crates/core reads that src/lib/format does not implement yet. */
+const ENGINE_ONLY = /\.(ws|mqtt)(#|$|:)/;
+
+function partition<T>(items: T[], pick: (item: T) => boolean): [T[], T[]] {
+  const yes: T[] = [];
+  const no: T[] = [];
+  for (const item of items) (pick(item) ? yes : no).push(item);
+  return [yes, no];
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_ROOT = resolve(HERE, "../..");
@@ -55,6 +71,38 @@ Content-Type: text/markdown
 ### but this line separates, because the format has no body exception
 GET https://api.dev/after-the-body
 `,
+  // Both form-data spellings, in one file: the readable one Mándalo writes and the
+  // literal one an import from REST Client or JetBrains brings.
+  "formdata.http": `### Readable form
+POST https://api.dev/upload
+Content-Type: multipart/form-data
+
+title = Q3 expenses
+attachments = < ./files/alpha.txt < ./files/beta.txt
+report = < ./files/report.pdf; type=application/x-invoice
+bio = <b>not a file</b>
+
+### The older field spelling, still read
+POST https://api.dev/upload
+Content-Type: multipart/form-data
+
+attachments < ./files/alpha.txt
+attachments < ./files/beta.txt
+
+### Boundary form
+POST https://api.dev/upload
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="caption"
+
+two attachments, one field
+--WebAppBoundary
+Content-Disposition: form-data; name="attachments"; filename="alpha.txt"
+
+< ./files/alpha.txt
+--WebAppBoundary--
+`,
   "bare.http": `GET https://api.dev/only
 Accept: */*
 `,
@@ -82,6 +130,25 @@ GET https://api.dev/real
 
 ###
 `,
+  "grpc-unnamed.grpc": `localhost:50051/pkg.Svc/Method
+`,
+  "bom.http": `\ufeff### A byte-order mark is not a separator
+GET https://api.dev/bom
+`,
+  "crlf-body.http": "### A CRLF body keeps its own bytes\r\nPOST https://api.dev/x\r\nContent-Type: text/plain\r\n\r\none\r\ntwo\r\n",
+  "dup-marker.http": `### Two GraphQL markers
+POST https://api.dev/graphql
+X-REQUEST-TYPE: GraphQL
+X-REQUEST-TYPE: GraphQL
+
+{ ping }
+`,
+  "broken.grpc": `### Not a call line
+not-a-call-line
+`,
+  "empty.http": "",
+  "four-hashes.http": `####
+`,
   "grpc-multi.grpc": `@protoDir = protos
 
 ### Say
@@ -108,6 +175,14 @@ interface ParsedView {
   name: string;
   kind: string;
   method: string;
+}
+
+/** What `mandalo run` reports for a request it could not send: the addressing facts. */
+interface RanView {
+  path: string;
+  name: string;
+  method: string;
+  url: string;
 }
 
 function flatten(collection: LsCollection): LsRequest[] {
@@ -138,7 +213,11 @@ function requestFiles(dir: string, prefix = ""): string[] {
     if (entry.name.startsWith(".")) continue;
     const relPath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
     if (entry.isDirectory()) out.push(...requestFiles(join(dir, entry.name), relPath));
-    else if (textFileKind(entry.name) !== undefined) out.push(relPath);
+    else if (
+      textFileKind(entry.name) !== undefined ||
+      engineOnlyRequestKind(entry.name) !== undefined
+    )
+      out.push(relPath);
   }
   return out.sort();
 }
@@ -148,6 +227,11 @@ function typescriptView(collectionDir: string): { requests: ParsedView[]; skippe
   const requests: ParsedView[] = [];
   const skipped: string[] = [];
   for (const relPath of requestFiles(collectionDir)) {
+    const engineOnly = engineOnlyRequestKind(relPath);
+    if (engineOnly !== undefined) {
+      skipped.push(`${relPath}: ${engineOnlyReason(engineOnly)}`);
+      continue;
+    }
     const fileKind = textFileKind(relPath)!;
     const source = readFileSync(join(collectionDir, ...relPath.split("/")), "utf8");
     let blocks;
@@ -164,7 +248,7 @@ function typescriptView(collectionDir: string): { requests: ParsedView[]; skippe
         id: block.model.id,
         name: block.name,
         kind: block.model.kind,
-        method: block.model.kind === "grpc" ? "POST" : block.model.method,
+        method: block.model.method,
       });
     }
   }
@@ -184,6 +268,52 @@ function awkwardWorkspace(): string {
   writeFileSync(join(dir, "collection.toml"), 'schema_version = 1\nid = "awkward"\nname = "Awkward"\n');
   for (const [name, source] of Object.entries(AWKWARD)) writeFileSync(join(dir, name), source);
   writeFileSync(join(dir, "crlf.http"), CRLF_SOURCE);
+  return root;
+}
+
+/**
+ * `ls` reports no URL, so the one CLI surface that shows the parser's view of it is a
+ * run: every request here points at a closed port, fails on connect, and still reports
+ * the name, method and URL the Rust reader took off the file.
+ */
+const ADDRESSED: Record<string, string> = {
+  "http.http": `### Named GET
+GET http://127.0.0.1:1/one
+Accept: application/json
+
+### POST with a body
+POST http://127.0.0.1:1/two
+
+{"a": 1}
+
+###
+GET http://127.0.0.1:1/unnamed
+`,
+  "calls.grpc": `### Named call
+127.0.0.1:1/pkg.Svc/Named
+proto: protos/mock.proto
+
+{"id": "1"}
+
+###
+127.0.0.1:1/pkg.Svc/Unnamed
+proto: protos/mock.proto
+`,
+};
+
+function addressedWorkspace(): string {
+  const root = mkdtempSync(join(tmpdir(), "mandalo-addr-"));
+  const dir = join(root, "collections", "addr");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(root, "environments"), { recursive: true });
+  mkdirSync(join(root, "protos"), { recursive: true });
+  writeFileSync(join(root, "mandalo.toml"), 'schema_version = 1\nid = "ad"\nname = "Addr"\n');
+  writeFileSync(join(dir, "collection.toml"), 'schema_version = 1\nid = "addr"\nname = "Addr"\n');
+  writeFileSync(
+    join(root, "protos", "mock.proto"),
+    readFileSync(join(MOCK_WORKSPACE, "protos", "mock.proto"), "utf8"),
+  );
+  for (const [name, source] of Object.entries(ADDRESSED)) writeFileSync(join(dir, name), source);
   return root;
 }
 
@@ -243,6 +373,21 @@ POST {{baseUrl}}/echo
 X-REQUEST-TYPE: GraphQL
 
 { users { id name } }
+
+### JSON body with no declared Content-Type
+POST {{baseUrl}}/echo
+
+{"sniffed": true}
+
+### XML body with no declared Content-Type
+POST {{baseUrl}}/echo
+
+<user id="1"/>
+
+### Prose body with no declared Content-Type
+POST {{baseUrl}}/echo
+
+just words
 `,
 };
 
@@ -333,17 +478,195 @@ describe.skipIf(binary === null)("the TypeScript reader and the Rust parser see 
       expect(listed.collections.length).toBeGreaterThan(0);
       const refused: string[] = [];
       for (const collection of listed.collections) {
-        const fromRust = sortViews(flatten(collection).map(view));
+        const all = flatten(collection).map(view);
+        // The Rust core reads request formats this reader does not have yet. Those
+        // are compared by a different rule below: not "same view", but "never lost".
+        const [engineOnly, shared] = partition(all, (r) => ENGINE_ONLY.test(r.path));
         const mine = typescriptView(join(root, "collections", collection.slug));
         expect(sortViews(mine.requests), `collection ${collection.slug} of ${root}`).toEqual(
-          fromRust,
+          sortViews(shared),
         );
-        refused.push(...mine.skipped);
+        for (const request of engineOnly) {
+          const file = request.path.split("#")[0]!;
+          expect(
+            mine.skipped.some((line) => line.includes(file)),
+            `${file} holds requests the Rust core reads, so this reader must report it as skipped rather than drop it`,
+          ).toBe(true);
+        }
+        refused.push(...mine.skipped.filter((line) => !ENGINE_ONLY.test(line)));
       }
       // A file one reader refuses the other must refuse too, with the same sentence.
       expect(refused.sort()).toEqual([...listed.skipped].sort());
     }, TIMEOUT);
   }
+
+  it("takes the same name, method and URL off every block, gRPC included", async () => {
+    const root = addressedWorkspace();
+    temporary.push(root);
+    const report = await cli().run(root, "addr");
+    const fromRust: RanView[] = report.requests
+      .map(({ path, name, method, url }) => ({ path, name, method, url }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+
+    const mine: RanView[] = [];
+    for (const relPath of requestFiles(join(root, "collections", "addr"))) {
+      const source = readFileSync(join(root, "collections", "addr", relPath), "utf8");
+      for (const block of withFileVars(
+        parseTextDocument(relPath, source, textFileKind(relPath)!),
+      )) {
+        mine.push({
+          path: `${relPath}#${block.index}`,
+          name: block.name,
+          method: block.model.method,
+          url: block.model.url,
+        });
+      }
+    }
+
+    expect(mine.sort((a, b) => a.path.localeCompare(b.path))).toEqual(fromRust);
+    expect(fromRust.map((entry) => entry.method)).toEqual([
+      "POST",
+      "POST",
+      "GET",
+      "POST",
+      "GET",
+    ]);
+  }, TIMEOUT);
+
+  // What the browser build writes when someone saves a request. The CLI has to read it
+  // back as the same request, or a workspace authored in a web page is a workspace the
+  // rest of the product cannot open.
+  it("reads back what the shared writer writes, block for block", async () => {
+    const written: RequestModel[] = [
+      {
+        schemaVersion: 1,
+        id: "a",
+        name: "Written by the browser",
+        kind: "http",
+        method: "POST",
+        url: "http://127.0.0.1:1/users",
+        headers: [["Accept", "application/json"]],
+        auth: { type: "bearer", token: "t0ken" },
+        body: '{"name": "nova"}',
+        scripts: { post: 'pm.test("ok", function () {});' },
+        tests: [],
+        captures: [],
+      },
+      {
+        schemaVersion: 1,
+        id: "b",
+        name: "GraphQL by the browser",
+        kind: "graphql",
+        method: "POST",
+        url: "http://127.0.0.1:1/graphql",
+        headers: [],
+        auth: { type: "none" },
+        graphql: { query: "query Q($id: ID!) { user(id: $id) { id } }", variables: '{"id": "u-1"}' },
+        scripts: {},
+        tests: [],
+        captures: [],
+      },
+      {
+        schemaVersion: 1,
+        id: "d",
+        name: "Form by the browser",
+        kind: "http",
+        method: "POST",
+        url: "http://127.0.0.1:1/upload",
+        headers: [],
+        auth: { type: "none" },
+        formdata: [
+          { key: "title", value: "Q3 expenses" },
+          { key: "attachments", files: ["files/alpha.txt", "files/beta.txt"] },
+          { key: "report", files: ["files/report.pdf"], contentType: "application/x-invoice" },
+        ],
+        scripts: {},
+        tests: [],
+        captures: [],
+      },
+      {
+        schemaVersion: 1,
+        id: "c",
+        name: "Call by the browser",
+        kind: "grpc",
+        method: "POST",
+        url: "127.0.0.1:1",
+        headers: [],
+        auth: { type: "none" },
+        grpc: {
+          protoPaths: ["protos/mock.proto"],
+          service: "pkg.Svc",
+          method: "Written",
+          message: '{"text": "hola"}',
+          metadata: [["x-trace", "1"]],
+        },
+        scripts: {},
+        tests: [],
+        captures: [],
+      },
+    ];
+
+    const root = mkdtempSync(join(tmpdir(), "mandalo-written-"));
+    temporary.push(root);
+    const dir = join(root, "collections", "written");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(root, "environments"), { recursive: true });
+    mkdirSync(join(root, "protos"), { recursive: true });
+    writeFileSync(join(root, "mandalo.toml"), 'schema_version = 1\nid = "wr"\nname = "Wr"\n');
+    writeFileSync(join(dir, "collection.toml"), 'schema_version = 1\nid = "written"\nname = "W"\n');
+    writeFileSync(
+      join(root, "protos", "mock.proto"),
+      readFileSync(join(MOCK_WORKSPACE, "protos", "mock.proto"), "utf8"),
+    );
+    writeFileSync(join(dir, "http.http"), renderFile(written.slice(0, 3)));
+    writeFileSync(join(dir, "call.grpc"), renderRequest(written[3]!));
+
+    const listed = await cli().ls(root);
+    expect(listed.skipped).toEqual([]);
+    expect(flatten(listed.collections[0]!).map(view)).toEqual([
+      {
+        path: "call.grpc#0",
+        id: "call-grpc-0",
+        name: "Call by the browser",
+        kind: "grpc",
+        method: "POST",
+      },
+      {
+        path: "http.http#0",
+        id: "http-http-0",
+        name: "Written by the browser",
+        kind: "http",
+        method: "POST",
+      },
+      {
+        path: "http.http#1",
+        id: "http-http-1",
+        name: "GraphQL by the browser",
+        kind: "graphql",
+        method: "POST",
+      },
+      {
+        path: "http.http#2",
+        id: "http-http-2",
+        name: "Form by the browser",
+        kind: "http",
+        method: "POST",
+      },
+    ]);
+
+    // And the writer's own output parses back to the request it was given.
+    const reread = withFileVars(
+      parseTextDocument("http.http", renderFile(written.slice(0, 3)), "http"),
+    );
+    expect(reread[0]!.model.body).toBe('{"name": "nova"}');
+    expect(reread[0]!.model.auth).toEqual({ type: "bearer", token: "t0ken" });
+    expect(reread[1]!.model.graphql).toEqual(written[1]!.graphql);
+    expect(reread[2]!.model.formdata).toEqual(written[2]!.formdata);
+    expect(reread[2]!.model.headers).toEqual([]);
+    const call = withFileVars(parseTextDocument("call.grpc", renderRequest(written[3]!), "grpc"));
+    expect(call[0]!.model.grpc).toEqual(written[3]!.grpc);
+    expect(call[0]!.model.url).toBe("127.0.0.1:1");
+  }, TIMEOUT);
 
   it("counts the blocks of a file that a body's own ### splits", async () => {
     const listed = await cli().ls(awkwardRoot);
@@ -381,7 +704,7 @@ describe.skipIf(binary === null)("the two readers put the same bytes on the wire
     const cli = new MandaloCli({ cliPath: () => binary as string, timeoutMs: () => 60_000 });
     const source = WIRE["wire.http"]!;
     const blocks = withFileVars(parseTextDocument("wire.http", source, "http"));
-    expect(blocks.length).toBe(8);
+    expect(blocks.length).toBe(11);
     const seen: Echo[] = [];
 
     for (const block of blocks) {
@@ -425,6 +748,10 @@ describe.skipIf(binary === null)("the two readers put the same bytes on the wire
     expect(seen[3]?.headers["authorization"]).toBe("Bearer t0ken");
     expect(seen[4]?.headers["authorization"]).toBe(`Basic ${Buffer.from("ada:lovelace").toString("base64")}`);
     expect(JSON.parse(seen[6]?.body ?? "{}").variables).toEqual({ id: "u-1" });
+    // A body with no declared Content-Type is where the two sniffers have to agree.
+    expect(seen[8]?.headers["content-type"]).toBe("application/json");
+    expect(seen[9]?.headers["content-type"]).toBe("application/xml");
+    expect(seen[10]?.headers["content-type"]).toBe("text/plain");
   }, TIMEOUT);
 });
 

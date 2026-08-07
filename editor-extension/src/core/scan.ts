@@ -13,8 +13,10 @@ import {
   requestFilePath,
   requestPathAt,
   scanTextRequests,
+  engineOnlyReason,
+  engineOnlyRequestKind,
   textFileKind,
-} from "./textFormat";
+} from "../../../src/lib/format/textFormat";
 
 const MANIFEST = "mandalo.toml";
 const COLLECTION_MANIFEST = "collection.toml";
@@ -48,7 +50,13 @@ async function scanFolder(
       continue;
     }
     const fileKind = textFileKind(entry.name);
-    if (fileKind === undefined) continue;
+    if (fileKind === undefined) {
+      const engineOnly = engineOnlyRequestKind(entry.name);
+      if (engineOnly !== undefined) {
+        skipped.push(`${toPosix(fsPath)}: ${engineOnlyReason(engineOnly)}`);
+      }
+      continue;
+    }
     try {
       for (const block of scanTextRequests(await fs.readFile(fsPath, "utf8"), fileKind)) {
         requests.push({

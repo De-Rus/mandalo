@@ -1,4 +1,4 @@
-import { requestPathAt, scanTextRequests, type TextFileKind } from "./textFormat";
+import { requestPathAt, scanTextRequests, type TextFileKind } from "../../../src/lib/format/textFormat";
 
 export interface RequestLens {
   line: number;

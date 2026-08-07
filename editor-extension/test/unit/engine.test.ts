@@ -3,8 +3,9 @@ import { evaluateTests, resolveCapture, type ResponseFacts } from "../../src/eng
 import { apply, canonicalJson, UnresolvedVarError } from "../../src/engine/interpolate";
 import { query, UnsupportedJsonPathError } from "../../src/engine/jsonpath";
 import { prepare } from "../../src/engine/prepare";
+import { runOne } from "../../src/engine/run";
 import { dynamicNames, executeScript } from "../../src/engine/sandbox";
-import type { RequestModel } from "../../src/core/model";
+import type { RequestModel } from "../../../src/lib/format/model";
 
 const BODY = '{"id": 7, "name": "nova", "tags": ["a", "b"], "nested": {"ok": true}, "empty": null}';
 
@@ -169,11 +170,50 @@ describe("prepare", () => {
     expect(prepare(request, wire(request), {}).url).toBe("http://host/p?a=1&k+e+y=v");
   });
 
-  it("leaves an http body without a Content-Type, as the Rust builder does", () => {
-    const request = model({ method: "POST", body: "raw" });
-    const prepared = prepare(request, wire(request), {});
-    expect(prepared.headers).toEqual([]);
-    expect(prepared.body).toBe("raw");
+  it("labels a raw body with the type the Rust builder sniffs for it", () => {
+    const cases: [string, string][] = [
+      ["raw", "text/plain"],
+      ['{"a": 1}', "application/json"],
+      ["[1, 2]", "application/json"],
+      ['<?xml version="1.0"?><a/>', "application/xml"],
+      ["<user id=\"1\"/>", "application/xml"],
+      ["<!doctype html><p>hi", "text/html"],
+    ];
+    for (const [body, contentType] of cases) {
+      const request = model({ method: "POST", body });
+      const prepared = prepare(request, wire(request), {});
+      expect(prepared.headers, body).toEqual([["Content-Type", contentType]]);
+      expect(prepared.body).toBe(body);
+    }
+  });
+
+  it("replaces an Authorization header rather than sending both", () => {
+    const request = model({
+      headers: [["Authorization", "stale"]],
+      auth: { type: "bearer", token: "fresh" },
+    });
+    expect(prepare(request, wire(request), {}).headers).toEqual([
+      ["Authorization", "Bearer fresh"],
+    ]);
+
+    const basic = model({
+      headers: [["authorization", "stale"]],
+      auth: { type: "basic", username: "u", password: "p" },
+    });
+    expect(prepare(basic, wire(basic), {}).headers).toEqual([
+      ["Authorization", `Basic ${Buffer.from("u:p").toString("base64")}`],
+    ]);
+  });
+
+  it("lets a declared Content-Type win over the sniffed one", () => {
+    const request = model({
+      method: "POST",
+      body: '{"a": 1}',
+      headers: [["Content-Type", "application/vnd.acme+json"]],
+    });
+    expect(prepare(request, wire(request), {}).headers).toEqual([
+      ["Content-Type", "application/vnd.acme+json"],
+    ]);
   });
 
   it("builds a graphql body with sorted keys and adds the JSON content type", () => {
@@ -237,5 +277,19 @@ describe("script sandbox", () => {
       "$guid",
       "$randomInt",
     ]);
+  });
+});
+
+describe("what the in-process engine refuses to guess at", () => {
+  it("escalates a form-data body instead of building multipart itself", async () => {
+    const request = model({
+      formdata: [
+        { key: "title", value: "Q3 expenses" },
+        { key: "attachments", files: ["files/alpha.txt"] },
+      ],
+    });
+    await expect(
+      runOne({ model: request, relPath: "form.http#0" }, "api", null, {}),
+    ).rejects.toThrow(/multipart form-data body reads files off the workspace/);
   });
 });

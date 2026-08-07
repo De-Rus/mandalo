@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { requestLenses } from "./core/lenses";
 import { findCollectionFor, requestRelPath } from "./core/scan";
-import { textFileKind } from "./core/textFormat";
+import { textFileKind } from "../../src/lib/format/textFormat";
 import type { MandaloStore } from "./store";
 
 export class MandaloCodeLensProvider implements vscode.CodeLensProvider {

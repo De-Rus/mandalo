@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MandaloCli, type RequestOutcome } from "../../src/core/cli";
-import { parseTextDocument, withFileVars } from "../../src/core/httpFormat";
+import { parseTextDocument, withFileVars } from "../../../src/lib/format/httpFormat";
 import { runMany } from "../../src/engine/run";
 import type { EngineRequest } from "../../src/engine/run";
 import { cliIsRequired, probeCli } from "./support/cliBinary";
@@ -251,7 +251,6 @@ function comparable(outcome: RequestOutcome): unknown {
       passed: test.passed,
       detail: normaliseDetail(test.detail),
     })),
-    captures: outcome.captures,
     logs: outcome.logs,
   };
 }
@@ -283,6 +282,24 @@ describe("in-process engine, with no CLI involved at all", () => {
 });
 
 describe.skipIf(binary === null)("the two engines agree", () => {
+  // `.http` has no line for a declarative capture, so comparing `outcome.captures`
+  // across these fixtures would only ever compare [] with []. What matters is that
+  // neither engine invents one, and that chaining still works — which chain.http proves
+  // through its own assertions.
+  it("neither engine reports a declarative capture a .http file cannot carry", async () => {
+    const cli = new MandaloCli({ cliPath: () => binary as string, timeoutMs: () => 60_000 });
+    const fromCli = await cli.run(workspace, "api", { env: "test" });
+    const fromEngine = await runMany(engineRequests(), "api", "test", {
+      seed: "s1",
+      token: "t0ken",
+    });
+
+    expect(fromCli.requests.flatMap((outcome) => outcome.captures)).toEqual([]);
+    expect(fromEngine.requests.flatMap((outcome) => outcome.captures)).toEqual([]);
+    const chained = fromEngine.requests.find((outcome) => outcome.path === "chain.http#1");
+    expect(chained?.tests.every((test) => test.passed)).toBe(true);
+  }, TIMEOUT);
+
   it("produces identical test results for the same collection", async () => {
     const cli = new MandaloCli({ cliPath: () => binary as string, timeoutMs: () => 60_000 });
     const fromCli = await cli.run(workspace, "api", { env: "test" });

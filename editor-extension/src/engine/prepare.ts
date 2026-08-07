@@ -1,4 +1,4 @@
-import type { Auth, RequestModel } from "../core/model";
+import type { Auth, RequestModel } from "../../../src/lib/format/model";
 import { apply, applyJson, canonicalJson } from "./interpolate";
 import type { ScriptRequest } from "./sandbox";
 
@@ -45,6 +45,22 @@ function formEncode(value: string): string {
   return encodeURIComponent(value).replace(/%20/g, "+").replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+/**
+ * A body written as bare text carries no language, so the Rust engine sniffs one when
+ * it loads the request and labels it with that language's content type. The twin is
+ * `RawLanguage::sniff` in crates/core/src/body.rs — without it undici would default
+ * every raw body to `text/plain;charset=UTF-8`.
+ */
+export function sniffContentType(text: string): string {
+  const trimmed = text.replace(/^\s+/, "");
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return "application/json";
+  if (trimmed.startsWith("<?xml")) return "application/xml";
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("<!doctype html") || lower.startsWith("<html")) return "text/html";
+  if (trimmed.startsWith("<")) return "application/xml";
+  return "text/plain";
+}
+
 export function prepare(
   model: RequestModel,
   wire: ScriptRequest,
@@ -60,7 +76,9 @@ export function prepare(
   if (model.kind === "http") {
     method = wire.method.toUpperCase();
     if (!METHODS.has(method)) throw new RequestBuildError(`invalid method: ${wire.method}`);
-    body = wire.body === null ? null : apply(wire.body, vars);
+    const raw = wire.body === null || wire.body === "" ? null : wire.body;
+    body = raw === null ? null : apply(raw, vars);
+    contentType = raw === null ? null : sniffContentType(raw);
   } else if (model.kind === "graphql") {
     if (!model.graphql) {
       throw new RequestBuildError("graphql request is missing the graphql body");

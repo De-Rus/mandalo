@@ -1,4 +1,4 @@
-import type { Capture, TestAssertion } from "../core/model";
+import type { Capture, TestAssertion } from "../../../src/lib/format/model";
 import { JsonPathError, query } from "./jsonpath";
 
 export interface AssertionResult {

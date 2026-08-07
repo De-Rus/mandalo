@@ -161,6 +161,16 @@ POST ${origin}/x
 < ./files/payload.json
 `,
   );
+  writeFileSync(
+    join(root, "collections", "api", "form.http"),
+    `### Form
+POST ${origin}/x
+Content-Type: multipart/form-data
+
+title = Q3 expenses
+attachments = < ./files/payload.json
+`,
+  );
 });
 
 afterAll(async () => {
@@ -243,32 +253,34 @@ describe("what only the CLI can do", () => {
     expect(log.mock.calls.flat()).toContain("engine: cli · upload.http#0");
   });
 
-  it("hands a `#name` address to the CLI, which is the side that matches names", async () => {
-    const seen: string[][] = [];
-    const spy: SpawnFn = async (binary, args) => {
-      seen.push(args);
-      return cliSend(binary, args);
-    };
-    const { executor } = build("auto", true, spy);
-    await executor.send(workspace(), collection(), "ping.http#Second", "prod", {});
-    expect(seen[0]).toEqual([
-      "send",
-      "api",
-      "ping.http#Second",
-      "--workspace",
-      root,
-      "--reporter",
-      "json",
-      "--env",
-      "prod",
-    ]);
+  // The extension never builds a multipart body itself, so the bytes a form-data
+  // request puts on the wire are the CLI's — the same ones `e2e_text_format`
+  // compares part-for-part against the mock.
+  it("hands a form-data body to the CLI too", async () => {
+    const { executor, log } = build("auto", true, cliSend);
+    await executor.send(workspace(), collection(), "form.http#0", undefined, {});
+    expect(log.mock.calls.flat()).toContain("engine: cli · form.http#0");
   });
 
-  it("refuses a `#name` address with no CLI rather than guessing a block", async () => {
+  it("matches a `#name` address in process, the way the CLI matches it", async () => {
+    const { executor, log } = build("auto", false, neverSpawn);
+    const result = await executor.send(workspace(), collection(), "ping.http#Second", undefined, {});
+    expect(log.mock.calls.flat()).toContain("engine: in-process · ping.http#Second");
+    expect(result.name).toBe("Second");
+  });
+
+  it("refuses a `#name` no block carries rather than running block 0", async () => {
     const { executor } = build("auto", false, neverSpawn);
     await expect(
-      executor.send(workspace(), collection(), "ping.http#Second", undefined, {}),
-    ).rejects.toThrow(/matched by the Mándalo CLI.*no binary is available/s);
+      executor.send(workspace(), collection(), "ping.http#Nope", undefined, {}),
+    ).rejects.toThrow(/no request named "Nope" in this file/);
+  });
+
+  it("refuses a bare path into a file that holds more than one request", async () => {
+    const { executor } = build("auto", false, neverSpawn);
+    await expect(
+      executor.send(workspace(), collection(), "ping.http", undefined, {}),
+    ).rejects.toThrow(/ping.http holds 2 requests — address one of them as ping.http#0/);
   });
 
   it("says which file is not a request file at all", async () => {

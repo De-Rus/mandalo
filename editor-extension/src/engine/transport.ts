@@ -66,11 +66,25 @@ function isUtf8(bytes: Uint8Array): boolean {
   }
 }
 
+// Node wraps connection failures in layers that can carry an empty message
+// (an ECONNREFUSED surfaces as an AggregateError with message "") — dig until
+// something names the failure.
+function causeDetail(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  if (error instanceof AggregateError && error.errors.length > 0) {
+    return causeDetail(error.errors[0]);
+  }
+  if (error.message !== "") return error.message;
+  const code = (error as NodeJS.ErrnoException).code;
+  if (typeof code === "string" && code !== "") return code;
+  return causeDetail(error.cause);
+}
+
 function describe(error: unknown): string {
   if (error instanceof DOMException && error.name === "TimeoutError") {
     return `request timed out after ${TIMEOUT_MS}ms`;
   }
   const message = error instanceof Error ? error.message : String(error);
-  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;
+  const cause = error instanceof Error ? causeDetail(error.cause) : null;
   return cause === null ? message : `${message}: ${cause}`;
 }

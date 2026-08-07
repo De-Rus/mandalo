@@ -111,6 +111,12 @@
         "category": "Mándalo"
       },
       {
+        "command": "mandalo.resendLastRequest",
+        "title": "Resend Last Request",
+        "category": "Mándalo",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "mandalo.runRequestTests",
         "title": "Run Request Tests",
         "category": "Mándalo",
@@ -162,6 +168,30 @@
         "command": "mandalo.showLog",
         "title": "Show Log",
         "category": "Mándalo"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "mandalo.sendRequest",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "editorTextFocus && resourceExtname =~ /\\.(http|rest|grpc)$/"
+      },
+      {
+        "command": "mandalo.sendRequestWithEnv",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorTextFocus && resourceExtname =~ /\\.(http|rest|grpc)$/"
+      },
+      {
+        "command": "mandalo.resendLastRequest",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l"
+      },
+      {
+        "command": "mandalo.selectEnvironment",
+        "key": "ctrl+alt+shift+e",
+        "mac": "cmd+alt+shift+e"
       }
     ],
     "menus": {
@@ -291,6 +321,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "acorn": "^8.18.0",
     "smol-toml": "^1.3.0"
   },
   "pnpm": {

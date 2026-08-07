@@ -66,6 +66,31 @@ escalates the rest, `in-process` refuses to shell out, `cli` always does. When s
 genuinely needs the CLI and no binary exists anywhere, the error names the reason, the
 missing binary and the two ways to supply one.
 
+## Form-data with several files
+
+A multipart field that posts more than one file under the same name is one line
+with several `< ./path` references — the same shape a browser sends for
+`<input type="file" multiple>`:
+
+```http
+### Upload
+POST {{baseUrl}}/body/multipart
+Content-Type: multipart/form-data
+
+attachments = < ./files/alpha.txt < ./files/beta.txt
+```
+
+Repeating the field name on later lines still reads and folds into the same
+field. Sending still goes through the CLI (multipart reads workspace files off
+disk).
+
+## Try it on the example workspace
+
+The [Mándalo repository](https://github.com/De-Rus/mandalo) ships a ready-to-run
+workspace at `examples/mock-workspace`: collections for HTTP, GraphQL, gRPC and
+uploads, and a `hosted` environment that needs no local server. Clone the repo,
+open that folder in VS Code, and every request in it gets a Send lens above it.
+
 ## Installation
 
 From the Marketplace, or from a local build:
@@ -90,8 +115,18 @@ code --install-extension mandalo-0.1.0.vsix
 ## Commands
 
 All under the **Mándalo** category: Send Request · Send Request with Environment… ·
-Run Request Tests · Run Collection · Run Folder · Select Environment · New Request ·
-New Collection · Refresh · Open Workspace in Mándalo · Show Log.
+Resend Last Request · Run Request Tests · Run Collection · Run Folder ·
+Select Environment · New Request · New Collection · Refresh ·
+Open Workspace in Mándalo · Show Log.
+
+### Keyboard shortcuts
+
+| Shortcut | Command |
+| --- | --- |
+| `Ctrl+Alt+R` / `Cmd+Alt+R` | Send the request under the cursor |
+| `Ctrl+Alt+E` / `Cmd+Alt+E` | Send it with a different environment |
+| `Ctrl+Alt+L` / `Cmd+Alt+L` | Resend the last request, in the environment it was sent with |
+| `Ctrl+Alt+Shift+E` | Select the environment |
 
 ## The on-disk layout it reads
 
