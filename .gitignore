@@ -33,3 +33,8 @@ dist-ssr
 
 # Built VS Code request-editor WebView bundle (pnpm build:vscode)
 /editor-extension/media/editor/
+
+# Local artifacts from opening examples/petstore as a workspace
+/examples/petstore/mandalo.toml
+/examples/petstore/collections/
+/examples/petstore/environments/

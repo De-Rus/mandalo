@@ -1,0 +1,86 @@
+openapi: 3.0.3
+info:
+  title: Examples
+  version: "1.0.0"
+servers:
+  - url: https://examples.example.com
+tags:
+  - name: pets
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      summary: Add a pet
+      tags: [pets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            examples:
+              minimal:
+                summary: Only the required fields
+                value:
+                  name: Fido
+              full:
+                summary: Everything the API accepts
+                value:
+                  name: Fido
+                  breed: corgi
+                  tags: [good, boy]
+              rescue:
+                value:
+                  name: Luna
+                  rescuedOn: "2026-01-01"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              example:
+                id: pet_1
+                name: Fido
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      tags: [pets]
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+          examples:
+            existing:
+              summary: A pet the demo data has
+              value: pet_1
+            missing:
+              summary: A pet it does not, to see the 404
+              value: pet_404
+      responses:
+        "200":
+          description: One pet
+          content:
+            application/json:
+              examples:
+                found:
+                  value:
+                    id: pet_1
+                    name: Fido
+                    tags:
+                      - good
+                      - boy
+  /owners:
+    post:
+      operationId: createOwner
+      tags: [pets]
+      requestBody:
+        content:
+          application/json:
+            examples:
+              only:
+                summary: The single shape this endpoint takes
+                value:
+                  email: ada@example.com
+      responses:
+        "201":
+          description: Created

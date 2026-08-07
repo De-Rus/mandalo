@@ -9,10 +9,6 @@ license.workspace = true
 [lib]
 name = "mandalo_core"
 
-[features]
-default = []
-keychain = ["dep:keyring"]
-
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -20,7 +16,10 @@ toml.workspace = true
 uuid.workspace = true
 regex.workspace = true
 git2.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "json", "multipart", "stream"] }
+# Every TLS stack here reads the operating system trust store. tonic already did
+# through `tls-roots`; with webpki roots on the others, one private or
+# inspecting CA made HTTP and websockets fail where gRPC and curl succeeded.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "gzip", "brotli", "json", "multipart", "stream"] }
 hyper = { version = "1", features = ["http1", "client"] }
 percent-encoding = "2"
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
@@ -30,17 +29,18 @@ protox = "0.7"
 http = "1"
 rquickjs = "0.12"
 serde_json_path = "0.7.2"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"], optional = true }
 tokio = { version = "1", features = ["rt", "time", "net", "sync", "macros"] }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-native-roots"] }
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls", "websocket"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_norway = "0.9.42"
+tempfile.workspace = true
 
 [dev-dependencies]
 mandalo-testkit.workspace = true
-tempfile.workspace = true
+git2.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 bytes = "1"

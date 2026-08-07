@@ -1,8 +1,10 @@
 use crate::assertions::Scripts;
 use crate::body::{Body, FormDataRow, RawLanguage};
-use crate::collection::{self, SavedRequest};
+use crate::capability::RefuseLocalWrites;
+use crate::collection::{self, SavedRequest, SavedStream};
 use crate::error::{CoreError, CoreResult};
 use crate::request::Auth;
+use crate::stream::StreamKind;
 use crate::workspace::{self, Environment};
 use serde::Serialize;
 use serde_json::Value;
@@ -213,7 +215,7 @@ fn import_collection(workspace: &Path, root: &Value) -> CoreResult<ImportReport>
                 name: workspace::sanitize_env_name(workspace, &format!("{collection_name}-vars")),
                 vars,
             };
-            workspace::save_environment(workspace, &env)?;
+            workspace::save_environment(workspace, &RefuseLocalWrites, &env)?;
             report.environments += 1;
         }
     }
@@ -229,6 +231,15 @@ fn walk(
     report: &mut ImportReport,
 ) -> CoreResult<Vec<String>> {
     let mut imported: Vec<String> = Vec::new();
+    // Postman runs a folder in the order it lists it, and a collection that logs in
+    // first only works in that order. Files sort by name, so the order has to be in
+    // the name — but only where there is an order to keep.
+    let siblings = items
+        .iter()
+        .filter(|item| item.get("item").is_none() && item.get("request").is_some())
+        .count();
+    let width = siblings.to_string().len();
+    let mut ordinal = 0usize;
     for item in items {
         let item_name = item
             .get("name")
@@ -251,7 +262,11 @@ fn walk(
         let Some(request) = item.get("request") else {
             continue;
         };
-        let Some(mut saved) = convert_request(request, &item_name, inherited, report)? else {
+        let converted = match stream_protocol(item, request) {
+            Some(protocol) => convert_stream(request, protocol, &item_name, report)?,
+            None => convert_request(request, &item_name, inherited, report)?,
+        };
+        let Some(mut saved) = converted else {
             continue;
         };
         let own = extract_scripts(item);
@@ -267,10 +282,21 @@ fn walk(
             .is_some_and(|d| !d.trim().is_empty())
         {
             report.warnings.push(format!(
-                "{item_name}: the description was dropped — neither .http nor .grpc has a line for one; keep it in a `#` comment above the request"
+                "{item_name}: the description was dropped — no request file has a line for one; keep it in a `#` comment above the request"
             ));
         }
-        collection::save_request(workspace, slug, None, Some(folder), &saved)?;
+        ordinal += 1;
+        if siblings > 1 {
+            let extension = extension_for(&saved.kind);
+            let stem = format!("{ordinal:0width$}-{}", collection::slugify(&item_name));
+            let file = match folder {
+                "" => format!("{stem}.{extension}"),
+                folder => format!("{folder}/{stem}.{extension}"),
+            };
+            collection::put_request(workspace, slug, &file, &saved)?;
+        } else {
+            collection::save_request(workspace, slug, None, Some(folder), &saved)?;
+        }
         report.imported += 1;
         imported.push(item_name);
     }
@@ -321,39 +347,79 @@ fn sources(entry: &Value) -> Vec<String> {
     }
 }
 
-fn row_description(entry: &Value, unresolved: &[String]) -> Option<String> {
-    let own = entry
+fn row_description(entry: &Value) -> Option<String> {
+    entry
         .get("description")
         .and_then(Value::as_str)
         .filter(|d| !d.is_empty())
-        .map(String::from);
-    if unresolved.is_empty() {
-        return own;
-    }
-    let note = format!(
-        "The Postman export referenced {} — pick the file inside the workspace.",
-        unresolved.join(", ")
-    );
-    Some(match own {
-        Some(own) => format!("{own}\n{note}"),
-        None => note,
-    })
+        .map(String::from)
 }
 
 fn note_unresolved_file(name: &str, field: &str, sources: &[String], report: &mut ImportReport) {
-    let referenced = match sources.len() {
-        0 => "no path at all".to_string(),
-        _ => sources.join(", "),
-    };
     report.warnings.push(format!(
-        "{name}: file field `{field}` needs a file inside the workspace — the export referenced {referenced}"
+        "{name}: file field `{field}` needs a file inside the workspace — the export referenced {}; the field arrived empty, so point it at one with `{field} = < ./your-file`",
+        referenced_paths(sources)
     ));
+}
+
+fn referenced_paths(sources: &[String]) -> String {
+    match sources.is_empty() {
+        true => "no path at all".to_string(),
+        false => sources.join(", "),
+    }
+}
+
+/// What a form field would cost the file it is written into. A `.http` file
+/// refuses a field it could not read back unchanged, and that refusal aborts a
+/// whole import — so the field is dropped by name here instead, with the fix.
+pub(crate) fn unwritable_form_row(key: &str, value: &str) -> Option<String> {
+    if key.is_empty() || key.trim() != key {
+        return Some(
+            "a form field name cannot be empty or padded with spaces — rename it and import again"
+                .to_string(),
+        );
+    }
+    if key.contains(['=', '<', '\n', '\r']) {
+        return Some(
+            "a form field name cannot carry `=`, `<` or a line break — rename it and import again"
+                .to_string(),
+        );
+    }
+    let unwritable_value = if value.contains(['\n', '\r']) {
+        "a form field value has to stay on one line"
+    } else if value.trim() != value {
+        "a form field value cannot be padded with spaces"
+    } else if value
+        .strip_prefix('<')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '.']))
+    {
+        "a value starting with `<` would read back as a file reference"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "{unwritable_value} — put the value in an environment variable and write `{key} = {{{{name}}}}`"
+    ))
+}
+
+/// A file field an import cannot resolve. The export names a path on the
+/// author's machine and a collection may only reference files inside the
+/// workspace, so the row arrives empty and the comment keeps what it pointed at.
+pub(crate) fn unresolved_files_note(fields: &[(String, String)]) -> String {
+    let mut out = String::from(
+        "Form-data file fields with no file yet — point each at one inside the workspace:",
+    );
+    for (field, referenced) in fields {
+        out.push_str(&format!("\n{field} = < ./your-file   ({referenced})"));
+    }
+    out
 }
 
 fn convert_body(
     b: &Value,
     name: &str,
     headers: &mut Vec<(String, String)>,
+    notes: &mut Vec<String>,
     report: &mut ImportReport,
 ) -> CoreResult<(String, Body)> {
     match b.get("mode").and_then(Value::as_str).unwrap_or("raw") {
@@ -449,6 +515,9 @@ fn convert_body(
         }
         "formdata" => {
             let mut rows = Vec::new();
+            let mut disabled: Vec<&str> = Vec::new();
+            let mut unresolved: Vec<(String, String)> = Vec::new();
+            let mut typed_text: Vec<&str> = Vec::new();
             for entry in b
                 .get("formdata")
                 .and_then(Value::as_array)
@@ -458,44 +527,67 @@ fn convert_body(
                 let Some(key) = entry.get("key").and_then(Value::as_str) else {
                     continue;
                 };
-                let enabled = entry.get("disabled").and_then(Value::as_bool) != Some(true);
-                if entry.get("type").and_then(Value::as_str) == Some("file") {
+                if entry.get("disabled").and_then(Value::as_bool) == Some(true) {
+                    disabled.push(key);
+                    continue;
+                }
+                let value = entry.get("value").and_then(Value::as_str).unwrap_or("");
+                let is_file = entry.get("type").and_then(Value::as_str) == Some("file");
+                if let Some(why) = unwritable_form_row(key, if is_file { "" } else { value }) {
+                    report
+                        .warnings
+                        .push(format!("{name}: form field `{key}` was dropped — {why}"));
+                    continue;
+                }
+                let content_type = entry.get("contentType").and_then(Value::as_str);
+                if is_file {
                     let srcs = sources(entry);
                     note_unresolved_file(name, key, &srcs, report);
+                    let mut referenced =
+                        format!("the export referenced {}", referenced_paths(&srcs));
+                    if let Some(content_type) = content_type {
+                        referenced.push_str(&format!(", sent as {content_type}"));
+                    }
+                    unresolved.push((key.to_string(), referenced));
                     rows.push(FormDataRow {
-                        key: key.to_string(),
-                        value: String::new(),
-                        files: Vec::new(),
-                        content_type: entry
-                            .get("contentType")
-                            .and_then(Value::as_str)
-                            .map(String::from),
-                        enabled,
-                        description: row_description(entry, &srcs),
+                        description: row_description(entry),
+                        ..FormDataRow::text(key, "")
                     });
                     continue;
                 }
+                if content_type.is_some() {
+                    typed_text.push(key);
+                }
                 rows.push(FormDataRow {
-                    key: key.to_string(),
-                    value: entry
-                        .get("value")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    files: Vec::new(),
-                    content_type: entry
-                        .get("contentType")
-                        .and_then(Value::as_str)
-                        .map(String::from),
-                    enabled,
-                    description: row_description(entry, &[]),
+                    description: row_description(entry),
+                    ..FormDataRow::text(key, value)
                 });
             }
-            report.skipped.push(format!(
-                "{name}: {} form-data fields not imported — a .http file cannot express a multipart body, so the request was imported without one",
-                rows.len()
-            ));
-            Ok(("http".to_string(), Body::None))
+            if !disabled.is_empty() {
+                report.warnings.push(format!(
+                    "{name}: disabled form-data fields ({}) were dropped — a .http file writes only the fields it sends, so add them back when you need them",
+                    disabled.join(", ")
+                ));
+            }
+            if !typed_text.is_empty() {
+                report.warnings.push(format!(
+                    "{name}: the content type on text fields ({}) was dropped — a .http file sets `; type=` on file fields only, so move the value into a file field if the type matters",
+                    typed_text.join(", ")
+                ));
+            }
+            if !unresolved.is_empty() {
+                notes.push(unresolved_files_note(&unresolved));
+            }
+            if rows.is_empty() {
+                return Ok(("http".to_string(), Body::None));
+            }
+            // The boundary on the wire is minted per send, so a declared one would
+            // make the file it is written into unreadable.
+            headers.retain(|(k, v)| {
+                !(k.eq_ignore_ascii_case("content-type")
+                    && v.to_ascii_lowercase().starts_with("multipart/"))
+            });
+            Ok(("http".to_string(), Body::Formdata { rows }))
         }
         "file" => {
             let srcs = b.get("file").map(sources).unwrap_or_default();
@@ -553,18 +645,39 @@ fn convert_request(
         }
     }
 
+    let mut notes: Vec<String> = Vec::new();
     let (kind, body) = match request.get("body").filter(|b| !b.is_null()) {
-        Some(b) => convert_body(b, name, &mut headers, report)?,
+        Some(b) => convert_body(b, name, &mut headers, &mut notes, report)?,
         None => ("http".to_string(), Body::None),
     };
 
+    // Postman's collection and folder auth is a *default*. A request that declares
+    // its own — `noauth` included — never also receives it, and neither does one
+    // that already writes an Authorization header of its own.
+    let own_authorization = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("authorization"));
     let auth = match request.get("auth") {
-        None => inherited.auth.clone(),
         Some(a) => convert_auth(a, name, report),
+        None if own_authorization => {
+            if !matches!(inherited.auth, Auth::None) {
+                report.warnings.push(format!(
+                    "{name}: the request writes its own Authorization header, so the collection's default auth was not added on top of it"
+                ));
+            }
+            Auth::None
+        }
+        None => Auth::inherited(inherited.auth.clone()),
     };
+    // Bearer and basic auth *are* the Authorization header, so a literal one next
+    // to them would be written twice into the file and dropped once on the wire.
+    if matches!(auth.effective(), Auth::Bearer { .. } | Auth::Basic { .. }) {
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+    }
     // A .http file has no typed api-key-in-the-query auth. The key goes where it
     // was always going to go on the wire: into the URL.
-    let auth = match auth {
+    let was_inherited = auth.is_inherited();
+    let auth = match auth.effective().clone() {
         Auth::Apikey {
             key,
             value,
@@ -581,6 +694,7 @@ fn convert_request(
             ));
             Auth::None
         }
+        other if was_inherited => Auth::inherited(other),
         other => other,
     };
 
@@ -590,11 +704,111 @@ fn convert_request(
         kind,
         method,
         url,
-        description: None,
+        description: match notes.is_empty() {
+            true => None,
+            false => Some(notes.join("\n\n")),
+        },
         headers,
         auth,
         body,
         grpc: None,
+        stream: None,
+        scripts: Scripts::default(),
+        tests: Vec::new(),
+        captures: Vec::new(),
+    }))
+}
+
+fn extension_for(kind: &str) -> &'static str {
+    match kind {
+        "grpc" => "grpc",
+        "websocket" => "ws",
+        "mqtt" => "mqtt",
+        _ => "http",
+    }
+}
+
+/// Postman marks its realtime requests with a `type` on the item — the request
+/// body itself looks like any other. `socketio` is a websocket with framing
+/// Mándalo does not speak, so it arrives as the plain socket it is built on.
+fn stream_protocol(item: &Value, request: &Value) -> Option<StreamKind> {
+    let declared = item
+        .get("type")
+        .or_else(|| request.get("type"))
+        .or_else(|| request.get("protocol"))
+        .and_then(Value::as_str)?;
+    match declared.to_ascii_lowercase().as_str() {
+        "websocket" | "socketio" | "graphql-ws" => Some(StreamKind::WebSocket),
+        "mqtt" => Some(StreamKind::Mqtt),
+        _ => None,
+    }
+}
+
+/// A Postman realtime request carries a url and, for a websocket, headers. The
+/// messages a person typed into its console are not in the export at all, so the
+/// import says so instead of writing a file that looks complete.
+fn convert_stream(
+    request: &Value,
+    protocol: StreamKind,
+    name: &str,
+    report: &mut ImportReport,
+) -> CoreResult<Option<SavedRequest>> {
+    let url = convert_url(request.get("url"), name, report)?;
+    let scheme = url
+        .split_once("://")
+        .map(|(scheme, _)| scheme.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (kind, method, allowed) = match protocol {
+        StreamKind::WebSocket => ("websocket", "WS", ["ws", "wss"].as_slice()),
+        StreamKind::Mqtt => ("mqtt", "MQTT", ["mqtt", "mqtts", "ws", "wss"].as_slice()),
+        StreamKind::Sse => unreachable!("postman has no sse request type"),
+    };
+    if !allowed.contains(&scheme.as_str()) {
+        report.warnings.push(format!(
+            "{name}: the url is {url:?}, which is not a {kind} url — change the scheme to {} before running it",
+            allowed
+                .iter()
+                .map(|s| format!("{s}://"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ));
+    }
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if protocol == StreamKind::WebSocket {
+        if let Some(list) = request.get("header").and_then(Value::as_array) {
+            for h in list {
+                if h.get("disabled").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                if let (Some(k), Some(v)) = (
+                    h.get("key").and_then(Value::as_str),
+                    h.get("value").and_then(Value::as_str),
+                ) {
+                    headers.push((k.to_string(), v.to_string()));
+                }
+            }
+        }
+    }
+    report.warnings.push(match protocol {
+        StreamKind::Mqtt => format!(
+            "{name}: imported as an mqtt connection with its url only — a Postman export carries no topics, client id or credentials, so add the `subscribe:`, `client-id:` and `>> name` lines yourself"
+        ),
+        _ => format!(
+            "{name}: imported as a websocket with its url and headers — a Postman export carries no saved messages, so add the `>> name` blocks yourself"
+        ),
+    });
+    Ok(Some(SavedRequest {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        kind: kind.to_string(),
+        method: method.to_string(),
+        url,
+        description: None,
+        headers,
+        auth: Auth::None,
+        body: Body::None,
+        grpc: None,
+        stream: Some(SavedStream::default()),
         scripts: Scripts::default(),
         tests: Vec::new(),
         captures: Vec::new(),
@@ -800,7 +1014,7 @@ fn import_environment(workspace: &Path, root: &Value) -> CoreResult<ImportReport
         name: workspace::sanitize_env_name(workspace, name),
         vars: collect_vars(values, "key"),
     };
-    workspace::save_environment(workspace, &env)?;
+    workspace::save_environment(workspace, &RefuseLocalWrites, &env)?;
     Ok(ImportReport {
         imported: 0,
         collections: 0,
@@ -827,6 +1041,299 @@ fn collect_vars(values: &[Value], key_field: &str) -> BTreeMap<String, String> {
         }
     }
     vars
+}
+
+const POSTMAN_COLLECTION_SCHEMA: &str =
+    "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
+
+/// Warnings produced while rendering Mandalo requests as Postman JSON. Named so
+/// nothing Mandalo-only disappears without saying so.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ExportWarnings {
+    pub warnings: Vec<String>,
+}
+
+impl ExportWarnings {
+    pub fn push(&mut self, message: impl Into<String>) {
+        self.warnings.push(message.into());
+    }
+}
+
+/// One Postman v2.1 collection JSON value for a Mandalo collection tree.
+pub fn render_collection(
+    workspace: &Path,
+    node: &collection::CollectionNode,
+    warnings: &mut ExportWarnings,
+) -> CoreResult<Value> {
+    let mut items = Vec::new();
+    for folder in &node.folders {
+        items.push(render_folder(workspace, &node.slug, folder, warnings)?);
+    }
+    for summary in &node.requests {
+        if let Some(item) = render_request_item(workspace, &node.slug, summary, warnings)? {
+            items.push(item);
+        }
+    }
+    Ok(serde_json::json!({
+        "info": {
+            "_postman_id": node.id,
+            "name": node.name,
+            "schema": POSTMAN_COLLECTION_SCHEMA,
+        },
+        "item": items,
+    }))
+}
+
+fn render_folder(
+    workspace: &Path,
+    slug: &str,
+    folder: &collection::FolderNode,
+    warnings: &mut ExportWarnings,
+) -> CoreResult<Value> {
+    let mut items = Vec::new();
+    for child in &folder.folders {
+        items.push(render_folder(workspace, slug, child, warnings)?);
+    }
+    for summary in &folder.requests {
+        if let Some(item) = render_request_item(workspace, slug, summary, warnings)? {
+            items.push(item);
+        }
+    }
+    Ok(serde_json::json!({
+        "name": folder.name,
+        "item": items,
+    }))
+}
+
+fn render_request_item(
+    workspace: &Path,
+    slug: &str,
+    summary: &collection::RequestSummary,
+    warnings: &mut ExportWarnings,
+) -> CoreResult<Option<Value>> {
+    let request = collection::load_request_source(workspace, slug, &summary.path)?;
+    match request.kind.as_str() {
+        "http" | "graphql" => {}
+        other => {
+            warnings.push(format!(
+                "{}: skipped — Postman export does not carry {other} requests",
+                request.name
+            ));
+            return Ok(None);
+        }
+    }
+    if !request.tests.is_empty() {
+        warnings.push(format!(
+            "{}: declarative tests[] are Mandalo-only and were not written to Postman",
+            request.name
+        ));
+    }
+    if !request.captures.is_empty() {
+        warnings.push(format!(
+            "{}: captures[] are Mandalo-only and were not written to Postman",
+            request.name
+        ));
+    }
+    let body = render_body(&request, warnings);
+    let auth = render_auth(&request.auth);
+    let headers: Vec<Value> = request
+        .headers
+        .iter()
+        .map(|(key, value)| serde_json::json!({ "key": key, "value": value, "type": "text" }))
+        .collect();
+    let mut req = serde_json::json!({
+        "method": request.method,
+        "header": headers,
+        "url": request.url,
+    });
+    if let Some(body) = body {
+        req["body"] = body;
+    }
+    if let Some(auth) = auth {
+        req["auth"] = auth;
+    }
+    let mut item = serde_json::json!({
+        "name": request.name,
+        "request": req,
+    });
+    if let Some(events) = render_events(&request.scripts) {
+        item["event"] = events;
+    }
+    Ok(Some(item))
+}
+
+fn render_body(request: &SavedRequest, warnings: &mut ExportWarnings) -> Option<Value> {
+    match &request.body {
+        Body::None => None,
+        Body::Raw { language, text } => Some(serde_json::json!({
+            "mode": "raw",
+            "raw": text,
+            "options": { "raw": { "language": language.to_postman() } },
+        })),
+        Body::Urlencoded { rows } => {
+            let formdata: Vec<Value> = rows
+                .iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "key": row.key,
+                        "value": row.value,
+                        "type": "text",
+                        "disabled": !row.enabled,
+                        "description": row.description,
+                    })
+                })
+                .collect();
+            Some(serde_json::json!({
+                "mode": "urlencoded",
+                "urlencoded": formdata,
+            }))
+        }
+        Body::Formdata { rows } => {
+            let mut parts = Vec::new();
+            for row in rows {
+                if !row.files.is_empty() {
+                    for file in &row.files {
+                        parts.push(serde_json::json!({
+                            "key": row.key,
+                            "type": "file",
+                            "src": file,
+                            "disabled": !row.enabled,
+                            "description": row.description,
+                        }));
+                    }
+                } else {
+                    parts.push(serde_json::json!({
+                        "key": row.key,
+                        "value": row.value,
+                        "type": "text",
+                        "disabled": !row.enabled,
+                        "description": row.description,
+                        "contentType": row.content_type,
+                    }));
+                }
+            }
+            Some(serde_json::json!({
+                "mode": "formdata",
+                "formdata": parts,
+            }))
+        }
+        Body::Binary { file, .. } => {
+            warnings.push(format!(
+                "{}: binary body exported as a Postman file body pointing at {file}",
+                request.name
+            ));
+            Some(serde_json::json!({
+                "mode": "file",
+                "file": { "src": file },
+            }))
+        }
+        Body::Graphql { query, variables } => Some(serde_json::json!({
+            "mode": "graphql",
+            "graphql": {
+                "query": query,
+                "variables": variables,
+            },
+        })),
+    }
+}
+
+fn render_auth(auth: &Auth) -> Option<Value> {
+    match auth.effective() {
+        Auth::None => None,
+        Auth::Bearer { token } => Some(serde_json::json!({
+            "type": "bearer",
+            "bearer": [{ "key": "token", "value": token, "type": "string" }],
+        })),
+        Auth::Basic { username, password } => Some(serde_json::json!({
+            "type": "basic",
+            "basic": [
+                { "key": "username", "value": username, "type": "string" },
+                { "key": "password", "value": password, "type": "string" },
+            ],
+        })),
+        Auth::Apikey {
+            key,
+            value,
+            placement,
+        } => {
+            let placement = if placement == "query" { "query" } else { "header" };
+            Some(serde_json::json!({
+                "type": "apikey",
+                "apikey": [
+                    { "key": "key", "value": key, "type": "string" },
+                    { "key": "value", "value": value, "type": "string" },
+                    { "key": "in", "value": placement, "type": "string" },
+                ],
+            }))
+        }
+        Auth::Inherited { .. } => unreachable!("peeled by effective()"),
+    }
+}
+
+fn render_events(scripts: &Scripts) -> Option<Value> {
+    let mut events = Vec::new();
+    if let Some(pre) = &scripts.pre {
+        events.push(serde_json::json!({
+            "listen": "prerequest",
+            "script": {
+                "type": "text/javascript",
+                "exec": pre.lines().map(|l| l.to_string()).collect::<Vec<_>>(),
+            },
+        }));
+    }
+    if let Some(post) = &scripts.post {
+        events.push(serde_json::json!({
+            "listen": "test",
+            "script": {
+                "type": "text/javascript",
+                "exec": post.lines().map(|l| l.to_string()).collect::<Vec<_>>(),
+            },
+        }));
+    }
+    if events.is_empty() {
+        None
+    } else {
+        Some(Value::Array(events))
+    }
+}
+
+/// Postman environment JSON with shared values only — secrets and locals stay out.
+pub fn render_environment(doc: &workspace::EnvDoc) -> Value {
+    let values: Vec<Value> = doc
+        .vars
+        .iter()
+        .filter_map(|(key, def)| match def {
+            workspace::VarDef::Shared { value } => Some(serde_json::json!({
+                "key": key,
+                "value": value,
+                "type": "default",
+                "enabled": true,
+            })),
+            workspace::VarDef::Local { .. } | workspace::VarDef::Secret { .. } => None,
+        })
+        .collect();
+    // Stable id so rematerializing an unchanged env does not dirty the tree.
+    let id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, doc.name.as_bytes()).to_string();
+    serde_json::json!({
+        "id": id,
+        "name": doc.name,
+        "values": values,
+        "_postman_variable_scope": "environment",
+    })
+}
+
+pub fn collection_json(
+    workspace: &Path,
+    node: &collection::CollectionNode,
+    warnings: &mut ExportWarnings,
+) -> CoreResult<String> {
+    let value = render_collection(workspace, node, warnings)?;
+    serde_json::to_string_pretty(&value).map_err(|e| CoreError::Parse(e.to_string()))
+}
+
+pub fn environment_json(doc: &workspace::EnvDoc) -> CoreResult<String> {
+    serde_json::to_string_pretty(&render_environment(doc))
+        .map_err(|e| CoreError::Parse(e.to_string()))
 }
 
 #[cfg(test)]
@@ -995,18 +1502,14 @@ mod tests {
         let report = import(dir.path(), &collection_fixture()).unwrap();
         assert_eq!(report.imported, 7);
         assert_eq!(report.environments, 1);
-        assert_eq!(
-            report.skipped,
-            vec![
-                "Upload avatar: 4 form-data fields not imported — a .http file cannot express a multipart body, so the request was imported without one"
-            ]
-        );
+        assert_eq!(report.skipped, Vec::<String>::new());
         assert_eq!(
             report.warnings,
             vec![
                 "Login: disabled form fields (debug) were dropped — a .http file writes the whole form body as one line of text",
-                "Upload avatar: file field `avatar` needs a file inside the workspace — the export referenced /Users/ada/pic.png",
-                "Upload avatar: file field `attachments` needs a file inside the workspace — the export referenced /Users/ada/a.pdf, /Users/ada/b.pdf",
+                "Upload avatar: file field `avatar` needs a file inside the workspace — the export referenced /Users/ada/pic.png; the field arrived empty, so point it at one with `avatar = < ./your-file`",
+                "Upload avatar: file field `attachments` needs a file inside the workspace — the export referenced /Users/ada/a.pdf, /Users/ada/b.pdf; the field arrived empty, so point it at one with `attachments = < ./your-file`",
+                "Upload avatar: disabled form-data fields (debug) were dropped — a .http file writes only the fields it sends, so add them back when you need them",
                 "Search: the API key moved into the URL query — a .http file writes an api key as a header or a query parameter, not as typed auth",
                 "Signed: awsv4 auth is not supported — imported without auth, so the request goes out unauthenticated"
             ]
@@ -1017,7 +1520,32 @@ mod tests {
         assert_eq!(requests.len(), 7);
 
         let upload = by_name(&requests, "Upload avatar");
-        assert_eq!(upload.body, Body::None);
+        assert_eq!(
+            upload.body,
+            Body::Formdata {
+                rows: vec![
+                    FormDataRow::text("caption", "hola"),
+                    FormDataRow::text("avatar", ""),
+                    FormDataRow::text("attachments", ""),
+                ]
+            }
+        );
+        let slug = collection::list_tree(dir.path()).unwrap().collections[0]
+            .slug
+            .clone();
+        let written = std::fs::read_to_string(
+            collection::collections_dir(dir.path()).join(slug).join(
+                path_of(&requests, "Upload avatar")
+                    .split('#')
+                    .next()
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+        assert!(
+            written.contains("# attachments = < ./your-file   (the export referenced /Users/ada/a.pdf, /Users/ada/b.pdf)"),
+            "the paths the export named survive as a comment: {written}"
+        );
 
         let list = by_name(&requests, "List");
         assert_eq!(list.method, "GET");
@@ -1099,8 +1627,8 @@ mod tests {
         assert_eq!(admin.requests[0].path, "users/admin/list.http#0");
 
         let requests = imported(dir.path());
-        assert_eq!(path_of(&requests, "Create"), "create.http#0");
-        assert_eq!(path_of(&requests, "Gql"), "gql.http#0");
+        assert_eq!(path_of(&requests, "Create"), "1-create.http#0");
+        assert_eq!(path_of(&requests, "Gql"), "2-gql.http#0");
     }
 
     #[test]
@@ -1164,7 +1692,7 @@ mod tests {
         assert_eq!(
             report.warnings,
             vec![
-                "Login: the description was dropped — neither .http nor .grpc has a line for one; keep it in a `#` comment above the request",
+                "Login: the description was dropped — no request file has a line for one; keep it in a `#` comment above the request",
                 "Folder: test script copied into every request below it (Login) — Mándalo has no shared scripts, so edit each copy",
                 "Scripted: pre-request script copied into every request below it (Login, Plain) — Mándalo has no shared scripts, so edit each copy"
             ]
@@ -1276,16 +1804,17 @@ mod tests {
         let requests = imported(dir.path());
         assert_eq!(
             by_name(&requests, "Inner").auth,
-            Auth::Basic {
+            Auth::inherited(Auth::Basic {
                 username: "u".to_string(),
                 password: "p".to_string()
-            }
+            }),
+            "a folder default is still a default the request never asked for"
         );
         assert_eq!(
             by_name(&requests, "Outer").auth,
-            Auth::Bearer {
+            Auth::inherited(Auth::Bearer {
                 token: "{{token}}".to_string()
-            }
+            })
         );
     }
 
@@ -1448,7 +1977,7 @@ mod tests {
             name: "Staging--EU-".to_string(),
             vars: BTreeMap::from([("keep".to_string(), "me".to_string())]),
         };
-        workspace::save_environment(dir.path(), &existing).unwrap();
+        workspace::save_environment(dir.path(), &RefuseLocalWrites, &existing).unwrap();
         let json = serde_json::json!({
             "name": "Staging (EU)",
             "values": [{"key": "base", "value": "https://eu.x.dev"}]
@@ -1563,9 +2092,9 @@ mod tests {
         let requests = imported(dir.path());
         assert_eq!(
             by_name(&requests, "Inherits").auth,
-            Auth::Bearer {
+            Auth::inherited(Auth::Bearer {
                 token: "{{token}}".to_string()
-            }
+            })
         );
         assert_eq!(
             by_name(&requests, "Overrides").auth,
@@ -1603,7 +2132,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_file_form_field_is_reported_by_name_not_imported() {
+    fn a_multi_file_form_field_is_one_row_and_is_reported_by_name() {
         let dir = tempfile::tempdir().unwrap();
         let json = serde_json::json!({
             "info": {
@@ -1626,20 +2155,162 @@ mod tests {
         .to_string();
         let report = import(dir.path(), &json).unwrap();
         let requests = imported(dir.path());
-        assert_eq!(by_name(&requests, "Attach").body, Body::None);
+        assert_eq!(
+            by_name(&requests, "Attach").body,
+            Body::Formdata {
+                rows: vec![
+                    FormDataRow::text("attachments", ""),
+                    FormDataRow::text("avatar", ""),
+                    FormDataRow::text("empty", ""),
+                ]
+            },
+            "a `src` array is one field with several files, so it stays one row"
+        );
         assert_eq!(
             report.warnings,
             vec![
-                "Attach: file field `attachments` needs a file inside the workspace — the export referenced /a/one.pdf, /a/two.pdf",
-                "Attach: file field `avatar` needs a file inside the workspace — the export referenced /a/pic.png",
-                "Attach: file field `empty` needs a file inside the workspace — the export referenced no path at all"
+                "Attach: file field `attachments` needs a file inside the workspace — the export referenced /a/one.pdf, /a/two.pdf; the field arrived empty, so point it at one with `attachments = < ./your-file`",
+                "Attach: file field `avatar` needs a file inside the workspace — the export referenced /a/pic.png; the field arrived empty, so point it at one with `avatar = < ./your-file`",
+                "Attach: file field `empty` needs a file inside the workspace — the export referenced no path at all; the field arrived empty, so point it at one with `empty = < ./your-file`"
             ]
         );
+        assert_eq!(report.skipped, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_single_file_field_keeps_its_row_its_path_and_its_part_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "info": {
+                "name": "Uploads",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+            },
+            "item": [{
+                "name": "Invoice",
+                "request": {
+                    "method": "POST",
+                    "url": "https://x.dev/invoices",
+                    "body": {"mode": "formdata", "formdata": [
+                        {"key": "note", "value": "march", "type": "text"},
+                        {"key": "report", "type": "file", "src": "/Users/ada/report.pdf", "contentType": "application/x-invoice"}
+                    ]}
+                }
+            }]
+        })
+        .to_string();
+        let report = import(dir.path(), &json).unwrap();
+        let requests = imported(dir.path());
         assert_eq!(
-            report.skipped,
+            by_name(&requests, "Invoice").body,
+            Body::Formdata {
+                rows: vec![
+                    FormDataRow::text("note", "march"),
+                    FormDataRow::text("report", ""),
+                ]
+            }
+        );
+        assert_eq!(
+            report.warnings,
             vec![
-                "Attach: 3 form-data fields not imported — a .http file cannot express a multipart body, so the request was imported without one"
+                "Invoice: file field `report` needs a file inside the workspace — the export referenced /Users/ada/report.pdf; the field arrived empty, so point it at one with `report = < ./your-file`"
             ]
+        );
+        let slug = collection::list_tree(dir.path()).unwrap().collections[0]
+            .slug
+            .clone();
+        let written = std::fs::read_to_string(
+            collection::collections_dir(dir.path())
+                .join(slug)
+                .join(path_of(&requests, "Invoice").split('#').next().unwrap()),
+        )
+        .unwrap();
+        assert!(
+            written.contains(
+                "# report = < ./your-file   (the export referenced /Users/ada/report.pdf, sent as application/x-invoice)"
+            ),
+            "the part type the export declared survives with the path: {written}"
+        );
+    }
+
+    #[test]
+    fn a_form_field_no_http_file_could_write_is_dropped_by_name_not_by_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "info": {
+                "name": "Forms",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+            },
+            "item": [{
+                "name": "Odd",
+                "request": {
+                    "method": "POST",
+                    "url": "https://x.dev/odd",
+                    "body": {"mode": "formdata", "formdata": [
+                        {"key": "kept", "value": "fine", "type": "text"},
+                        {"key": "multi", "value": "one\ntwo", "type": "text"},
+                        {"key": "a=b", "value": "x", "type": "text"}
+                    ]}
+                }
+            }]
+        })
+        .to_string();
+        let report = import(dir.path(), &json).unwrap();
+        assert_eq!(
+            by_name(&imported(dir.path()), "Odd").body,
+            Body::Formdata {
+                rows: vec![FormDataRow::text("kept", "fine")]
+            }
+        );
+        assert_eq!(
+            report.warnings,
+            vec![
+                "Odd: form field `multi` was dropped — a form field value has to stay on one line — put the value in an environment variable and write `multi = {{name}}`",
+                "Odd: form field `a=b` was dropped — a form field name cannot carry `=`, `<` or a line break — rename it and import again"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_text_only_form_data_body_imports_whole_and_says_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "info": {
+                "name": "Forms",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+            },
+            "item": [{
+                "name": "Report",
+                "request": {
+                    "method": "POST",
+                    "url": "https://x.dev/report",
+                    "header": [{"key": "Content-Type", "value": "multipart/form-data; boundary=--X"}],
+                    "body": {"mode": "formdata", "formdata": [
+                        {"key": "title", "value": "Q3 expenses", "type": "text"},
+                        {"key": "quarter", "value": "3", "type": "text"}
+                    ]}
+                }
+            }]
+        })
+        .to_string();
+        let report = import(dir.path(), &json).unwrap();
+        assert_eq!(report.warnings, Vec::<String>::new());
+        assert_eq!(report.skipped, Vec::<String>::new());
+
+        let requests = imported(dir.path());
+        let report_request = by_name(&requests, "Report");
+        assert_eq!(
+            report_request.body,
+            Body::Formdata {
+                rows: vec![
+                    FormDataRow::text("title", "Q3 expenses"),
+                    FormDataRow::text("quarter", "3"),
+                ]
+            }
+        );
+        assert_eq!(
+            report_request.headers,
+            Vec::<(String, String)>::new(),
+            "the exporter's boundary is dropped: the one on the wire is minted per send"
         );
     }
 

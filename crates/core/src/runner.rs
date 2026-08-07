@@ -1,5 +1,5 @@
 use crate::assertions::{evaluate_tests, resolve_capture, CaptureScope, TestResult};
-use crate::capability::{Decision, HostPolicy, SecretStore};
+use crate::capability::{HostPolicy, SecretStore};
 use crate::collection::{self, SavedRequest};
 use crate::error::{CoreError, CoreResult};
 use crate::grpc::{self, GrpcResponse, GrpcSpec};
@@ -9,17 +9,25 @@ use crate::script::{self, Limits, ScriptContext, ScriptRequest, ScriptResponse, 
 use crate::workspace::{self, EnvDoc, Environment, VarDef};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 use std::path::Path;
 use std::time::Instant;
+
+/// A variable whose value never lives in the committed file.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LocalVar {
+    /// Confidential: registered with the redactor once resolved.
+    pub secret: bool,
+    /// Hosts the value may travel to. Empty means "not bound to a host yet".
+    pub hosts: Vec<String>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VarFrame {
     pub env: String,
     pub vars: BTreeMap<String, String>,
-    /// Variables the environment declares secret, mapped to the hosts they may
-    /// be sent to. An empty list means "declared but not bound to a host yet".
-    pub secrets: BTreeMap<String, Vec<String>>,
+    /// Variables the environment declares `secret = true` or `shared = false`.
+    /// Their values come from this machine, never from the file.
+    pub secrets: BTreeMap<String, LocalVar>,
 }
 
 impl VarFrame {
@@ -43,11 +51,17 @@ impl VarFrame {
         let mut frame = VarFrame::new(doc.name.clone());
         for (key, def) in &doc.vars {
             match def {
-                VarDef::Plain { value } => {
+                VarDef::Shared { value } => {
                     frame.vars.insert(key.clone(), value.clone());
                 }
-                VarDef::Secret { hosts } => {
-                    frame.secrets.insert(key.clone(), hosts.clone());
+                VarDef::Local { hosts } | VarDef::Secret { hosts } => {
+                    frame.secrets.insert(
+                        key.clone(),
+                        LocalVar {
+                            secret: def.is_secret(),
+                            hosts: hosts.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -64,6 +78,21 @@ impl VarFrame {
 
     pub fn remove(&mut self, key: &str) {
         self.vars.remove(key);
+    }
+
+    /// What a script is allowed to see. A secret's value is withheld — a script
+    /// that can read a token can transform it past the host binding in three
+    /// lines, and the binding is the whole promise of a shared collection. The
+    /// `{{name}}` template still resolves at send time, so a script can *use* a
+    /// secret in a url, a header or a body; it just cannot read the value.
+    pub fn script_vars(&self) -> BTreeMap<String, String> {
+        self.vars
+            .iter()
+            .filter(|(name, value)| {
+                !self.secrets.contains_key(*name) && crate::redact::scrub(value) == **value
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
     }
 }
 
@@ -253,7 +282,7 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
             let outcome = script::run_script(
                 source,
                 ScriptContext {
-                    vars: vars.vars.clone(),
+                    vars: vars.script_vars(),
                     request_name: req.name.clone(),
                     request: wire.clone(),
                     response: None,
@@ -296,7 +325,10 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
             let built = request::build(client, &spec)?;
             step.unbound_secrets = enforce_secret_hosts(&used_secrets, vars, built.url().as_str())?;
             self.check_host(built.url().as_str()).await?;
-            (Some(request::send_built(client, built).await?), None)
+            (
+                Some(request::send_built(client, built, &self.policy).await?),
+                None,
+            )
         };
 
         let (status, headers, body, duration_ms) = match (&response, &grpc_response) {
@@ -309,7 +341,7 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
             let outcome = script::run_script(
                 source,
                 ScriptContext {
-                    vars: vars.vars.clone(),
+                    vars: vars.script_vars(),
                     request_name: req.name.clone(),
                     request: wire.clone(),
                     response: Some(ScriptResponse {
@@ -370,7 +402,7 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
         req: &SavedRequest,
         env: Option<&str>,
     ) -> CoreResult<StepResult> {
-        let mut vars = env_frame(ws, env)?;
+        let mut vars = env_frame(ws, &self.secrets, env)?;
         self.run_request_in(Some(ws), req, &mut vars).await
     }
 
@@ -394,7 +426,7 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
         fail_fast: bool,
     ) -> CoreResult<RunReport> {
         let started = Instant::now();
-        let mut vars = env_frame(ws, env)?;
+        let mut vars = env_frame(ws, &self.secrets, env)?;
 
         let mut report = RunReport {
             collection: collection_slug.to_string(),
@@ -488,23 +520,28 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
                 templates.push(v);
             }
         }
-        match &req.auth {
-            Auth::None => {}
-            Auth::Bearer { token } => templates.push(token),
-            Auth::Basic { username, password } => {
-                templates.push(username);
-                templates.push(password);
-            }
-            Auth::Apikey { key, value, .. } => {
-                templates.push(key);
-                templates.push(value);
+        // Inherited auth is a default, not a request of its own: a secret it names
+        // that this machine does not hold drops the header at send time instead of
+        // stopping the request, so its templates never join the must-resolve list.
+        if !req.auth.is_inherited() {
+            match &req.auth {
+                Auth::None | Auth::Inherited { .. } => {}
+                Auth::Bearer { token } => templates.push(token),
+                Auth::Basic { username, password } => {
+                    templates.push(username);
+                    templates.push(password);
+                }
+                Auth::Apikey { key, value, .. } => {
+                    templates.push(key);
+                    templates.push(value);
+                }
             }
         }
 
         let mut used: Vec<String> = Vec::new();
         for template in templates {
             for name in interpolate::names(template) {
-                if vars.secrets.contains_key(&name) {
+                if let Some(declared) = vars.secrets.get(&name).cloned() {
                     // A secret stays "used" even when an earlier step already
                     // resolved it, or the host binding would only cover the
                     // first request of a suite.
@@ -514,14 +551,13 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
                     if vars.vars.contains_key(&name) {
                         continue;
                     }
-                    let value = self.secrets.get(&vars.env, &name)?.ok_or_else(|| {
-                        CoreError::Secret(format!(
-                            "{}.{name} is declared secret but has no value on this machine — store it with set_secret, or export {}",
-                            vars.env,
-                            crate::capability::EnvVarStore::variable_name(&vars.env, &name)
-                        ))
-                    })?;
-                    crate::redact::register(&vars.env, &name, &value);
+                    let value = self
+                        .secrets
+                        .get(&vars.env, &name)?
+                        .ok_or_else(|| missing_value(&vars.env, &name, declared.secret))?;
+                    if declared.secret {
+                        crate::redact::register(&vars.env, &name, &value);
+                    }
                     vars.set(name, value);
                     continue;
                 }
@@ -538,44 +574,7 @@ impl<S: SecretStore, P: HostPolicy> Runner<S, P> {
     }
 
     async fn check_host(&self, url: &str) -> CoreResult<()> {
-        if !self.policy.enforces() {
-            return Ok(());
-        }
-        let parsed = reqwest::Url::parse(url)
-            .map_err(|e| CoreError::Request(format!("invalid url {url:?}: {e}")))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| CoreError::Request(format!("url has no host: {url}")))?
-            .to_string();
-        let port = parsed.port_or_known_default().unwrap_or(443);
-
-        let addresses: Vec<IpAddr> = match host.parse::<IpAddr>() {
-            Ok(ip) => vec![ip],
-            Err(_) => tokio::net::lookup_host((host.as_str(), port))
-                .await
-                .map_err(|e| CoreError::Network(format!("cannot resolve {host}: {e}")))?
-                .map(|addr| addr.ip())
-                .collect(),
-        };
-        if addresses.is_empty() {
-            return Err(CoreError::Network(format!("{host} resolved to no address")));
-        }
-        for ip in addresses {
-            match self.policy.allow(&host, &ip) {
-                Decision::Allow => {}
-                Decision::Deny(reason) => {
-                    return Err(CoreError::HostDenied(format!(
-                        "{host} is blocked: {reason}"
-                    )))
-                }
-                Decision::Ask => {
-                    return Err(CoreError::HostConfirmRequired(format!(
-                        "{host} needs confirmation before it can be called"
-                    )))
-                }
-            }
-        }
-        Ok(())
+        request::guard_url(&self.policy, url).await
     }
 }
 
@@ -586,6 +585,18 @@ fn host_of(url: &str) -> CoreResult<String> {
         .host_str()
         .ok_or_else(|| CoreError::Request(format!("url has no host: {url}")))?
         .to_ascii_lowercase())
+}
+
+/// The message a workspace that arrived from a colleague produces: it names the
+/// environment, the variable, and every place a value could come from. An empty
+/// value is never substituted.
+fn missing_value(env: &str, name: &str, secret: bool) -> CoreError {
+    let command = if secret { "set-secret" } else { "set-local" };
+    CoreError::Secret(format!(
+        "{env}.{name} has no value on this machine — run `mandalo env {command} {env} {name}`, \
+         or export {}",
+        crate::capability::EnvVarStore::variable_name(env, name)
+    ))
 }
 
 /// A secret bound to hosts may only travel to those hosts. An unbound secret is
@@ -601,9 +612,10 @@ fn enforce_secret_hosts(
     let host = host_of(url)?;
     let mut unbound = Vec::new();
     for name in used {
-        let Some(hosts) = vars.secrets.get(name) else {
+        let Some(declared) = vars.secrets.get(name) else {
             continue;
         };
+        let hosts = &declared.hosts;
         if hosts.is_empty() {
             unbound.push(UnboundSecret {
                 name: name.clone(),
@@ -669,7 +681,7 @@ impl VarWrites {
 /// The one place an environment name becomes a [`VarFrame`]. Every entry point —
 /// suite runs, single runs, the desktop app — goes through it, so the GUI and the
 /// CLI cannot drift into resolving variables differently.
-pub fn env_frame(ws: &Path, env: Option<&str>) -> CoreResult<VarFrame> {
+pub fn env_frame(ws: &Path, secrets: &dyn SecretStore, env: Option<&str>) -> CoreResult<VarFrame> {
     let Some(name) = env else {
         return Ok(VarFrame::default());
     };
@@ -679,7 +691,15 @@ pub fn env_frame(ws: &Path, env: Option<&str>) -> CoreResult<VarFrame> {
         .into_iter()
         .find(|e| e.name == name)
         .ok_or_else(|| CoreError::NotFound(format!("unknown environment: {name}")))?;
-    Ok(VarFrame::from_doc(&found))
+    let mut frame = VarFrame::from_doc(&found);
+    // A shared variable may still be overridden on this machine, so a colleague
+    // can point one at their own box without touching the file the team shares.
+    for key in frame.vars.keys().cloned().collect::<Vec<_>>() {
+        if let Some(value) = secrets.get(name, &key)? {
+            frame.set(key, value);
+        }
+    }
+    Ok(frame)
 }
 
 fn apply_var_writes(vars: &mut VarFrame, sets: &BTreeMap<String, String>, unsets: &[String]) {
@@ -688,6 +708,49 @@ fn apply_var_writes(vars: &mut VarFrame, sets: &BTreeMap<String, String>, unsets
     }
     for k in unsets {
         vars.remove(k);
+    }
+    bind_derived_secrets(vars, sets);
+}
+
+/// A value that carries a resolved secret is that secret in another shape, so it
+/// inherits the binding instead of escaping it. Scripts cannot read a secret at
+/// all, so this only fires on a value that came back from the wire — which is
+/// exactly the copy that would otherwise travel anywhere.
+fn bind_derived_secrets(vars: &mut VarFrame, sets: &BTreeMap<String, String>) {
+    let mut derived: Vec<(String, LocalVar)> = Vec::new();
+    for (key, value) in sets {
+        if vars.secrets.contains_key(key) {
+            continue;
+        }
+        let mut carried: Vec<Vec<String>> = Vec::new();
+        for (name, declared) in &vars.secrets {
+            let Some(resolved) = vars.vars.get(name) else {
+                continue;
+            };
+            if resolved.chars().count() >= crate::redact::MIN_REDACTABLE_LEN
+                && value.contains(resolved.as_str())
+            {
+                carried.push(declared.hosts.clone());
+            }
+        }
+        if carried.is_empty() {
+            continue;
+        }
+        let hosts = carried
+            .into_iter()
+            .filter(|hosts| !hosts.is_empty())
+            .reduce(|kept, next| kept.into_iter().filter(|h| next.contains(h)).collect())
+            .unwrap_or_default();
+        derived.push((
+            key.clone(),
+            LocalVar {
+                secret: true,
+                hosts,
+            },
+        ));
+    }
+    for (key, declared) in derived {
+        vars.secrets.insert(key, declared);
     }
 }
 
@@ -716,12 +779,19 @@ pub fn suite_paths(
     Ok(out)
 }
 
+/// A suite is a sequence of send-and-assert steps, and a connection that stays
+/// open is not one: it has no single response to assert on and no end of its own.
+/// Streams are listed in the tree and run with `mandalo listen`, one at a time.
+fn runs_in_a_suite(kind: &str) -> bool {
+    !matches!(kind, "websocket" | "mqtt" | "sse")
+}
+
 fn collect_paths(
     requests: &[collection::RequestSummary],
     folders: &[collection::FolderNode],
     out: &mut Vec<String>,
 ) {
-    for request in requests {
+    for request in requests.iter().filter(|r| runs_in_a_suite(&r.kind)) {
         out.push(request.path.clone());
     }
     for folder in folders {

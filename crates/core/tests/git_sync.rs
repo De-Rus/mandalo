@@ -1,5 +1,5 @@
 use mandalo_core::git_sync::{
-    self, Auth, PushedBranch, SyncOutcome, SyncStatus, FALLBACK_EMAIL, FALLBACK_NAME,
+    self, Auth, PushedBranch, SyncOutcome, SyncSelection, SyncStatus, FALLBACK_EMAIL, FALLBACK_NAME,
 };
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -98,7 +98,57 @@ fn read(workspace: &Path, name: &str) -> String {
 }
 
 fn sync(workspace: &Path, message: &str) -> SyncOutcome {
-    git_sync::sync(workspace, message, &Auth::None, false).expect("sync")
+    sync_selected(workspace, message, &SyncSelection::default()).expect("sync")
+}
+
+/// Every caller goes through the two phases: a plan, then a run that quotes the
+/// plan's token back. There is no other way in.
+fn sync_selected(
+    workspace: &Path,
+    message: &str,
+    selection: &SyncSelection,
+) -> mandalo_core::CoreResult<SyncOutcome> {
+    let plan = git_sync::plan_sync(workspace, selection, None)?;
+    git_sync::run_sync(
+        workspace,
+        selection,
+        &plan.token,
+        message,
+        &Auth::None,
+        false,
+    )
+}
+
+fn forced_sync(workspace: &Path, message: &str) -> mandalo_core::CoreResult<SyncOutcome> {
+    let selection = SyncSelection::default();
+    let plan = git_sync::plan_sync(workspace, &selection, None)?;
+    git_sync::run_sync(
+        workspace,
+        &selection,
+        &plan.token,
+        message,
+        &Auth::None,
+        true,
+    )
+}
+
+fn push_branch(
+    workspace: &Path,
+    branch: &str,
+    message: &str,
+    force: bool,
+) -> mandalo_core::CoreResult<PushedBranch> {
+    let selection = SyncSelection::default();
+    let plan = git_sync::plan_sync(workspace, &selection, Some(branch))?;
+    git_sync::run_branch_push(
+        workspace,
+        &selection,
+        branch,
+        &plan.token,
+        message,
+        &Auth::None,
+        force,
+    )
 }
 
 fn status(workspace: &Path) -> SyncStatus {
@@ -273,55 +323,169 @@ fn divergent_edits_to_different_files_rebase_cleanly() {
 }
 
 #[test]
-fn divergent_edits_to_the_same_file_conflict_and_leave_a_usable_tree() {
+fn divergent_edits_to_the_same_request_surface_a_full_text_diff() {
     let box_ = sandbox();
     let alice = box_.workspace("alice");
-    write(&alice, "collections/api/shared.toml", "name = \"base\"\n");
+    write(&alice, "collections/api/shared.http", "### Base\n\nGET {{baseUrl}}/x\n");
     assert!(matches!(sync(&alice, "seed"), SyncOutcome::Pushed { .. }));
 
     let bob = box_.clone("bob");
     write(
         &alice,
-        "collections/api/shared.toml",
-        "name = \"alice wins\"\n",
+        "collections/api/shared.http",
+        "### List users\n\nGET {{baseUrl}}/users\nAccept: application/json\n",
     );
-    write(&bob, "collections/api/shared.toml", "name = \"bob wins\"\n");
+    write(
+        &bob,
+        "collections/api/shared.http",
+        "### Create user\n\nPOST {{baseUrl}}/users\nContent-Type: application/json\n\n{\"name\":\"Ada\"}\n",
+    );
     assert!(matches!(sync(&alice, "alice"), SyncOutcome::Pushed { .. }));
 
     match sync(&bob, "bob") {
-        SyncOutcome::Conflicted { files } => {
-            assert_eq!(files, vec!["collections/api/shared.toml".to_string()]);
+        SyncOutcome::Conflicted { files, items } => {
+            assert_eq!(files, vec!["collections/api/shared.http".to_string()]);
+            assert_eq!(items.len(), 1);
+            let ours = items[0].ours.text.as_deref().unwrap_or("");
+            let theirs = items[0].theirs.text.as_deref().unwrap_or("");
+            assert!(ours.contains("Create user") && ours.contains("POST"));
+            assert!(theirs.contains("List users") && theirs.contains("GET"));
+            assert!(ours.contains("Ada"), "full request body must be in the diff");
+            assert!(theirs.contains("Accept: application/json"));
+        }
+        other => panic!("expected Conflicted with full request text, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolving_then_syncing_with_local_commits_merges_cleanly() {
+    let box_ = sandbox();
+    let alice = box_.workspace("alice");
+    write(&alice, "collections/api/base.toml", "name = \"api\"\n");
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"base\"\n",
+    );
+    assert!(matches!(sync(&alice, "seed"), SyncOutcome::Pushed { .. }));
+
+    let bob = box_.clone("bob");
+    write(&bob, "collections/api/bob.toml", "name = \"bob\"\n");
+    assert!(matches!(sync(&bob, "bob local"), SyncOutcome::Pushed { .. }));
+
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"alice\"\n",
+    );
+    assert!(matches!(sync(&alice, "alice"), SyncOutcome::Pushed { .. }));
+
+    write(
+        &bob,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"bob\"\n",
+    );
+    match sync(&bob, "bob collide") {
+        SyncOutcome::Conflicted { files, .. } => {
+            assert_eq!(files, vec!["environments/local.toml".to_string()]);
         }
         other => panic!("expected Conflicted, got {other:?}"),
     }
 
-    let repo = git2::Repository::open(&bob).unwrap();
-    assert_eq!(
-        repo.state(),
-        git2::RepositoryState::Clean,
-        "the rebase must be aborted, not left half-applied"
-    );
-    assert!(!repo.index().unwrap().has_conflicts());
-    assert_eq!(
-        read(&bob, "collections/api/shared.toml"),
-        "name = \"bob wins\"\n",
-        "bob's own commit must survive the abort"
-    );
+    git_sync::apply_conflict_choices(
+        &bob,
+        &[git_sync::ConflictDecision {
+            path: "environments/local.toml".into(),
+            choice: git_sync::ConflictChoice::Theirs,
+            content: None,
+        }],
+    )
+    .expect("apply");
 
-    let out = status(&bob);
-    assert!(out.conflicted.is_empty());
-    assert_eq!(out.ahead, 1);
-    assert_eq!(out.behind, 1);
+    match sync(&bob, "after resolve") {
+        SyncOutcome::Pushed { .. } => {}
+        other => panic!("expected Pushed after resolve with ahead>0, got {other:?}"),
+    }
+    assert_eq!(
+        read(&bob, "environments/local.toml"),
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"alice\"\n",
+    );
+    assert!(status(&bob).conflicted.is_empty());
+}
 
+#[test]
+fn divergent_config_edits_surface_for_a_visual_pick() {
+    let box_ = sandbox();
+    let alice = box_.workspace("alice");
+    write(&alice, "collections/api/base.toml", "name = \"api\"\n");
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.baseUrl]\nvalue = \"http://a\"\n",
+    );
+    assert!(matches!(sync(&alice, "seed"), SyncOutcome::Pushed { .. }));
+
+    let bob = box_.clone("bob");
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.baseUrl]\nvalue = \"http://alice\"\n",
+    );
     write(
         &bob,
-        "collections/api/shared.toml",
-        "name = \"alice wins\"\n",
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.baseUrl]\nvalue = \"http://bob\"\n",
     );
-    assert!(
-        matches!(sync(&bob, "take alice's"), SyncOutcome::Pushed { .. }),
-        "a resolved workspace must sync again"
-    );
+    assert!(matches!(sync(&alice, "alice"), SyncOutcome::Pushed { .. }));
+
+    match sync(&bob, "bob") {
+        SyncOutcome::Conflicted { files, items } => {
+            assert_eq!(files, vec!["environments/local.toml".to_string()]);
+            assert_eq!(items.len(), 1);
+            assert!(
+                items[0]
+                    .ours
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("http://bob"),
+                "ours text must carry the full file for the diff UI"
+            );
+            assert!(
+                items[0]
+                    .theirs
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("http://alice"),
+                "theirs text must carry the full file for the diff UI"
+            );
+            git_sync::apply_conflict_choices(
+                &bob,
+                &[git_sync::ConflictDecision {
+                    path: "environments/local.toml".into(),
+                    choice: git_sync::ConflictChoice::Theirs,
+                    content: None,
+                }],
+            )
+            .expect("apply");
+            assert!(
+                status(&bob).conflicted.is_empty(),
+                "Resolve must clear the conflict badge"
+            );
+            match sync(&bob, "after resolve") {
+                SyncOutcome::Pushed { .. }
+                | SyncOutcome::Pulled { .. }
+                | SyncOutcome::NothingToDo => {}
+                other => panic!("expected sync to finish after resolve, got {other:?}"),
+            }
+            assert_eq!(
+                read(&bob, "environments/local.toml"),
+                "schema_version = 1\nname = \"Local\"\n\n[vars.baseUrl]\nvalue = \"http://alice\"\n",
+            );
+        }
+        other => panic!("expected Conflicted on config, got {other:?}"),
+    }
 }
 
 #[test]
@@ -336,7 +500,7 @@ fn the_scanner_blocks_a_commit_that_carries_a_token_and_force_overrides_it() {
         "environments/prod.toml",
         "token = \"ghp_16C7e42F292c6912E7710c838347Ae178B4a\"\n",
     );
-    let err = git_sync::sync(&ws, "oops", &Auth::None, false).unwrap_err();
+    let err = sync_selected(&ws, "oops", &SyncSelection::default()).unwrap_err();
     assert_eq!(err.code(), "E_SECRET");
     assert!(err.to_string().contains("github-token"), "{err}");
     assert!(err.to_string().contains("environments/prod.toml"), "{err}");
@@ -347,7 +511,7 @@ fn the_scanner_blocks_a_commit_that_carries_a_token_and_force_overrides_it() {
     );
     assert_eq!(status(&ws).untracked, 1, "nothing was staged or committed");
 
-    let forced = git_sync::sync(&ws, "I know what I am doing", &Auth::None, true).expect("forced");
+    let forced = forced_sync(&ws, "I know what I am doing").expect("forced");
     assert!(matches!(forced, SyncOutcome::Pushed { .. }), "{forced:?}");
 }
 
@@ -361,8 +525,8 @@ fn a_gitignored_secret_file_never_reaches_the_scanner_or_the_commit() {
         "token = \"ghp_16C7e42F292c6912E7710c838347Ae178B4a\"\n",
     );
     write(&ws, "collections/api/base.toml", "name = \"base\"\n");
-    let out =
-        git_sync::sync(&ws, "seed", &Auth::None, false).expect("the ignored file is invisible");
+    let out = sync_selected(&ws, "seed", &SyncSelection::default())
+        .expect("the ignored file is invisible");
     assert!(matches!(out, SyncOutcome::Pushed { .. }), "{out:?}");
 
     let bob = box_.clone("bob");
@@ -457,8 +621,7 @@ fn pushing_a_branch_commits_it_and_never_touches_the_original() {
     );
     let PushedBranch {
         branch, sha, url, ..
-    } = git_sync::create_branch_and_push(&alice, "add-proposal", "propose", &Auth::None, false)
-        .expect("push branch");
+    } = push_branch(&alice, "add-proposal", "propose", false).expect("push branch");
     assert_eq!(branch, "add-proposal");
     assert_eq!(sha.len(), 40);
     assert_eq!(url, None, "a filesystem remote is not github");
@@ -477,8 +640,7 @@ fn pushing_a_branch_commits_it_and_never_touches_the_original() {
         .unwrap();
     assert_ne!(main.to_string(), sha, "main must not have moved");
 
-    let err = git_sync::create_branch_and_push(&alice, "add-proposal", "again", &Auth::None, false)
-        .unwrap_err();
+    let err = push_branch(&alice, "add-proposal", "again", false).unwrap_err();
     assert_eq!(err.code(), "E_CONFLICT");
 }
 
@@ -494,8 +656,7 @@ fn pushing_a_branch_is_gated_by_the_scanner_too() {
         "k = \"AKIAIOSFODNN7EXAMPLE\"\n",
     );
 
-    let err =
-        git_sync::create_branch_and_push(&alice, "leak", "nope", &Auth::None, false).unwrap_err();
+    let err = push_branch(&alice, "leak", "nope", false).unwrap_err();
     assert_eq!(err.code(), "E_SECRET");
     assert_eq!(
         status(&alice).branch.as_deref(),
@@ -503,8 +664,7 @@ fn pushing_a_branch_is_gated_by_the_scanner_too() {
         "a blocked push must not switch branches"
     );
 
-    let err =
-        git_sync::create_branch_and_push(&alice, "..bad..", "nope", &Auth::None, true).unwrap_err();
+    let err = push_branch(&alice, "..bad..", "nope", true).unwrap_err();
     assert_eq!(err.code(), "E_INVALID_NAME");
 }
 
@@ -545,24 +705,39 @@ fn sync_refuses_a_subdirectory_of_a_repository() {
     assert!(!out, "a subdirectory is not itself a workspace repository");
 }
 
-/// The honest edge of the "abort, never stay mid-rebase" contract: after a
-/// conflict the retry is a three-way merge, so a resolution that invents a THIRD
-/// version of the same lines still conflicts. Converging means agreeing with the
-/// remote on the conflicting lines first.
+/// Config conflicts stay pick-only: inventing a third version of the same lines
+/// still conflicts until the workspace agrees with one side.
 #[test]
 fn a_third_version_of_the_conflicting_lines_conflicts_again() {
     let box_ = sandbox();
     let alice = box_.workspace("alice");
-    write(&alice, "collections/api/shared.toml", "name = \"base\"\n");
+    write(&alice, "collections/api/base.toml", "name = \"api\"\n");
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"base\"\n",
+    );
     assert!(matches!(sync(&alice, "seed"), SyncOutcome::Pushed { .. }));
 
     let bob = box_.clone("bob");
-    write(&alice, "collections/api/shared.toml", "name = \"alice\"\n");
-    write(&bob, "collections/api/shared.toml", "name = \"bob\"\n");
+    write(
+        &alice,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"alice\"\n",
+    );
+    write(
+        &bob,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"bob\"\n",
+    );
     assert!(matches!(sync(&alice, "alice"), SyncOutcome::Pushed { .. }));
     assert!(matches!(sync(&bob, "bob"), SyncOutcome::Conflicted { .. }));
 
-    write(&bob, "collections/api/shared.toml", "name = \"neither\"\n");
+    write(
+        &bob,
+        "environments/local.toml",
+        "schema_version = 1\nname = \"Local\"\n\n[vars.x]\nvalue = \"neither\"\n",
+    );
     assert!(
         matches!(sync(&bob, "third way"), SyncOutcome::Conflicted { .. }),
         "a third version of the same lines cannot be merged for the user"
@@ -570,5 +745,202 @@ fn a_third_version_of_the_conflicting_lines_conflicts_again() {
     assert_eq!(
         git2::Repository::open(&bob).unwrap().state(),
         git2::RepositoryState::Clean
+    );
+}
+
+#[test]
+fn a_file_left_out_is_not_committed_and_stays_modified() {
+    let box_ = sandbox();
+    let ws = box_.workspace("picky");
+    write(&ws, "collections/api/base.toml", "name = \"base\"\n");
+    assert!(matches!(sync(&ws, "seed"), SyncOutcome::Pushed { .. }));
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+    write(&ws, "collections/api/two.toml", "name = \"two\"\n");
+
+    let selection = SyncSelection::except(&["collections/api/two.toml"]);
+    let plan = git_sync::plan_sync(&ws, &selection, None).expect("plan");
+    assert_eq!(plan.included, 1);
+    assert_eq!(plan.excluded, 1);
+    assert!(plan
+        .files
+        .iter()
+        .any(|f| f.path == "collections/api/two.toml" && !f.included));
+
+    match sync_selected(&ws, "only the first", &selection).expect("sync") {
+        SyncOutcome::Pushed { .. } => {}
+        other => panic!("expected Pushed, got {other:?}"),
+    }
+
+    let bob = box_.clone("bob");
+    assert_eq!(read(&bob, "collections/api/one.toml"), "name = \"one\"\n");
+    assert!(!bob.join("collections/api/two.toml").exists());
+    assert_eq!(
+        read(&ws, "collections/api/two.toml"),
+        "name = \"two\"\n",
+        "the file left out must survive untouched in the working tree"
+    );
+    assert!(status(&ws)
+        .dirty_files
+        .iter()
+        .any(|p| p == "collections/api/two.toml"));
+
+    assert!(
+        matches!(sync(&ws, "now the second"), SyncOutcome::Pushed { .. }),
+        "what was left out must still be syncable afterwards"
+    );
+    assert_eq!(
+        read(&box_.clone("carol"), "collections/api/two.toml"),
+        "name = \"two\"\n"
+    );
+}
+
+#[test]
+fn a_file_the_user_already_staged_does_not_ride_along() {
+    let box_ = sandbox();
+    let ws = box_.workspace("staged");
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+    assert!(matches!(sync(&ws, "seed"), SyncOutcome::Pushed { .. }));
+
+    write(&ws, "collections/api/sneaky.toml", "name = \"sneaky\"\n");
+    let repo = git2::Repository::open(&ws).unwrap();
+    let mut index = repo.index().unwrap();
+    index
+        .add_path(Path::new("collections/api/sneaky.toml"))
+        .unwrap();
+    index.write().unwrap();
+
+    write(&ws, "collections/api/wanted.toml", "name = \"wanted\"\n");
+    let selection = SyncSelection::only(&["collections/api/wanted.toml"]);
+    assert!(matches!(
+        sync_selected(&ws, "just the wanted one", &selection).expect("sync"),
+        SyncOutcome::Pushed { .. }
+    ));
+
+    let bob = box_.clone("bob");
+    assert!(bob.join("collections/api/wanted.toml").exists());
+    assert!(
+        !bob.join("collections/api/sneaky.toml").exists(),
+        "an unselected file must not be committed just because it was staged"
+    );
+    assert_eq!(
+        read(&ws, "collections/api/sneaky.toml"),
+        "name = \"sneaky\"\n"
+    );
+}
+
+#[test]
+fn the_plan_names_the_remote_and_the_branch_that_are_really_pushed() {
+    let box_ = sandbox();
+    let ws = box_.workspace("named");
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+
+    let plan = git_sync::plan_sync(&ws, &SyncSelection::default(), None).expect("plan");
+    assert_eq!(plan.remote.as_deref(), Some(box_.remote_url().as_str()));
+    assert_eq!(plan.branch.as_deref(), Some("main"));
+    assert_eq!(plan.action, git_sync::SyncAction::CommitAndPush);
+    assert!(!plan.identity.is_fallback);
+
+    assert!(matches!(sync(&ws, "seed"), SyncOutcome::Pushed { .. }));
+    let remote = git2::Repository::open_bare(box_.remote_url()).unwrap();
+    assert!(remote.find_reference("refs/heads/main").is_ok());
+}
+
+#[test]
+fn the_plan_says_which_branch_a_pull_request_would_create() {
+    let box_ = sandbox();
+    let ws = box_.workspace("proposer");
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+    assert!(matches!(sync(&ws, "seed"), SyncOutcome::Pushed { .. }));
+    write(&ws, "collections/api/two.toml", "name = \"two\"\n");
+
+    let plan = git_sync::plan_sync(&ws, &SyncSelection::default(), Some("proposal")).expect("plan");
+    assert_eq!(plan.action, git_sync::SyncAction::BranchAndPush);
+    assert_eq!(plan.target_branch.as_deref(), Some("proposal"));
+    assert_eq!(plan.branch.as_deref(), Some("main"));
+}
+
+#[test]
+fn a_run_without_its_own_plans_token_is_refused() {
+    let box_ = sandbox();
+    let ws = box_.workspace("stale");
+    write(&ws, "collections/api/base.toml", "name = \"base\"\n");
+    assert!(matches!(sync(&ws, "seed"), SyncOutcome::Pushed { .. }));
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+    let plan = git_sync::plan_sync(&ws, &SyncSelection::default(), None).expect("plan");
+
+    write(&ws, "collections/api/two.toml", "name = \"two\"\n");
+    let err = git_sync::run_sync(
+        &ws,
+        &SyncSelection::default(),
+        &plan.token,
+        "sneaking one in",
+        &Auth::None,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "E_CONFLICT");
+    assert!(err.to_string().contains("reviewed"), "{err}");
+    assert_eq!(
+        status(&ws).untracked,
+        2,
+        "a refused run must not commit anything"
+    );
+
+    let err = git_sync::run_sync(
+        &ws,
+        &SyncSelection::default(),
+        "not-a-token",
+        "no plan at all",
+        &Auth::None,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "E_CONFLICT");
+}
+
+#[test]
+fn the_scanner_looks_at_exactly_the_files_that_were_selected() {
+    let box_ = sandbox();
+    let ws = box_.workspace("selective");
+    write(&ws, "collections/api/clean.toml", "name = \"clean\"\n");
+    write(
+        &ws,
+        "environments/prod.toml",
+        "token = \"ghp_16C7e42F292c6912E7710c838347Ae178B4a\"\n",
+    );
+
+    let everything = git_sync::plan_sync(&ws, &SyncSelection::default(), None).expect("plan");
+    assert!(everything.blocked);
+    assert_eq!(everything.findings[0].rule, "github-token");
+    assert!(sync_selected(&ws, "oops", &SyncSelection::default()).is_err());
+
+    let selection = SyncSelection::only(&["collections/api/clean.toml"]);
+    let narrowed = git_sync::plan_sync(&ws, &selection, None).expect("plan");
+    assert!(
+        !narrowed.blocked,
+        "a credential in a file nobody selected cannot block the commit it is not in"
+    );
+    assert!(matches!(
+        sync_selected(&ws, "the clean one", &selection).expect("sync"),
+        SyncOutcome::Pushed { .. }
+    ));
+    assert!(!box_.clone("bob").join("environments/prod.toml").exists());
+}
+
+#[test]
+fn a_path_that_changed_nothing_fails_loud() {
+    let box_ = sandbox();
+    let ws = box_.workspace("typo");
+    write(&ws, "collections/api/one.toml", "name = \"one\"\n");
+    let err = git_sync::plan_sync(
+        &ws,
+        &SyncSelection::only(&["collections/api/two.toml"]),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "E_NOT_FOUND");
+    assert!(
+        err.to_string().contains("collections/api/two.toml"),
+        "{err}"
     );
 }

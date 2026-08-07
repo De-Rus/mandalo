@@ -1,0 +1,102 @@
+openapi: 3.1.0
+info:
+  title: Inventory
+  version: "2.0.0"
+servers:
+  - url: https://inventory.example.com/api
+security:
+  - BasicAuth: []
+tags:
+  - name: items
+paths:
+  /items/{sku}:
+    get:
+      operationId: readItem
+      tags: [items]
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          schema:
+            type: string
+            example: SKU-1001
+      responses:
+        "200":
+          description: One item
+    put:
+      operationId: replaceItem
+      tags: [items]
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          schema:
+            type: string
+            example: SKU-1001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Item"
+      responses:
+        "200":
+          description: Replaced
+  /items/search:
+    get:
+      operationId: searchItems
+      tags: [items]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            example: hammer
+        - name: warehouse
+          in: query
+          required: false
+          description: Restrict to one warehouse
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matches
+webhooks:
+  itemDepleted:
+    post:
+      operationId: itemDepleted
+      responses:
+        "200":
+          description: Acknowledged
+components:
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+  schemas:
+    Item:
+      type: object
+      required: [sku, name]
+      properties:
+        sku:
+          type: string
+          example: SKU-1001
+        name:
+          type: string
+        discontinuedAt:
+          type: [string, "null"]
+          format: date-time
+        kind:
+          const: physical
+        quantity:
+          type: integer
+        location:
+          $ref: "#/components/schemas/Location"
+    Location:
+      type: object
+      properties:
+        warehouse:
+          type: string
+        aisle:
+          type: integer

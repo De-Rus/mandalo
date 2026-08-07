@@ -42,7 +42,9 @@ async fn send_request_hits_local_server_and_applies_auth() {
     }))
     .unwrap();
 
-    let resp = mandalo_core::request::send_request(spec).await.unwrap();
+    let resp = mandalo_core::request::send_request(spec, &mandalo_core::AllowAll)
+        .await
+        .unwrap();
 
     assert_eq!(resp.status, 418);
     assert_eq!(resp.status_text, "I'm a teapot");
@@ -70,7 +72,9 @@ async fn status_text_keeps_the_wire_reason_phrase() {
     }))
     .unwrap();
 
-    let resp = mandalo_core::request::send_request(spec).await.unwrap();
+    let resp = mandalo_core::request::send_request(spec, &mandalo_core::AllowAll)
+        .await
+        .unwrap();
 
     assert_eq!(resp.status, 500);
     assert_eq!(resp.status_text, "Todo Explotado");
@@ -88,7 +92,9 @@ async fn non_utf8_body_is_flagged_binary_with_wire_size() {
     }))
     .unwrap();
 
-    let resp = mandalo_core::request::send_request(spec).await.unwrap();
+    let resp = mandalo_core::request::send_request(spec, &mandalo_core::AllowAll)
+        .await
+        .unwrap();
 
     assert_eq!(resp.status, 200);
     assert!(resp.binary);

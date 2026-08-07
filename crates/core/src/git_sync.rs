@@ -1,11 +1,10 @@
 use crate::error::{CoreError, CoreResult};
-use crate::{git, redact, scan};
+use crate::{git, redact, review, scan};
 use git2::{
-    AnnotatedCommit, BranchType, Cred, CredentialType, ErrorClass, ErrorCode, FetchOptions,
-    IndexAddOption, Oid, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions,
-    Signature,
+    AnnotatedCommit, BranchType, Cred, CredentialType, ErrorClass, ErrorCode, FetchOptions, Oid,
+    PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -37,6 +36,8 @@ pub struct SyncStatus {
     pub untracked: usize,
     pub ahead: usize,
     pub behind: usize,
+    /// Index conflicts plus paths where local and remote both edited — the bar
+    /// can open Resolve before Sync ever runs.
     pub conflicted: Vec<String>,
     pub dirty_files: Vec<String>,
     pub dirty_total: usize,
@@ -80,10 +81,71 @@ pub enum SyncOutcome {
     Pulled { sha: String, behind: usize },
     /// Local and remote edits touch the same lines. Neither the rebase nor the
     /// merge was left half-applied — the working tree is exactly as the user left
-    /// it. They edit the listed files to what they want and sync again.
-    Conflicted { files: Vec<String> },
+    /// it. `items` carries a visual preview of each side so the UI can pick
+    /// without reading conflict markers.
+    Conflicted {
+        files: Vec<String>,
+        #[serde(default)]
+        items: Vec<ConflictItem>,
+    },
     /// The remote or the repository state refused the operation.
     Rejected { reason: String },
+}
+
+/// One side of a conflict, with full text so the UI can render every difference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictSidePreview {
+    pub exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Entire file contents (UTF-8 lossy). Absent when the side is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl ConflictSidePreview {
+    fn missing() -> Self {
+        ConflictSidePreview {
+            exists: false,
+            kind: None,
+            method: None,
+            name: None,
+            detail: Some("Removed".to_string()),
+            text: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictItem {
+    pub path: String,
+    pub ours: ConflictSidePreview,
+    pub theirs: ConflictSidePreview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictChoice {
+    Ours,
+    Theirs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictDecision {
+    pub path: String,
+    pub choice: ConflictChoice,
+    /// When set, written as-is (request-by-request merges from the UI).
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,7 +158,7 @@ pub struct PushedBranch {
 }
 
 /// How to authenticate against a remote. A token is never read ambiently — the
-/// caller resolves it (keychain, CI variable) and hands it in.
+/// caller resolves it (the machine-local file, a CI variable) and hands it in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Auth {
     #[default]
@@ -113,8 +175,8 @@ impl Auth {
         Auth::Token(value.to_string())
     }
 
-    /// Picks the mechanism a URL implies: an explicit token wins, an `ssh://` or
-    /// `git@host:path` remote falls back to the system SSH agent.
+    /// Prefers a stored token (HTTPS) so Sync works on desktop and web. SSH
+    /// remotes are rewritten to HTTPS when talking to GitHub with a token.
     pub fn for_url(url: &str, token: Option<&str>) -> Self {
         match token.map(str::trim).filter(|t| !t.is_empty()) {
             Some(t) => Auth::token(t),
@@ -126,6 +188,30 @@ impl Auth {
 
 fn is_ssh_url(url: &str) -> bool {
     url.starts_with("ssh://") || (url.contains('@') && url.contains(':') && !url.contains("://"))
+}
+
+/// `https://github.com/owner/repo.git` for any GitHub remote shape (HTTPS or SSH).
+fn github_https_clone_url(url: &str) -> Option<String> {
+    let parts = parse_remote(url)?;
+    let host = parts.host.to_ascii_lowercase();
+    if host != "github.com" && host != "www.github.com" {
+        return None;
+    }
+    Some(format!(
+        "https://github.com/{}/{}.git",
+        parts.owner, parts.repo
+    ))
+}
+
+/// URL used on the wire for this auth. Token auth always speaks HTTPS to GitHub,
+/// even when `origin` is stored as `git@…`.
+fn transport_url(configured: &str, auth: &Auth) -> String {
+    if matches!(auth, Auth::Token(_)) {
+        if let Some(https) = github_https_clone_url(configured) {
+            return https;
+        }
+    }
+    configured.to_string()
 }
 
 fn map_git(context: &str, e: git2::Error) -> CoreError {
@@ -219,11 +305,11 @@ fn callbacks(auth: &Auth) -> RemoteCallbacks<'static> {
         }
         match &auth {
             Auth::Token(token) if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) => {
-                // GitHub's documented basic scheme: the token IS the username.
-                Cred::userpass_plaintext(token, "x-oauth-basic")
+                // Works for classic PATs, fine-grained tokens, and OAuth (gho_).
+                Cred::userpass_plaintext("x-access-token", token)
             }
             Auth::Token(_) => Err(git2::Error::from_str(
-                "the remote asked for a credential this token cannot satisfy",
+                "the remote asked for a credential this token cannot satisfy — use an https GitHub remote",
             )),
             Auth::SshAgent | Auth::None if allowed.contains(CredentialType::SSH_KEY) => {
                 Cred::ssh_key_from_agent(user)
@@ -232,7 +318,7 @@ fn callbacks(auth: &Auth) -> RemoteCallbacks<'static> {
                 "the remote asked for a password, but only the SSH agent was offered",
             )),
             Auth::None => Err(git2::Error::from_str(
-                "the remote requires authentication — pass a token or use an ssh remote",
+                "the remote requires authentication — sign in to GitHub or pass a token",
             )),
         }
     });
@@ -445,6 +531,19 @@ pub fn status(workspace: &Path) -> CoreResult<SyncStatus> {
                 .map_err(|e| map_git("cannot compare with the remote", e))?;
             out.ahead = ahead;
             out.behind = behind;
+            if behind > 0 {
+                let pending = pending_conflict_paths(
+                    &repo,
+                    workspace,
+                    local,
+                    remote,
+                    ahead,
+                    &out.dirty_files,
+                )?;
+                out.conflicted.extend(pending);
+                out.conflicted.sort();
+                out.conflicted.dedup();
+            }
         }
     }
     Ok(out)
@@ -500,38 +599,36 @@ pub fn clone(url: &str, dest: &Path, auth: &Auth) -> CoreResult<()> {
             )));
         }
     }
+    let url = transport_url(url, auth);
     let mut fetch = FetchOptions::new();
     fetch.remote_callbacks(callbacks(auth));
     git2::build::RepoBuilder::new()
         .fetch_options(fetch)
-        .clone(url, dest)
-        .map_err(|e| map_git(&format!("cannot clone {}", sanitize_url(url)), e))?;
+        .clone(&url, dest)
+        .map_err(|e| map_git(&format!("cannot clone {}", sanitize_url(&url)), e))?;
     Ok(())
 }
 
-/// The files a commit would carry, as absolute paths inside the workspace.
-fn pending_files(repo: &Repository, workspace: &Path) -> CoreResult<Vec<PathBuf>> {
+/// Every path git considers changed, with the one word that describes it.
+fn changed_files(repo: &Repository) -> CoreResult<Vec<(String, FileChange)>> {
     let statuses = repo
         .statuses(Some(&mut status_options()))
         .map_err(|e| map_git("cannot read the workspace status", e))?;
-    let mut files = Vec::new();
+    let mut files: Vec<(String, FileChange)> = Vec::new();
     for entry in statuses.iter() {
         let Ok(path) = entry.path() else { continue };
-        let full = workspace.join(path);
-        if full.is_file() {
-            files.push(full);
-        }
+        files.push((path.to_string(), FileChange::of(entry.status())));
     }
-    files.sort();
-    files.dedup();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.dedup_by(|a, b| a.0 == b.0);
     Ok(files)
 }
 
-fn guard_secrets(repo: &Repository, workspace: &Path, force: bool) -> CoreResult<()> {
+fn guard_secrets(workspace: &Path, files: &[String], force: bool) -> CoreResult<()> {
     if force {
         return Ok(());
     }
-    let findings = scan::scan_files(&pending_files(repo, workspace)?)?;
+    let findings = scan_selected(workspace, files)?;
     if findings.is_empty() {
         return Ok(());
     }
@@ -555,30 +652,72 @@ fn guard_secrets(repo: &Repository, workspace: &Path, force: bool) -> CoreResult
     )))
 }
 
-fn stage_all(repo: &Repository) -> CoreResult<()> {
+fn scan_selected(workspace: &Path, files: &[String]) -> CoreResult<Vec<scan::Finding>> {
+    let present: Vec<PathBuf> = files
+        .iter()
+        .map(|p| workspace.join(p))
+        .filter(|p| p.is_file())
+        .collect();
+    scan::scan_files(&present)
+}
+
+/// Stages exactly the chosen paths. The index is first put back in step with
+/// HEAD so that a file the user had already `git add`ed but left out of this
+/// commit cannot ride along; its edit stays in the working tree.
+fn stage_selected(repo: &Repository, workspace: &Path, files: &[String]) -> CoreResult<()> {
+    if let Ok(head) = repo.head().and_then(|h| h.peel(git2::ObjectType::Commit)) {
+        repo.reset_default(Some(&head), ["*"].iter())
+            .map_err(|e| map_git("cannot reset the index", e))?;
+    }
     let mut index = repo
         .index()
         .map_err(|e| map_git("cannot open the index", e))?;
     // Pathspecs are relative to the work tree, so nothing outside it can be staged.
-    index
-        .update_all(["*"].iter(), None)
-        .map_err(|e| map_git("cannot stage changes", e))?;
-    index
-        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
-        .map_err(|e| map_git("cannot stage changes", e))?;
+    for file in files {
+        let rel = Path::new(file);
+        if workspace.join(rel).is_file() {
+            index
+                .add_path(rel)
+                .map_err(|e| map_git("cannot stage changes", e))?;
+        } else {
+            index
+                .remove_path(rel)
+                .map_err(|e| map_git("cannot stage a deletion", e))?;
+        }
+    }
+    unstage_local_values(&mut index)?;
     index
         .write()
         .map_err(|e| map_git("cannot write the index", e))?;
     Ok(())
 }
 
-fn commit_all(
+/// `.gitignore` already keeps these out, but an ignore rule can be deleted and
+/// `git add -f` bypasses it. This is the one file whose accidental commit is
+/// catastrophic, so the staging path drops it whatever the rules say.
+fn unstage_local_values(index: &mut git2::Index) -> CoreResult<()> {
+    let doomed: Vec<PathBuf> = index
+        .iter()
+        .map(|entry| PathBuf::from(String::from_utf8_lossy(&entry.path).into_owned()))
+        .filter(|path| scan::is_local_values_file(path))
+        .collect();
+    for path in doomed {
+        index
+            .remove_path(&path)
+            .map_err(|e| map_git("cannot keep the local values file out of the commit", e))?;
+    }
+    Ok(())
+}
+
+fn commit_selected(
     repo: &Repository,
+    workspace: &Path,
+    files: &[String],
     message: &str,
     id: &Identity,
     head_info: &Head,
 ) -> CoreResult<Option<Oid>> {
-    stage_all(repo)?;
+    stage_selected(repo, workspace, files)?;
     let mut index = repo
         .index()
         .map_err(|e| map_git("cannot open the index", e))?;
@@ -618,10 +757,31 @@ fn commit_all(
     Ok(Some(oid))
 }
 
-fn fetch(repo: &Repository, branch: &str, auth: &Auth) -> CoreResult<()> {
-    let mut remote = repo
+fn configured_remote_url(repo: &Repository) -> CoreResult<String> {
+    let remote = repo
         .find_remote(REMOTE)
         .map_err(|e| map_git("cannot read the remote", e))?;
+    Ok(remote.url().unwrap_or_default().to_string())
+}
+
+/// Opens `origin`, or a detached HTTPS remote when auth is a token against GitHub SSH.
+fn open_transport_remote<'a>(
+    repo: &'a Repository,
+    auth: &Auth,
+) -> CoreResult<git2::Remote<'a>> {
+    let configured = configured_remote_url(repo)?;
+    let url = transport_url(&configured, auth);
+    if url != configured {
+        return repo
+            .remote_anonymous(&url)
+            .map_err(|e| map_git("cannot open the remote over https", e));
+    }
+    repo.find_remote(REMOTE)
+        .map_err(|e| map_git("cannot read the remote", e))
+}
+
+fn fetch(repo: &Repository, branch: &str, auth: &Auth) -> CoreResult<()> {
+    let mut remote = open_transport_remote(repo, auth)?;
     let mut options = FetchOptions::new();
     options.remote_callbacks(callbacks(auth));
     let refspec = format!("+refs/heads/{branch}:refs/remotes/{REMOTE}/{branch}");
@@ -633,26 +793,45 @@ fn fetch(repo: &Repository, branch: &str, auth: &Auth) -> CoreResult<()> {
     }
 }
 
-/// Brings the working tree and the index back in step with HEAD. Everything the
-/// user had is already committed by the time this runs, so there is nothing to
-/// lose; untracked and ignored files are left alone.
-fn checkout_head(repo: &Repository) -> CoreResult<()> {
+/// Brings the working tree and the index back in step with HEAD. Untracked and
+/// ignored files are left alone. `keep_edits` is on whenever the user left files
+/// out of this commit: their edits are NOT in any commit, so a forced checkout
+/// would destroy them — a safe checkout stops instead.
+fn checkout_head(repo: &Repository, keep_edits: bool) -> CoreResult<()> {
+    let workdir = repo.workdir().ok_or_else(|| {
+        CoreError::Io("the repository has no working tree".to_string())
+    })?;
+    let preserved: Vec<(PathBuf, Vec<u8>)> = if keep_edits {
+        changed_files(repo)?
+            .into_iter()
+            .filter_map(|(path, _)| {
+                let abs = workdir.join(&path);
+                std::fs::read(&abs).ok().map(|bytes| (abs, bytes))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut checkout = git2::build::CheckoutBuilder::new();
-    checkout
-        .force()
-        .remove_untracked(false)
-        .remove_ignored(false);
+    checkout.force().remove_untracked(false).remove_ignored(false);
     repo.checkout_head(Some(&mut checkout))
-        .map_err(|e| map_git("cannot update the working tree", e))
+        .map_err(|e| map_git("cannot update the working tree", e))?;
+    for (path, bytes) in preserved {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, bytes).map_err(|e| CoreError::io(path.display(), e))?;
+    }
+    Ok(())
 }
 
-fn fast_forward(repo: &Repository, branch: &str, target: Oid) -> CoreResult<()> {
+fn fast_forward(repo: &Repository, branch: &str, target: Oid, keep_edits: bool) -> CoreResult<()> {
     let name = format!("refs/heads/{branch}");
     repo.reference(&name, target, true, "mandalo sync: fast-forward")
         .map_err(|e| map_git("cannot move the branch", e))?;
     repo.set_head(&name)
         .map_err(|e| map_git("cannot move HEAD", e))?;
-    checkout_head(repo)
+    checkout_head(repo, keep_edits)
 }
 
 fn conflict_paths(repo: &Repository) -> Vec<String> {
@@ -676,9 +855,475 @@ fn conflict_paths(repo: &Repository) -> Vec<String> {
     out
 }
 
+fn paths_changed_between(repo: &Repository, from: Oid, to: Oid) -> CoreResult<Vec<String>> {
+    let from_tree = repo
+        .find_commit(from)
+        .map_err(|e| map_git("cannot read commit", e))?
+        .tree()
+        .map_err(|e| map_git("cannot read tree", e))?;
+    let to_tree = repo
+        .find_commit(to)
+        .map_err(|e| map_git("cannot read commit", e))?
+        .tree()
+        .map_err(|e| map_git("cannot read tree", e))?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)
+        .map_err(|e| map_git("cannot diff commits", e))?;
+    let mut paths = Vec::new();
+    for delta in diff.deltas() {
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .and_then(|p| p.to_str())
+            .unwrap_or_default();
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// Paths both sides touched with different contents. Mandalo diffs these itself
+/// (request-by-request in the UI) — not a git merge/pull conflict.
+fn pending_conflict_paths(
+    repo: &Repository,
+    workspace: &Path,
+    local: Oid,
+    remote: Oid,
+    ahead: usize,
+    dirty: &[String],
+) -> CoreResult<Vec<String>> {
+    let base = repo
+        .merge_base(local, remote)
+        .map_err(|e| map_git("cannot find merge base with the remote", e))?;
+    let remote_changed = paths_changed_between(repo, base, remote)?;
+    if remote_changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut local_touched: std::collections::BTreeSet<String> =
+        dirty.iter().cloned().collect();
+    if ahead > 0 {
+        for path in paths_changed_between(repo, base, local)? {
+            local_touched.insert(path);
+        }
+    }
+    let dirty_set: std::collections::BTreeSet<&str> =
+        dirty.iter().map(String::as_str).collect();
+    let marked = read_resolved(repo);
+    Ok(remote_changed
+        .into_iter()
+        .filter(|path| {
+            if !local_touched.contains(path) || marked.contains(path) {
+                return false;
+            }
+            let committed = blob_at(repo, local, path);
+            let disk = {
+                let p = workspace.join(path);
+                if p.is_file() {
+                    std::fs::read(&p).ok()
+                } else if dirty_set.contains(path.as_str()) {
+                    None
+                } else {
+                    committed.clone()
+                }
+            };
+            let theirs = blob_at(repo, remote, path);
+            disk != theirs
+        })
+        .collect())
+}
+
+fn blob_at(repo: &Repository, commit: Oid, path: &str) -> Option<Vec<u8>> {
+    let commit = repo.find_commit(commit).ok()?;
+    let tree = commit.tree().ok()?;
+    let entry = tree.get_path(Path::new(path)).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    Some(blob.content().to_vec())
+}
+
+fn preview_bytes(path: &str, bytes: Option<&[u8]>) -> ConflictSidePreview {
+    let Some(bytes) = bytes else {
+        return ConflictSidePreview::missing();
+    };
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    if path.ends_with(".http") || path.ends_with(".rest") {
+        let mut name: Option<String> = None;
+        let mut method: Option<String> = None;
+        let mut url: Option<String> = None;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("###") {
+                if name.is_none() {
+                    let n = rest.trim();
+                    if !n.is_empty() {
+                        name = Some(n.to_string());
+                    }
+                }
+                continue;
+            }
+            let mut parts = trimmed.splitn(2, char::is_whitespace);
+            if let (Some(m), Some(u)) = (parts.next(), parts.next()) {
+                let m = m.to_ascii_uppercase();
+                if matches!(
+                    m.as_str(),
+                    "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+                ) {
+                    method = Some(m);
+                    url = Some(u.trim().to_string());
+                    break;
+                }
+            }
+        }
+        if method.is_some() || name.is_some() {
+            return ConflictSidePreview {
+                exists: true,
+                kind: Some("http".into()),
+                method,
+                name: name.or_else(|| Some(stem.to_string())),
+                detail: url,
+                text: Some(text),
+            };
+        }
+    }
+    if path.starts_with("environments/") && path.ends_with(".toml") {
+        let name = stem.to_string();
+        let vars = text.matches('[').count().saturating_sub(1);
+        return ConflictSidePreview {
+            exists: true,
+            kind: Some("environment".into()),
+            method: None,
+            name: Some(name),
+            detail: Some(if vars == 0 {
+                "environment".into()
+            } else {
+                format!("{vars} entries")
+            }),
+            text: Some(text),
+        };
+    }
+    if path.starts_with("postman/") && path.ends_with(".json") {
+        return ConflictSidePreview {
+            exists: true,
+            kind: Some("postman".into()),
+            method: None,
+            name: Some(stem.to_string()),
+            detail: Some("Postman mirror".into()),
+            text: Some(text),
+        };
+    }
+    ConflictSidePreview {
+        exists: true,
+        kind: Some("file".into()),
+        method: None,
+        name: Some(
+            Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path)
+                .to_string(),
+        ),
+        detail: None,
+        text: Some(text),
+    }
+}
+
+fn conflict_items(
+    repo: &Repository,
+    workspace: &Path,
+    local: Oid,
+    remote: Oid,
+    files: &[String],
+) -> CoreResult<Vec<ConflictItem>> {
+    let mut items = Vec::with_capacity(files.len());
+    for path in files {
+        let ours_disk = {
+            let p = workspace.join(path);
+            if p.is_file() {
+                std::fs::read(&p).ok()
+            } else {
+                None
+            }
+        };
+        let ours = ours_disk.or_else(|| blob_at(repo, local, path));
+        let theirs = blob_at(repo, remote, path);
+        items.push(ConflictItem {
+            path: path.clone(),
+            ours: preview_bytes(path, ours.as_deref()),
+            theirs: preview_bytes(path, theirs.as_deref()),
+        });
+    }
+    Ok(items)
+}
+
+/// Visual previews for conflicted paths: HEAD/working tree vs the upstream tip.
+pub fn conflict_previews(workspace: &Path, files: &[String]) -> CoreResult<Vec<ConflictItem>> {
+    let repo = open_required(workspace)?;
+    let head = head(&repo)?;
+    let Some(local) = head.oid else {
+        return Err(CoreError::Conflict(
+            "the repository has no commits yet".to_string(),
+        ));
+    };
+    let branch = head.branch.as_deref().unwrap_or("main");
+    let Some(remote) = upstream_oid(&repo, branch) else {
+        return Err(CoreError::Conflict(
+            "no upstream to compare against — fetch first".to_string(),
+        ));
+    };
+    conflict_items(&repo, workspace, local, remote, files)
+}
+
+/// Write the Mandalo-resolved file bodies into the working tree. This is not a
+/// git merge — the UI already diffed requests/config; Sync picks the result up
+/// from disk afterwards.
+pub fn apply_conflict_choices(
+    workspace: &Path,
+    decisions: &[ConflictDecision],
+) -> CoreResult<()> {
+    let repo = open_required(workspace)?;
+    let head_info = head(&repo)?;
+    let Some(local) = head_info.oid else {
+        return Err(CoreError::Conflict(
+            "the repository has no commits yet".to_string(),
+        ));
+    };
+    let branch = head_info.branch.as_deref().unwrap_or("main");
+    let Some(remote) = upstream_oid(&repo, branch) else {
+        return Err(CoreError::Conflict(
+            "no upstream to compare against — fetch first".to_string(),
+        ));
+    };
+    let mut marked = Vec::new();
+    for decision in decisions {
+        let path = decision.path.trim_matches('/');
+        if path.is_empty() || path.contains("..") {
+            return Err(CoreError::PathEscape(format!(
+                "refusing conflict path {}",
+                decision.path
+            )));
+        }
+        let bytes = if let Some(content) = &decision.content {
+            Some(content.as_bytes().to_vec())
+        } else {
+            match decision.choice {
+                ConflictChoice::Ours => {
+                    let disk = workspace.join(path);
+                    if disk.is_file() {
+                        Some(std::fs::read(&disk).map_err(|e| CoreError::io(disk.display(), e))?)
+                    } else {
+                        blob_at(&repo, local, path)
+                    }
+                }
+                ConflictChoice::Theirs => blob_at(&repo, remote, path),
+            }
+        };
+        let dest = workspace.join(path);
+        match bytes {
+            Some(content) => {
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| CoreError::io(parent.display(), e))?;
+                }
+                std::fs::write(&dest, content).map_err(|e| CoreError::io(dest.display(), e))?;
+            }
+            None => {
+                if dest.exists() {
+                    std::fs::remove_file(&dest).map_err(|e| CoreError::io(dest.display(), e))?;
+                }
+            }
+        }
+        marked.push(path.to_string());
+    }
+    mark_resolved(&repo, &marked)?;
+    Ok(())
+}
+
+fn resolved_marker(repo: &Repository) -> PathBuf {
+    repo.path().join("mandalo-resolved")
+}
+
+fn mark_resolved(repo: &Repository, paths: &[String]) -> CoreResult<()> {
+    let path = resolved_marker(repo);
+    let mut set: std::collections::BTreeSet<String> = read_resolved(repo);
+    set.extend(paths.iter().cloned());
+    let body = set.into_iter().collect::<Vec<_>>().join("\n");
+    std::fs::write(&path, body).map_err(|e| CoreError::io(path.display(), e))
+}
+
+fn read_resolved(repo: &Repository) -> std::collections::BTreeSet<String> {
+    std::fs::read_to_string(resolved_marker(repo))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn clear_resolved(repo: &Repository) {
+    let _ = std::fs::remove_file(resolved_marker(repo));
+}
+
+/// When commits have diverged, build a merge commit that prefers Mandalo's
+/// already-written working-tree resolutions for each conflicted path.
+fn finish_merge_with_workdir(
+    repo: &Repository,
+    workspace: &Path,
+    local: Oid,
+    upstream: Oid,
+    branch: &str,
+    id: &Identity,
+    paths: &[String],
+) -> CoreResult<()> {
+    let mut resolved = std::collections::BTreeMap::new();
+    for path in paths {
+        let disk = workspace.join(path);
+        if disk.is_file() {
+            resolved.insert(
+                path.clone(),
+                std::fs::read(&disk).map_err(|e| CoreError::io(disk.display(), e))?,
+            );
+        } else if !disk.exists() {
+            resolved.insert(path.clone(), Vec::new());
+        }
+    }
+    finish_merge_with_resolutions(repo, local, upstream, branch, id, &resolved)?;
+    clear_resolved(repo);
+    Ok(())
+}
+
+/// Completes a three-way merge using the paths the user already picked in the UI.
+fn finish_merge_with_resolutions(
+    repo: &Repository,
+    local: Oid,
+    upstream: Oid,
+    branch: &str,
+    id: &Identity,
+    resolved: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> CoreResult<()> {
+    let ours = repo
+        .find_commit(local)
+        .map_err(|e| map_git("cannot read the local commit", e))?;
+    let theirs = repo
+        .find_commit(upstream)
+        .map_err(|e| map_git("cannot read the remote commit", e))?;
+    let mut index = repo
+        .merge_commits(&ours, &theirs, None)
+        .map_err(|e| map_git("cannot merge the remote changes", e))?;
+
+    if index.has_conflicts() {
+        let mut files: Vec<String> = index
+            .conflicts()
+            .map(|c| {
+                c.filter_map(|entry| entry.ok())
+                    .filter_map(|c| {
+                        c.our
+                            .or(c.their)
+                            .or(c.ancestor)
+                            .map(|e| String::from_utf8_lossy(&e.path).to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files.dedup();
+        for path in &files {
+            let bytes = resolved.get(path).cloned().or_else(|| {
+                // Prefer whatever is already on disk from the dialog.
+                let disk = repo
+                    .workdir()
+                    .map(|w| w.join(path))
+                    .filter(|p| p.is_file())
+                    .and_then(|p| std::fs::read(p).ok());
+                disk.or_else(|| blob_at(repo, local, path))
+            });
+            put_blob_in_index(repo, &mut index, path, bytes.as_deref())?;
+        }
+    }
+
+    for (path, content) in resolved {
+        if content.is_empty() {
+            let _ = index.remove_path(Path::new(path));
+            put_blob_in_index(repo, &mut index, path, None)?;
+        } else {
+            put_blob_in_index(repo, &mut index, path, Some(content))?;
+        }
+    }
+
+    let tree_oid = index
+        .write_tree_to(repo)
+        .map_err(|e| map_git("cannot write the merged tree", e))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| map_git("cannot read the merged tree", e))?;
+    let sig = signature(id)?;
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        &format!("Merge remote changes into {branch}"),
+        &tree,
+        &[&ours, &theirs],
+    )
+    .map_err(|e| map_git("cannot record the merge", e))?;
+    checkout_head(repo, false)?;
+    Ok(())
+}
+
+fn put_blob_in_index(
+    repo: &Repository,
+    index: &mut git2::Index,
+    path: &str,
+    bytes: Option<&[u8]>,
+) -> CoreResult<()> {
+    let _ = index.conflict_remove(Path::new(path));
+    match bytes {
+        None | Some([]) => {
+            let _ = index.remove_path(Path::new(path));
+        }
+        Some(content) => {
+            // merge_commits returns an in-memory index with no repo backing, so
+            // add_frombuffer fails. Store the blob in the ODB, then add the entry.
+            let oid = repo
+                .blob(content)
+                .map_err(|e| map_git("cannot store resolved content", e))?;
+            let entry = git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: oid,
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            };
+            index
+                .add(&entry)
+                .map_err(|e| map_git("cannot stage resolved content", e))?;
+        }
+    }
+    Ok(())
+}
+
 /// Replays local commits on top of the remote. On conflict the rebase is aborted
 /// so the working tree stays usable — we never resolve anyone's edits for them.
-fn rebase_onto(repo: &Repository, upstream: Oid, id: &Identity) -> CoreResult<Option<Vec<String>>> {
+fn rebase_onto(
+    repo: &Repository,
+    upstream: Oid,
+    id: &Identity,
+    keep_edits: bool,
+) -> CoreResult<Option<Vec<String>>> {
     let annotated: AnnotatedCommit = repo
         .find_annotated_commit(upstream)
         .map_err(|e| map_git("cannot read the remote commit", e))?;
@@ -722,7 +1367,7 @@ fn rebase_onto(repo: &Repository, upstream: Oid, id: &Identity) -> CoreResult<Op
     rebase
         .finish(None)
         .map_err(|e| map_git("cannot finish the rebase", e))?;
-    checkout_head(repo)?;
+    checkout_head(repo, keep_edits)?;
     Ok(None)
 }
 
@@ -730,12 +1375,16 @@ fn rebase_onto(repo: &Repository, upstream: Oid, id: &Identity) -> CoreResult<Op
 /// commits, so it keeps conflicting even once they have fixed the file; a merge
 /// looks at what the two sides *are* now, so a resolved workspace converges.
 /// Built entirely in memory: on conflict nothing on disk has moved.
+///
+/// Any path git cannot merge (requests, config, …) is returned for a full-text
+/// visual pick. Clean merges (different files / different lines) never land here.
 fn merge_onto(
     repo: &Repository,
     local: Oid,
     upstream: Oid,
     branch: &str,
     id: &Identity,
+    keep_edits: bool,
 ) -> CoreResult<Option<Vec<String>>> {
     let ours = repo
         .find_commit(local)
@@ -784,14 +1433,12 @@ fn merge_onto(
         &[&ours, &theirs],
     )
     .map_err(|e| map_git("cannot record the merge", e))?;
-    checkout_head(repo)?;
+    checkout_head(repo, keep_edits)?;
     Ok(None)
 }
 
 fn push(repo: &Repository, branch: &str, auth: &Auth) -> CoreResult<Option<String>> {
-    let mut remote = repo
-        .find_remote(REMOTE)
-        .map_err(|e| map_git("cannot read the remote", e))?;
+    let mut remote = open_transport_remote(repo, auth)?;
     let rejected: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let sink = Rc::clone(&rejected);
     let mut cb = callbacks(auth);
@@ -823,9 +1470,292 @@ fn set_upstream(repo: &Repository, branch: &str) {
     }
 }
 
-/// Stage everything, commit, rebase on top of the remote, push. `force` skips the
-/// credential scanner and nothing else — it never forces a push.
-pub fn sync(workspace: &Path, message: &str, auth: &Auth, force: bool) -> CoreResult<SyncOutcome> {
+/// Which of the changed files this commit carries. `only: None` means every one
+/// of them; `except` takes files back out. What is left out is not lost — it
+/// stays modified in the working tree, ready for the next sync.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SyncSelection {
+    pub only: Option<Vec<String>>,
+    pub except: Vec<String>,
+}
+
+fn path_matches(entry: &str, path: &str) -> bool {
+    let entry = entry.trim_matches('/');
+    !entry.is_empty()
+        && (path == entry || (path.starts_with(entry) && path[entry.len()..].starts_with('/')))
+}
+
+impl SyncSelection {
+    pub fn only(paths: &[&str]) -> Self {
+        SyncSelection {
+            only: Some(paths.iter().map(|p| p.to_string()).collect()),
+            except: Vec::new(),
+        }
+    }
+
+    pub fn except(paths: &[&str]) -> Self {
+        SyncSelection {
+            only: None,
+            except: paths.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+
+    fn covers(&self, path: &str) -> bool {
+        let wanted = match &self.only {
+            None => true,
+            Some(list) => list.iter().any(|entry| path_matches(entry, path)),
+        };
+        wanted && !self.except.iter().any(|entry| path_matches(entry, path))
+    }
+
+    fn unknown(&self, changed: &[(String, FileChange)]) -> Vec<String> {
+        let known = |entry: &String| changed.iter().any(|(path, _)| path_matches(entry, path));
+        self.only
+            .iter()
+            .flatten()
+            .chain(self.except.iter())
+            .filter(|entry| !known(entry))
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileChange {
+    New,
+    Modified,
+    Deleted,
+    Renamed,
+    TypeChange,
+    Conflicted,
+}
+
+impl FileChange {
+    fn of(bits: git2::Status) -> Self {
+        use git2::Status as S;
+        if bits.is_conflicted() {
+            FileChange::Conflicted
+        } else if bits.intersects(S::WT_DELETED | S::INDEX_DELETED) {
+            FileChange::Deleted
+        } else if bits.intersects(S::WT_NEW | S::INDEX_NEW) {
+            FileChange::New
+        } else if bits.intersects(S::WT_RENAMED | S::INDEX_RENAMED) {
+            FileChange::Renamed
+        } else if bits.intersects(S::WT_TYPECHANGE | S::INDEX_TYPECHANGE) {
+            FileChange::TypeChange
+        } else {
+            FileChange::Modified
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedFile {
+    pub path: String,
+    pub change: FileChange,
+    pub included: bool,
+}
+
+/// What the sync would actually do. `CommitAndPush` is the only one that puts
+/// anything on a remote; the UI says which one before the user agrees to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncAction {
+    Nothing,
+    Commit,
+    Push,
+    CommitAndPush,
+    Pull,
+    BranchAndPush,
+}
+
+/// What a sync is about to send, and where. `ahead`/`behind` are as of the last
+/// fetch — planning is deliberately offline, so a preview never touches the
+/// network on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPlan {
+    pub action: SyncAction,
+    pub files: Vec<PlannedFile>,
+    pub included: usize,
+    pub excluded: usize,
+    pub remote: Option<String>,
+    pub branch: Option<String>,
+    pub target_branch: Option<String>,
+    pub ahead: usize,
+    pub behind: usize,
+    pub conflicted: Vec<String>,
+    /// Card previews for `conflicted` — empty when there is nothing to pick.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflict_items: Vec<ConflictItem>,
+    pub findings: Vec<scan::Finding>,
+    pub blocked: bool,
+    pub identity: Identity,
+    pub token: String,
+    /// Set when `[share] format = "postman"` so the UI can say the mirror was refreshed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_dir: Option<String>,
+}
+
+impl SyncPlan {
+    fn selected(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .filter(|f| f.included)
+            .map(|f| f.path.clone())
+            .collect()
+    }
+}
+
+fn blob_id(workspace: &Path, path: &str) -> String {
+    git2::Oid::hash_file(git2::ObjectType::Blob, workspace.join(path))
+        .map(|oid| oid.to_string())
+        .unwrap_or_else(|_| "gone".to_string())
+}
+
+/// Preview what a sync would do. When `[share] format = "postman"`, regenerates
+/// the Postman mirror first so those files appear in the plan.
+pub fn plan_sync(
+    workspace: &Path,
+    selection: &SyncSelection,
+    branch_name: Option<&str>,
+) -> CoreResult<SyncPlan> {
+    let share = crate::share::materialize(workspace)?;
+    let repo = open_required(workspace)?;
+    let id = identity(&repo);
+    let head_info = head(&repo)?;
+    let remote = remote_url(&repo);
+    let changed = changed_files(&repo)?;
+
+    let missing = selection.unknown(&changed);
+    if !missing.is_empty() {
+        return Err(CoreError::NotFound(format!(
+            "cannot sync: nothing changed at {} — check the path",
+            missing.join(", ")
+        )));
+    }
+
+    let files: Vec<PlannedFile> = changed
+        .into_iter()
+        .map(|(path, change)| PlannedFile {
+            included: selection.covers(&path),
+            path,
+            change,
+        })
+        .collect();
+    let included = files.iter().filter(|f| f.included).count();
+    let excluded = files.len() - included;
+    let selected: Vec<String> = files
+        .iter()
+        .filter(|f| f.included)
+        .map(|f| f.path.clone())
+        .collect();
+
+    let (mut ahead, mut behind) = (0, 0);
+    let mut conflicted = conflict_paths(&repo);
+    if let (Some(branch), Some(local)) = (head_info.branch.as_deref(), head_info.oid) {
+        if let Some(upstream) = upstream_oid(&repo, branch) {
+            let counts = repo
+                .graph_ahead_behind(local, upstream)
+                .map_err(|e| map_git("cannot compare with the remote", e))?;
+            ahead = counts.0;
+            behind = counts.1;
+            if behind > 0 {
+                let dirty: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+                let pending =
+                    pending_conflict_paths(&repo, workspace, local, upstream, ahead, &dirty)?;
+                conflicted.extend(pending);
+                conflicted.sort();
+                conflicted.dedup();
+            }
+        }
+    }
+
+    let has_remote = repo.find_remote(REMOTE).is_ok();
+    let action = match branch_name {
+        Some(_) => SyncAction::BranchAndPush,
+        None if included > 0 && has_remote => SyncAction::CommitAndPush,
+        None if included > 0 => SyncAction::Commit,
+        None if ahead > 0 && has_remote => SyncAction::Push,
+        None if behind > 0 => SyncAction::Pull,
+        None => SyncAction::Nothing,
+    };
+
+    let findings = scan_selected(workspace, &selected)?;
+    let mut parts = vec![
+        format!("{action:?}"),
+        branch_name.unwrap_or_default().to_string(),
+        head_info.branch.clone().unwrap_or_default(),
+        remote.clone().unwrap_or_default(),
+    ];
+    parts.extend(
+        selected
+            .iter()
+            .map(|path| format!("{path}\u{1f}{}", blob_id(workspace, path))),
+    );
+    let token = review::token("sync", &parts)?;
+
+    let conflict_items = if conflicted.is_empty() {
+        Vec::new()
+    } else if let (Some(local), Some(branch)) = (head_info.oid, head_info.branch.as_deref()) {
+        if let Some(remote_oid) = upstream_oid(&repo, branch) {
+            conflict_items(&repo, workspace, local, remote_oid, &conflicted)?
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(SyncPlan {
+        action,
+        files,
+        included,
+        excluded,
+        remote,
+        branch: head_info.branch,
+        target_branch: branch_name.map(str::to_string),
+        ahead,
+        behind,
+        conflicted,
+        conflict_items,
+        blocked: !findings.is_empty(),
+        findings,
+        identity: id,
+        token,
+        share_dir: if share.dir.is_empty() {
+            None
+        } else {
+            Some(share.dir)
+        },
+    })
+}
+
+fn check_token(plan: &SyncPlan, token: &str) -> CoreResult<()> {
+    if plan.token != token {
+        return Err(review::stale("sync"));
+    }
+    Ok(())
+}
+
+/// Pull remote first (when behind), then commit local work, then push.
+/// `force` skips the credential scanner and nothing else — it never forces a push.
+pub fn run_sync(
+    workspace: &Path,
+    selection: &SyncSelection,
+    token: &str,
+    message: &str,
+    auth: &Auth,
+    force: bool,
+) -> CoreResult<SyncOutcome> {
+    let plan = plan_sync(workspace, selection, None)?;
+    check_token(&plan, token)?;
+    let files = plan.selected();
+    let keep_edits = plan.excluded > 0;
+
     let repo = open_required(workspace)?;
     let id = identity(&repo);
     let head_info = head(&repo)?;
@@ -840,16 +1770,11 @@ pub fn sync(workspace: &Path, message: &str, auth: &Auth, force: bool) -> CoreRe
         });
     };
     if !repo.index().map(|i| i.has_conflicts()).unwrap_or(false) {
-        guard_secrets(&repo, workspace, force)?;
+        guard_secrets(workspace, &files, force)?;
     }
 
-    let committed = commit_all(&repo, message, &id, &head_info)?;
-    let local = match committed {
-        Some(oid) => Some(oid),
-        None => head_info.oid,
-    };
-
     if repo.find_remote(REMOTE).is_err() {
+        let committed = commit_selected(&repo, workspace, &files, message, &id, &head_info)?;
         return Ok(match committed {
             Some(oid) => SyncOutcome::Committed {
                 sha: oid.to_string(),
@@ -858,55 +1783,121 @@ pub fn sync(workspace: &Path, message: &str, auth: &Auth, force: bool) -> CoreRe
             None => SyncOutcome::NothingToDo,
         });
     }
-    let Some(local) = local else {
-        return Ok(SyncOutcome::Rejected {
-            reason: "the branch has no commits yet — there is nothing to sync".to_string(),
-        });
-    };
 
     fetch(&repo, &branch, auth)?;
 
-    let Some(remote_oid) = upstream_oid(&repo, &branch) else {
+    let remote_oid = upstream_oid(&repo, &branch);
+    let head_oid = head(&repo)?.oid;
+
+    // First push: no upstream tip yet — commit then push.
+    let Some(remote_oid) = remote_oid else {
+        let committed = commit_selected(&repo, workspace, &files, message, &id, &head(&repo)?)?;
+        let tip = committed.or(head_oid).ok_or_else(|| {
+            CoreError::Conflict(
+                "the branch has no commits yet — there is nothing to sync".to_string(),
+            )
+        })?;
         return match push(&repo, &branch, auth)? {
             Some(reason) => Ok(SyncOutcome::Rejected { reason }),
             None => Ok(SyncOutcome::Pushed {
-                sha: local.to_string(),
+                sha: tip.to_string(),
                 ahead: 1,
                 identity: id,
             }),
         };
     };
 
+    let mut local = match head_oid {
+        Some(oid) => oid,
+        None => {
+            let committed =
+                commit_selected(&repo, workspace, &files, message, &id, &head(&repo)?)?;
+            committed.ok_or_else(|| {
+                CoreError::Conflict(
+                    "the branch has no commits yet — there is nothing to sync".to_string(),
+                )
+            })?
+        }
+    };
+
     let (ahead, behind) = repo
         .graph_ahead_behind(local, remote_oid)
         .map_err(|e| map_git("cannot compare with the remote", e))?;
 
+    // Integrate remote first. Overlaps are Mandalo diffs (Resolve), not git pulls.
     if behind > 0 {
-        if ahead == 0 {
-            fast_forward(&repo, &branch, remote_oid)?;
-            return Ok(SyncOutcome::Pulled {
-                sha: remote_oid.to_string(),
-                behind,
+        let dirty_paths: Vec<String> = changed_files(&repo)?
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        let pending = pending_conflict_paths(
+            &repo,
+            workspace,
+            local,
+            remote_oid,
+            ahead,
+            &dirty_paths,
+        )?;
+        if !pending.is_empty() {
+            let items = conflict_items(&repo, workspace, local, remote_oid, &pending)?;
+            return Ok(SyncOutcome::Conflicted {
+                files: pending,
+                items,
             });
         }
-        if rebase_onto(&repo, remote_oid, &id)?.is_some() {
-            if let Some(files) = merge_onto(&repo, local, remote_oid, &branch, &id)? {
-                return Ok(SyncOutcome::Conflicted { files });
+
+        let dirty = !dirty_paths.is_empty();
+        let marked = read_resolved(&repo);
+        let preserve = keep_edits || dirty || !marked.is_empty();
+
+        if ahead == 0 {
+            fast_forward(&repo, &branch, remote_oid, preserve)?;
+            local = remote_oid;
+        } else {
+            // libgit2 refuses rebase with a dirty workdir — merge instead.
+            let needs_merge = dirty
+                || rebase_onto(&repo, remote_oid, &id, preserve)?.is_some();
+            if needs_merge {
+                if let Some(files) =
+                    merge_onto(&repo, local, remote_oid, &branch, &id, preserve)?
+                {
+                    if files.iter().all(|path| marked.contains(path)) {
+                        finish_merge_with_workdir(
+                            &repo, workspace, local, remote_oid, &branch, &id, &files,
+                        )?;
+                    } else {
+                        let items =
+                            conflict_items(&repo, workspace, local, remote_oid, &files)?;
+                        return Ok(SyncOutcome::Conflicted { files, items });
+                    }
+                }
             }
+            local = head(&repo)?
+                .oid
+                .ok_or_else(|| {
+                    CoreError::Io("the branch lost its tip during the merge".into())
+                })?;
         }
     }
 
-    let tip = head(&repo)?
-        .oid
-        .ok_or_else(|| CoreError::Io("the branch lost its tip during the rebase".to_string()))?;
-    let (ahead, _) = repo
-        .graph_ahead_behind(tip, remote_oid)
+    let head_now = head(&repo)?;
+    let committed = commit_selected(&repo, workspace, &files, message, &id, &head_now)?;
+    let tip = committed.unwrap_or_else(|| head(&repo).ok().and_then(|h| h.oid).unwrap_or(local));
+
+    let remote_now = upstream_oid(&repo, &branch).unwrap_or(remote_oid);
+    let (ahead, behind_left) = repo
+        .graph_ahead_behind(tip, remote_now)
         .map_err(|e| map_git("cannot compare with the remote", e))?;
     if ahead == 0 {
-        return Ok(if behind > 0 {
+        return Ok(if behind > 0 || behind_left > 0 {
             SyncOutcome::Pulled {
                 sha: tip.to_string(),
-                behind,
+                behind: behind.max(behind_left),
+            }
+        } else if committed.is_some() {
+            SyncOutcome::Committed {
+                sha: tip.to_string(),
+                identity: id,
             }
         } else {
             SyncOutcome::NothingToDo
@@ -914,19 +1905,24 @@ pub fn sync(workspace: &Path, message: &str, auth: &Auth, force: bool) -> CoreRe
     }
     match push(&repo, &branch, auth)? {
         Some(reason) => Ok(SyncOutcome::Rejected { reason }),
-        None => Ok(SyncOutcome::Pushed {
-            sha: tip.to_string(),
-            ahead,
-            identity: id,
-        }),
+        None => {
+            clear_resolved(&repo);
+            Ok(SyncOutcome::Pushed {
+                sha: tip.to_string(),
+                ahead,
+                identity: id,
+            })
+        }
     }
 }
 
-/// Commits the working tree onto a NEW branch and pushes it. Existing branches
+/// Commits the reviewed files onto a NEW branch and pushes it. Existing branches
 /// are never moved and never deleted — that is the whole "open a PR" flow.
-pub fn create_branch_and_push(
+pub fn run_branch_push(
     workspace: &Path,
+    selection: &SyncSelection,
     branch: &str,
+    token: &str,
     message: &str,
     auth: &Auth,
     force: bool,
@@ -940,6 +1936,9 @@ pub fn create_branch_and_push(
             "{branch} is not a valid branch name"
         )));
     }
+    let plan = plan_sync(workspace, selection, Some(branch))?;
+    check_token(&plan, token)?;
+    let files = plan.selected();
     let repo = open_required(workspace)?;
     let id = identity(&repo);
     let head_info = head(&repo)?;
@@ -954,7 +1953,7 @@ pub fn create_branch_and_push(
         )));
     }
     if !repo.index().map(|i| i.has_conflicts()).unwrap_or(false) {
-        guard_secrets(&repo, workspace, force)?;
+        guard_secrets(workspace, &files, force)?;
     }
 
     let base = head_info
@@ -971,7 +1970,7 @@ pub fn create_branch_and_push(
         .map_err(|e| map_git("cannot switch to the new branch", e))?;
 
     let on_branch = head(&repo)?;
-    let committed = commit_all(&repo, message, &id, &on_branch)?;
+    let committed = commit_selected(&repo, workspace, &files, message, &id, &on_branch)?;
     let sha = committed.unwrap_or(base);
 
     if repo.find_remote(REMOTE).is_err() {
@@ -1023,6 +2022,32 @@ mod tests {
         assert!(is_ssh_url("ssh://git@github.com/o/r.git"));
         assert!(!is_ssh_url("https://github.com/o/r.git"));
         assert!(!is_ssh_url("/tmp/local/repo"));
+    }
+
+    #[test]
+    fn token_auth_rewrites_github_ssh_to_https() {
+        assert!(matches!(
+            Auth::for_url("git@github.com:o/r.git", Some("ghp_deadbeef")),
+            Auth::Token(_)
+        ));
+        assert_eq!(
+            transport_url(
+                "git@github.com:o/r.git",
+                &Auth::Token("ghp_deadbeef".into())
+            ),
+            "https://github.com/o/r.git"
+        );
+        assert_eq!(
+            transport_url(
+                "ssh://git@github.com/o/r.git",
+                &Auth::Token("ghp_deadbeef".into())
+            ),
+            "https://github.com/o/r.git"
+        );
+        assert_eq!(
+            Auth::for_url("git@github.com:o/r.git", None),
+            Auth::SshAgent
+        );
     }
 
     #[test]

@@ -1,0 +1,195 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Petstore",
+    "version": "1.4.0",
+    "description": "A small, boring pet store."
+  },
+  "servers": [
+    {
+      "url": "https://api.petstore.dev/v2",
+      "description": "Production"
+    },
+    {
+      "url": "https://{tenant}.staging.petstore.dev/v2",
+      "description": "Staging",
+      "variables": {
+        "tenant": {
+          "default": "acme",
+          "description": "Tenant subdomain"
+        }
+      }
+    }
+  ],
+  "security": [{ "BearerAuth": [] }],
+  "tags": [
+    { "name": "pets", "description": "Everything about pets" },
+    { "name": "store", "description": "Orders" }
+  ],
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "summary": "List all pets",
+        "description": "Returns a page of pets.\nUse the cursor to walk the collection.",
+        "tags": ["pets"],
+        "security": [],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": true,
+            "description": "How many pets to return",
+            "schema": { "type": "integer", "default": 20 }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by status",
+            "schema": { "type": "string", "enum": ["available", "pending", "sold"] }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": { "200": { "description": "A page of pets" } }
+      },
+      "post": {
+        "operationId": "createPet",
+        "summary": "Add a pet to the store",
+        "tags": ["pets", "store"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NewPet" }
+            },
+            "application/xml": {
+              "schema": { "$ref": "#/components/schemas/NewPet" }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/pets/{petId}": {
+      "parameters": [
+        {
+          "name": "petId",
+          "in": "path",
+          "required": true,
+          "description": "The pet id",
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "get": {
+        "operationId": "getPet",
+        "tags": ["pets"],
+        "responses": { "200": { "description": "One pet" } }
+      },
+      "delete": {
+        "operationId": "deletePet",
+        "tags": ["pets"],
+        "deprecated": true,
+        "security": [{ "ApiKeyAuth": [] }],
+        "responses": { "204": { "description": "Gone" } }
+      }
+    },
+    "/pets/{petId}/photo": {
+      "post": {
+        "operationId": "uploadPetPhoto",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "caption": { "type": "string" },
+                  "file": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Uploaded" } }
+      }
+    },
+    "/store/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "tags": ["store"],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "petId": { "type": "string" },
+                  "quantity": { "type": "integer", "default": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Placed" } }
+      }
+    },
+    "/oauth/profile": {
+      "get": {
+        "operationId": "readProfile",
+        "security": [{ "OAuth2": ["profile:read"] }],
+        "responses": { "200": { "description": "Profile" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" },
+      "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "X-Api-Key" },
+      "OAuth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://api.petstore.dev/oauth/authorize",
+            "tokenUrl": "https://api.petstore.dev/oauth/token",
+            "scopes": { "profile:read": "Read the profile" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "NewPet": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "example": "Fido" },
+          "bornAt": { "type": "string", "format": "date-time" },
+          "status": { "type": "string", "enum": ["available", "pending", "sold"] },
+          "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
+          "weightKg": { "type": "number" },
+          "microchipped": { "type": "boolean" }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "label": { "type": "string" }
+        }
+      }
+    }
+  }
+}

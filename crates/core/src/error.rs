@@ -13,6 +13,9 @@ pub enum CoreError {
     Schema(String),
     Request(String),
     Network(String),
+    /// The peer's certificate was rejected, which a bare transport error buries
+    /// under a chain nobody can act on.
+    Tls(String),
     HostDenied(String),
     HostConfirmRequired(String),
     Script(String),
@@ -24,6 +27,11 @@ pub enum CoreError {
     SecretHostDenied(String),
     Stream(String),
     StreamLimit(String),
+    /// The workspace is somebody else's copy, opened from a link.
+    ReadOnly(String),
+    /// The repository answered as if it does not exist, which is also how a
+    /// private one answers to a caller with no credential.
+    Private(String),
 }
 
 /// Every error message goes through the process redactor, so a resolved secret
@@ -50,6 +58,7 @@ impl CoreError {
             CoreError::Schema(_) => "E_SCHEMA",
             CoreError::Request(_) => "E_REQUEST",
             CoreError::Network(_) => "E_NETWORK",
+            CoreError::Tls(_) => "E_TLS",
             CoreError::HostDenied(_) => "E_HOST_DENIED",
             CoreError::HostConfirmRequired(_) => "E_HOST_CONFIRM_REQUIRED",
             CoreError::Script(_) => "E_SCRIPT",
@@ -61,6 +70,8 @@ impl CoreError {
             CoreError::SecretHostDenied(_) => "E_SECRET_HOST_DENIED",
             CoreError::Stream(_) => "E_STREAM",
             CoreError::StreamLimit(_) => "E_STREAM_LIMIT",
+            CoreError::ReadOnly(_) => "E_READ_ONLY",
+            CoreError::Private(_) => "E_PRIVATE",
         }
     }
 
@@ -79,6 +90,7 @@ impl CoreError {
             | CoreError::Schema(m)
             | CoreError::Request(m)
             | CoreError::Network(m)
+            | CoreError::Tls(m)
             | CoreError::HostDenied(m)
             | CoreError::HostConfirmRequired(m)
             | CoreError::Script(m)
@@ -89,12 +101,47 @@ impl CoreError {
             | CoreError::Secret(m)
             | CoreError::SecretHostDenied(m)
             | CoreError::Stream(m)
-            | CoreError::StreamLimit(m) => m,
+            | CoreError::StreamLimit(m)
+            | CoreError::ReadOnly(m)
+            | CoreError::Private(m) => m,
         }
     }
 
     /// Every variant, one fixture message each — the redaction test walks this so a
     /// new variant cannot be added without being covered.
+    /// Adding a variant must not silently drop it from the redaction test, so the
+    /// compiler is made to notice: this match stops being exhaustive.
+    #[allow(dead_code)]
+    fn assert_every_variant_is_listed(e: &CoreError) {
+        match e {
+            CoreError::UnresolvedVar(_)
+            | CoreError::Template(_)
+            | CoreError::PathEscape(_)
+            | CoreError::InvalidName(_)
+            | CoreError::NotFound(_)
+            | CoreError::Conflict(_)
+            | CoreError::Io(_)
+            | CoreError::Parse(_)
+            | CoreError::Schema(_)
+            | CoreError::Request(_)
+            | CoreError::Network(_)
+            | CoreError::Tls(_)
+            | CoreError::HostDenied(_)
+            | CoreError::HostConfirmRequired(_)
+            | CoreError::Script(_)
+            | CoreError::ScriptTimeout(_)
+            | CoreError::Grpc(_)
+            | CoreError::Capture(_)
+            | CoreError::Unsupported(_)
+            | CoreError::Secret(_)
+            | CoreError::SecretHostDenied(_)
+            | CoreError::Stream(_)
+            | CoreError::StreamLimit(_)
+            | CoreError::ReadOnly(_)
+            | CoreError::Private(_) => {}
+        }
+    }
+
     pub fn all_variants(message: &str) -> Vec<CoreError> {
         let m = || message.to_string();
         vec![
@@ -109,6 +156,7 @@ impl CoreError {
             CoreError::Schema(m()),
             CoreError::Request(m()),
             CoreError::Network(m()),
+            CoreError::Tls(m()),
             CoreError::HostDenied(m()),
             CoreError::HostConfirmRequired(m()),
             CoreError::Script(m()),
@@ -120,6 +168,8 @@ impl CoreError {
             CoreError::SecretHostDenied(m()),
             CoreError::Stream(m()),
             CoreError::StreamLimit(m()),
+            CoreError::ReadOnly(m()),
+            CoreError::Private(m()),
         ]
     }
 

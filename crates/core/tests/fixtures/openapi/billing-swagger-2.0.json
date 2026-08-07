@@ -1,0 +1,90 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Billing", "version": "1.0.0" },
+  "host": "billing.example.com",
+  "basePath": "/v1",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "security": [{ "apiKeyQuery": [] }],
+  "tags": [{ "name": "invoices" }],
+  "paths": {
+    "/invoices": {
+      "get": {
+        "operationId": "listInvoices",
+        "tags": ["invoices"],
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "query",
+            "required": true,
+            "type": "string",
+            "x-example": "cus_1"
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": ["draft", "open", "paid"]
+          }
+        ],
+        "responses": { "200": { "description": "Invoices" } }
+      },
+      "post": {
+        "operationId": "createInvoice",
+        "tags": ["invoices"],
+        "security": [{ "basicAuth": [] }],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/NewInvoice" }
+          }
+        ],
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/invoices/{invoiceId}/attachments": {
+      "post": {
+        "operationId": "attachToInvoice",
+        "tags": ["invoices"],
+        "consumes": ["application/x-www-form-urlencoded"],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          { "name": "note", "in": "formData", "required": true, "type": "string" },
+          { "name": "receipt", "in": "formData", "required": false, "type": "file" }
+        ],
+        "responses": { "200": { "description": "Attached" } }
+      }
+    }
+  },
+  "securityDefinitions": {
+    "basicAuth": { "type": "basic" },
+    "apiKeyQuery": { "type": "apiKey", "in": "query", "name": "api_key" }
+  },
+  "definitions": {
+    "NewInvoice": {
+      "type": "object",
+      "required": ["customerId", "lines"],
+      "properties": {
+        "customerId": { "type": "string", "example": "cus_1" },
+        "dueOn": { "type": "string", "format": "date" },
+        "lines": { "type": "array", "items": { "$ref": "#/definitions/Line" } }
+      }
+    },
+    "Line": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "amountCents": { "type": "integer" }
+      }
+    }
+  }
+}

@@ -44,6 +44,11 @@ impl Redactor {
         }
     }
 
+    #[cfg(test)]
+    fn masks_on_stdout(&self) -> bool {
+        self.github
+    }
+
     pub fn scrub(&self, text: &str) -> String {
         let entries = self.entries.lock().expect("redactor lock");
         let mut out = text.to_string();
@@ -60,11 +65,21 @@ impl Redactor {
     }
 }
 
+/// `::add-mask::` is the one place a secret is printed on purpose, so being
+/// inside Actions has to be more than one variable anybody can export: the whole
+/// set a runner injects has to be there, or the value is never printed.
+fn inside_github_actions() -> bool {
+    std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && ["GITHUB_RUN_ID", "GITHUB_WORKFLOW", "GITHUB_ACTION", "CI"]
+            .iter()
+            .all(|name| std::env::var(name).is_ok())
+}
+
 /// Every secret the process has resolved. `CoreError`'s `Display` scrubs through it,
 /// so a secret cannot reach a log, a report or an IPC error string by accident.
 pub fn global() -> &'static Redactor {
     static GLOBAL: OnceLock<Redactor> = OnceLock::new();
-    GLOBAL.get_or_init(|| Redactor::new(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")))
+    GLOBAL.get_or_init(|| Redactor::new(inside_github_actions()))
 }
 
 pub fn register(env: &str, key: &str, value: &str) {
@@ -123,6 +138,43 @@ mod tests {
         );
         r.register("prod", "real", "abcdef");
         assert_eq!(r.scrub("x abcdef y"), "x [redacted:prod.real] y");
+    }
+
+    /// One test owns these variables: the process environment is shared by every
+    /// test thread, so splitting this would race with itself.
+    #[test]
+    fn one_exported_variable_cannot_make_the_redactor_print_secrets() {
+        let owned = [
+            "GITHUB_ACTIONS",
+            "GITHUB_RUN_ID",
+            "GITHUB_WORKFLOW",
+            "GITHUB_ACTION",
+            "CI",
+        ];
+        let previous: Vec<(&str, Option<String>)> = owned
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        for name in owned {
+            std::env::remove_var(name);
+        }
+
+        std::env::set_var("GITHUB_ACTIONS", "true");
+        assert!(!inside_github_actions());
+        assert!(!Redactor::new(inside_github_actions()).masks_on_stdout());
+
+        for name in owned {
+            std::env::set_var(name, "1");
+        }
+        std::env::set_var("GITHUB_ACTIONS", "true");
+        assert!(inside_github_actions());
+
+        for (name, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
     }
 
     #[test]

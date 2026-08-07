@@ -50,6 +50,7 @@ fn request(name: &str, url: &str) -> SavedRequest {
         auth: Auth::None,
         body: mandalo_core::Body::None,
         grpc: None,
+        stream: None,
         scripts: Scripts::default(),
         tests: Vec::new(),
         captures: Vec::new(),
@@ -69,6 +70,8 @@ fn workspace_at(dir: &Path) -> String {
             schema_version: SCHEMA_VERSION,
             id: "test-workspace".to_string(),
             name: "Test".to_string(),
+            remote: None,
+            share: None,
         },
     )
     .unwrap();
@@ -174,6 +177,7 @@ async fn captures_thread_into_the_next_step_of_a_suite() {
     collection::put_request(dir.path(), &slug, "2-orders.http", &orders).unwrap();
     workspace::save_environment(
         dir.path(),
+        &mandalo_core::capability::RefuseLocalWrites,
         &Environment {
             name: "local".to_string(),
             vars: [("base".to_string(), url.clone())].into_iter().collect(),

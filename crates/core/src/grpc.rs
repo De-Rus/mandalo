@@ -465,6 +465,7 @@ pub async fn send_grpc(spec: GrpcSpec) -> CoreResult<GrpcResponse> {
         tonic::transport::Endpoint::from_shared(url.clone())
             .map_err(|e| CoreError::Request(e.to_string()))?
     } else if url.starts_with("https://") {
+        crate::install_crypto_provider();
         tonic::transport::Endpoint::from_shared(url.clone())
             .map_err(|e| CoreError::Request(e.to_string()))?
             .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())

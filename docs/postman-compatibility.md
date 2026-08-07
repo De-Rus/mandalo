@@ -18,6 +18,7 @@ limitation, 0 fail confusingly.**
 | Postman feature | Notes |
 | --- | --- |
 | Folders, nested folders | Become real directories on disk |
+| Request order inside a folder | Kept: a folder with more than one request numbers its files `1-login.http`, `2-me.http`, … so `mandalo run` runs them in the order the collection lists them |
 | Collection variables | Saved as an environment named `<collection>-vars` |
 | Environment exports | Disabled values are dropped |
 | `{{variable}}` templates | Identical syntax; passed through untouched |
@@ -25,10 +26,10 @@ limitation, 0 fail confusingly.**
 | Path variables (`:id`) | Substituted from the export's `url.variable` values (`/users/:userId` → `/users/{{userId}}`) |
 | Raw bodies | The editor language (`options.raw.language`) is kept, and drives the default `Content-Type` |
 | urlencoded bodies | Structured rows, keeping `disabled` and `description`; the `Content-Type` comes from the mode |
-| form-data bodies | Structured rows; text fields import complete, file fields import as rows that still need a workspace file (below) |
-| Binary (`file`) bodies | The mode is kept; the file still needs to be picked inside the workspace (below) |
+| form-data bodies | Imported as the field lines the format writes — `title = Q3 expenses`, one row per field. A text-only body arrives whole and silent. A file field arrives as a row with no file (below), because the export names a path on the author's disk |
+| Binary (`file`) bodies | The request imports without the body; the export's absolute path is reported so you can write `< ./your-file` yourself (below) |
 | GraphQL bodies | Query and variables |
-| Bearer, Basic and API-key auth (header or query) | Including collection- and folder-level defaults and `noauth` opt-outs |
+| Bearer, Basic and API-key auth (header or query) | Including collection- and folder-level defaults and `noauth` opt-outs — see [Inherited auth](#inherited-auth) |
 | Request-level pre-request and test scripts | Run for real, at the same points Postman runs them |
 | Disabled headers, disabled variables | Dropped |
 | A request written as a bare URL string | Imported as a GET |
@@ -46,6 +47,37 @@ received a copy:
 
 > `Users: pre-request script copied into every request below it (List users, Create user, Get user, Delete user) — Mándalo has no shared scripts, so edit each copy`
 
+### Inherited auth
+
+Postman's collection- and folder-level auth is a **default**, and Mándalo keeps
+it a default. Three rules, in this order:
+
+1. A request that declares its own `auth` — `noauth` included — never also
+   receives the default.
+2. A request that already writes its own `Authorization` header keeps it, and
+   the default is not added on top. (Two `Authorization` lines were the old
+   behaviour; only one was ever sent.) The import says so:
+
+   > `Me: the request writes its own Authorization header, so the collection's default auth was not added on top of it`
+
+3. Every other request gets the default, written as an ordinary header under a
+   marker line:
+
+   ```http
+   ### Profile
+   # @auth inherited
+   GET {{baseUrl}}/me
+   Authorization: Bearer {{authToken}}
+   ```
+
+The marker is what makes a login-then-use collection runnable. A collection
+whose auth is `Bearer {{authToken}}` gives that default to the login request
+too — the one whose job is to *produce* `authToken`. An inherited header whose
+variables are not set yet is therefore **dropped at send time** instead of
+failing the request; a header the request wrote itself still fails loud with
+`unresolved variable: authToken`. The value is a default nobody asked for, so
+its absence is not an error; your own header is a promise, so it is.
+
 **OAuth 2.0 becomes a bearer token.** Mándalo does not run the OAuth flow. If
 Postman had stored an access token, it is imported as a bearer token:
 
@@ -55,24 +87,43 @@ With no stored token the request is imported unauthenticated:
 
 > `WithoutToken: OAuth 2.0 has no stored access token — imported without auth; paste a token into a bearer variable to send it`
 
-**File fields import unresolved, and say which file they wanted.** Mándalo sends
-multipart and binary bodies, but a Postman export stores file parts as an
-absolute path on the machine that exported them
-(`"src": "/Users/ada/pic.png"`). That path is meaningless here, and a
-collection is shared configuration: it must never be able to make the app read
-a file outside the workspace. So the row is imported with its key, its
-`Content-Type` and its enabled state — but with no file. The original path is
-recorded in the row's description, and the report names the request and the
-field:
+**File fields import unresolved, and say which file they wanted.** The body
+itself comes across: every field becomes a
+[form-data line](http-format.md#form-data-bodies). What cannot come across is
+the file *contents*. A Postman export stores a file part as an absolute path on
+the machine that exported it (`"src": "/Users/ada/pic.png"`), while a collection
+references files by workspace-relative path — it is shared configuration, and it
+must never be able to make the app read a file outside the workspace. So the
+field arrives as a row with no file, the path the export named is kept in the
+`#` comment above the request, and the report names the request and the field:
 
 ```
-Upload avatar: file field `avatar` needs a file inside the workspace — the export referenced /Users/ada/pic.png
+Upload avatar: file field `avatar` needs a file inside the workspace — the export referenced /Users/ada/pic.png; the field arrived empty, so point it at one with `avatar = < ./your-file`
 ```
 
-A multi-file field (Postman writes `src` as an array) imports as **one** row
-that expects several files, not as several rows. Point it at files inside the
-workspace and it sends again — each file becomes its own part under the same
-field name.
+Copy the file into the workspace and write the path on that row:
+
+```http
+### Upload avatar
+POST {{baseUrl}}/upload
+# Form-data file fields with no file yet — point each at one inside the workspace:
+# avatar = < ./your-file   (the export referenced /Users/ada/pic.png)
+Content-Type: multipart/form-data
+
+caption = hola
+avatar = < ./files/pic.png
+```
+
+An empty file row still sends — as an empty text part — so the request runs and
+the server tells you what it thinks of it; fill the row in to send the file.
+
+A multi-file field (Postman writes `src` as an array) stays **one** row naming
+every path it referenced, because one field holding several files is what the
+export meant; write the paths under that one name, one line each.
+
+Two more things a `.http` file has no line for, both named in the report rather
+than dropped in silence: a **disabled** form field (it writes only the fields it
+sends) and a `contentType` on a **text** field (`; type=` belongs to file rows).
 
 A binary (`file`) body gets the same treatment:
 
@@ -224,5 +275,15 @@ unchanged.
 It is not compatible with collections built around the runner (data files,
 `setNextRequest`), around `pm.sendRequest` warm-ups, or around npm modules
 (`crypto-js` request signing). Those import, and tell you exactly where and why
-they stop. Multipart uploads import and send — you only have to point the file
-fields at files inside the workspace.
+they stop. Multipart uploads are the one body a `.http` file cannot hold: the
+request imports without it, and the report says which fields were left behind.
+
+## Exporting back to Postman
+
+`mandalo export out.json --format postman --collection <slug>` writes a v2.1
+collection. Setting `[share] format = "postman"` in `mandalo.toml` makes Export
+default to that format and makes Sync regenerate `postman/<slug>.json` (plus
+environments) before each commit. Native Mandalo files remain the source of
+truth; the Postman JSON is a mirror for teammates who stay in Postman. gRPC and
+stream requests are skipped with a named warning; declarative `tests[]` /
+`captures[]` are Mandalo-only and are likewise named, not silently dropped.

@@ -19,7 +19,7 @@ fn env_with_secret(dir: &Path, hosts: &[&str], store: &MemorySecrets) {
     let mut doc = EnvDoc::new("prod");
     doc.vars.insert("token".to_string(), VarDef::secret(hosts));
     doc.vars
-        .insert("greeting".to_string(), VarDef::plain("hola".to_string()));
+        .insert("greeting".to_string(), VarDef::shared("hola".to_string()));
     workspace::save_env_doc(dir, &doc).unwrap();
     store.set("prod", "token", SECRET).unwrap();
 }
@@ -200,7 +200,9 @@ async fn login_capture_and_the_authenticated_call_still_chain() {
         Some(r#"pm.environment.set("user_id", pm.response.json().user.id);"#.to_string());
 
     let runner = fixtures::runner();
-    let mut vars = mandalo_core::runner::env_frame(dir.path(), Some("prod")).unwrap();
+    let mut vars =
+        mandalo_core::runner::env_frame(dir.path(), &mandalo_core::NoSecrets, Some("prod"))
+            .unwrap();
     let first = runner.run_request(&login, &mut vars).await.unwrap();
 
     assert!(first.error.is_none(), "{:?}", first.error);

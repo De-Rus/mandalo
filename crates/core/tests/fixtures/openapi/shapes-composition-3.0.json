@@ -1,0 +1,78 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Shapes", "version": "1.0.0" },
+  "servers": [{ "url": "https://shapes.example.com" }],
+  "paths": {
+    "/animals": {
+      "post": {
+        "operationId": "createAnimal",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Dog" }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/payments": {
+      "post": {
+        "operationId": "createPayment",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/CardPayment" },
+                  { "$ref": "#/components/schemas/BankPayment" }
+                ]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Animal": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "ageYears": { "type": "integer" }
+        }
+      },
+      "Dog": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Animal" },
+          {
+            "type": "object",
+            "properties": {
+              "breed": { "type": "string", "enum": ["corgi", "beagle"] },
+              "goodBoy": { "type": "boolean" }
+            }
+          }
+        ]
+      },
+      "CardPayment": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["card"] },
+          "last4": { "type": "string", "example": "4242" }
+        }
+      },
+      "BankPayment": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["bank"] },
+          "iban": { "type": "string" }
+        }
+      }
+    }
+  }
+}

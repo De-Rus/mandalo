@@ -926,7 +926,7 @@ fn the_crud_collection_imports_with_the_expected_report() {
     assert_eq!(
         report.warnings,
         vec![
-            "Login: the description was dropped — neither .http nor .grpc has a line for one; keep it in a `#` comment above the request",
+            "Login: the description was dropped — no request file has a line for one; keep it in a `#` comment above the request",
             "Refresh: disabled form fields (scope) were dropped — a .http file writes the whole form body as one line of text",
             "Users: pre-request script copied into every request below it (List users, Create user, Get user, Delete user) — Mándalo has no shared scripts, so edit each copy",
             "Acme API: pre-request and test scripts copied into every request below it (Login, Refresh, List users, Create user, Get user and 2 more) — Mándalo has no shared scripts, so edit each copy"
@@ -968,9 +968,10 @@ fn the_crud_collection_imports_with_the_expected_report() {
     assert_eq!(list.1.url, "{{baseUrl}}/users?page=1&per_page=25");
     assert_eq!(
         list.1.auth,
-        mandalo_core::request::Auth::Bearer {
+        mandalo_core::request::Auth::inherited(mandalo_core::request::Auth::Bearer {
             token: "{{accessToken}}".to_string()
-        }
+        }),
+        "the collection default stays a default the request never asked for"
     );
     assert_eq!(
         list.1.headers,
@@ -983,12 +984,7 @@ fn the_edge_case_collection_reports_every_loss_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let report = postman::import(dir.path(), &fixture("edge_cases.json")).unwrap();
     assert_eq!(report.imported, 15);
-    assert_eq!(
-        report.skipped,
-        vec![
-            "Upload avatar: 2 form-data fields not imported — a .http file cannot express a multipart body, so the request was imported without one"
-        ]
-    );
+    assert_eq!(report.skipped, Vec::<String>::new());
     for expected in [
         "OAuth2 stored token: OAuth 2.0 imported as the access token Postman had stored",
         "AWS v4: awsv4 auth is not supported",
@@ -1014,8 +1010,13 @@ fn the_edge_case_collection_reports_every_loss_by_name() {
         .unwrap();
     assert_eq!(
         upload.1.body,
-        mandalo_core::Body::None,
-        "a .http file cannot carry a multipart body, so the fields are reported instead"
+        mandalo_core::Body::Formdata {
+            rows: vec![
+                mandalo_core::body::FormDataRow::text("avatar", ""),
+                mandalo_core::body::FormDataRow::text("caption", "hello"),
+            ]
+        },
+        "the fields import; only the file the exporter's disk held stays unresolved"
     );
     let oauth = requests
         .iter()

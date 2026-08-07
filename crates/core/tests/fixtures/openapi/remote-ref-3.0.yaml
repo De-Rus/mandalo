@@ -1,0 +1,31 @@
+openapi: 3.0.3
+info:
+  title: Remote
+  version: "1.0.0"
+servers:
+  - url: https://remote.example.com
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "https://schemas.example.com/pet.json#/Pet"
+      responses:
+        "201":
+          description: Created
+  /owners:
+    post:
+      operationId: createOwner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./shared/owner.yaml#/Owner"
+      responses:
+        "201":
+          description: Created

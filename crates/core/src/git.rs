@@ -10,6 +10,7 @@ pub const IGNORED: &[&str] = &[
     "*.local.toml",
     ".mandalo/",
     "secrets.toml",
+    ".secrets.toml",
     "*.secret.toml",
     ".env",
     ".env.*",

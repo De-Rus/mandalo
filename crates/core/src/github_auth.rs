@@ -40,10 +40,8 @@ pub const API_BASE: &str = "https://api.github.com";
 pub const DEFAULT_SCOPES: &[&str] = &["repo"];
 pub const PUBLIC_REPO_SCOPES: &[&str] = &["public_repo"];
 
-/// The GitHub identity is per-user, not per-workspace, so it lives under a fixed
-/// scope segment instead of a workspace id. Workspace ids are UUIDs, so `auth`
-/// can never collide with one. Full keychain account: `auth/github/token`.
-pub const KEYRING_ACCOUNT_SCOPE: &str = "auth";
+/// The GitHub identity is per-user, not per-workspace, so it lives in its own
+/// `[auth]` section of the machine-local file rather than under a workspace id.
 pub const TOKEN_ENV: &str = "github";
 pub const TOKEN_KEY: &str = "token";
 
@@ -53,6 +51,22 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// GitHub adds this many seconds when it answers `slow_down` without naming a
 /// new interval. Honouring the backoff is what keeps the app off the rate limit.
 const SLOW_DOWN_STEP: u64 = 5;
+
+/// Whatever answers this flow decides how long the app waits and how often it
+/// asks. Both are clamped: `Instant::now() + Duration::from_secs(u64::MAX)`
+/// panics outright, and an interval of zero is a polling loop with no pause.
+const MIN_INTERVAL_SECS: u64 = 1;
+const MAX_INTERVAL_SECS: u64 = 300;
+const MIN_EXPIRY_SECS: u64 = 30;
+const MAX_EXPIRY_SECS: u64 = 60 * 60 * 24;
+
+fn sane_interval(raw: u64) -> u64 {
+    raw.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS)
+}
+
+fn sane_expiry(raw: u64) -> u64 {
+    raw.clamp(MIN_EXPIRY_SECS, MAX_EXPIRY_SECS)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,9 +124,9 @@ impl DeviceHandle {
         let current = self.interval_secs();
         let next = match suggested {
             Some(seconds) if seconds > current => seconds,
-            _ => current + SLOW_DOWN_STEP,
+            _ => current.saturating_add(SLOW_DOWN_STEP),
         };
-        self.interval.store(next, Ordering::Relaxed);
+        self.interval.store(sane_interval(next), Ordering::Relaxed);
     }
 }
 
@@ -164,8 +178,8 @@ pub async fn start_device_flow_at(
     let code = DeviceCode {
         user_code: string_field(&body, "user_code")?,
         verification_uri: string_field(&body, "verification_uri")?,
-        expires_in: u64_field(&body, "expires_in")?,
-        interval: u64_field(&body, "interval")?,
+        expires_in: sane_expiry(u64_field(&body, "expires_in")?),
+        interval: sane_interval(u64_field(&body, "interval")?),
     };
     redact::register(TOKEN_ENV, "device-code", &device_code);
 
@@ -282,6 +296,163 @@ pub async fn whoami_at(api_base: &str, token: &str) -> CoreResult<GitHubUser> {
         .map_err(|e| CoreError::parse("GitHub's answer to /user is not a user", e))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubRepo {
+    pub name: String,
+    #[serde(alias = "full_name")]
+    pub full_name: String,
+    pub private: bool,
+    #[serde(alias = "clone_url")]
+    pub clone_url: String,
+    #[serde(alias = "html_url")]
+    pub html_url: String,
+    #[serde(default, alias = "default_branch")]
+    pub default_branch: String,
+}
+
+/// Repositories the signed-in user can push to, newest activity first.
+/// Pages until GitHub returns an empty page or a hard cap of 300 repos.
+pub async fn list_repos(token: &str) -> CoreResult<Vec<GitHubRepo>> {
+    list_repos_at(API_BASE, token).await
+}
+
+pub async fn list_repos_at(api_base: &str, token: &str) -> CoreResult<Vec<GitHubRepo>> {
+    let token = require_token(token)?;
+    let base = api_base.trim_end_matches('/');
+    let mut out = Vec::new();
+    for page in 1u32..=3 {
+        let url = format!(
+            "{base}/user/repos?per_page=100&page={page}&sort=updated&affiliation=owner,collaborator,organization_member"
+        );
+        let text = github_get(&url, token).await?;
+        let page_repos: Vec<GitHubRepo> = serde_json::from_str(&text)
+            .map_err(|e| CoreError::parse("GitHub's answer to /user/repos is not a list", e))?;
+        let n = page_repos.len();
+        out.extend(page_repos);
+        if n < 100 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Creates a repository under the signed-in user and seeds it with a README so
+/// an immediate `git clone` has a branch to check out.
+pub async fn create_repo(token: &str, name: &str, private: bool) -> CoreResult<GitHubRepo> {
+    create_repo_at(API_BASE, token, name, private).await
+}
+
+pub async fn create_repo_at(
+    api_base: &str,
+    token: &str,
+    name: &str,
+    private: bool,
+) -> CoreResult<GitHubRepo> {
+    let token = require_token(token)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CoreError::Request(
+            "a repository name cannot be empty".to_string(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(CoreError::Request(format!(
+            "“{name}” is not a valid GitHub repository name — use letters, digits, -, _ or ."
+        )));
+    }
+    let url = format!("{}/user/repos", api_base.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "name": name,
+        "private": private,
+        "auto_init": true,
+    });
+    let text = github_post_json(&url, token, &body).await?;
+    serde_json::from_str(&text)
+        .map_err(|e| CoreError::parse("GitHub's answer to create a repo is not a repository", e))
+}
+
+fn require_token(token: &str) -> CoreResult<&str> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(CoreError::Request(
+            "a GitHub token cannot be empty".to_string(),
+        ));
+    }
+    Ok(token)
+}
+
+async fn github_get(url: &str, token: &str) -> CoreResult<String> {
+    let response = crate::request::client()?
+        .get(url)
+        .header("accept", "application/vnd.github+json")
+        .header("x-github-api-version", "2022-11-28")
+        .header("user-agent", USER_AGENT)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| CoreError::Network(format!("cannot reach GitHub: {e}")))?;
+    read_github_body(response, "GET").await
+}
+
+async fn github_post_json(
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> CoreResult<String> {
+    let response = crate::request::client()?
+        .post(url)
+        .header("accept", "application/vnd.github+json")
+        .header("x-github-api-version", "2022-11-28")
+        .header("user-agent", USER_AGENT)
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| CoreError::Network(format!("cannot reach GitHub: {e}")))?;
+    read_github_body(response, "POST").await
+}
+
+async fn read_github_body(response: reqwest::Response, verb: &str) -> CoreResult<String> {
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| CoreError::Network(format!("cannot read GitHub's answer: {e}")))?;
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(CoreError::Request(
+            "GitHub rejected this token — it is wrong, expired or revoked".to_string(),
+        ));
+    }
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(CoreError::Request(format!(
+            "GitHub refused this request: {}",
+            api_message(&text).unwrap_or_else(|| "forbidden".to_string())
+        )));
+    }
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        return Err(CoreError::Request(format!(
+            "GitHub could not create that repository{}",
+            api_message(&text)
+                .map(|m| format!(": {m}"))
+                .unwrap_or_default()
+        )));
+    }
+    if !status.is_success() {
+        return Err(CoreError::Request(format!(
+            "GitHub answered {} to {verb}{}",
+            status.as_u16(),
+            api_message(&text)
+                .map(|m| format!(": {m}"))
+                .unwrap_or_default()
+        )));
+    }
+    Ok(text)
+}
+
 pub fn store_token_in(store: &dyn SecretWriter, token: &str) -> CoreResult<()> {
     let token = token.trim();
     if token.is_empty() {
@@ -305,25 +476,18 @@ pub fn clear_token_in(store: &dyn SecretWriter) -> CoreResult<()> {
     store.delete(TOKEN_ENV, TOKEN_KEY)
 }
 
-#[cfg(feature = "keychain")]
-pub fn token_store() -> crate::capability::KeyringStore {
-    crate::capability::KeyringStore::with_service(
-        crate::capability::KEYRING_SERVICE,
-        KEYRING_ACCOUNT_SCOPE,
-    )
+pub fn token_store() -> crate::secrets::LocalStore {
+    crate::secrets::LocalStore::for_auth()
 }
 
-#[cfg(feature = "keychain")]
 pub fn store_token(token: &str) -> CoreResult<()> {
     store_token_in(&token_store(), token)
 }
 
-#[cfg(feature = "keychain")]
 pub fn stored_token() -> CoreResult<Option<String>> {
     stored_token_in(&token_store())
 }
 
-#[cfg(feature = "keychain")]
 pub fn clear_token() -> CoreResult<()> {
     clear_token_in(&token_store())
 }
@@ -502,6 +666,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hostile_expiry_or_interval_can_neither_panic_nor_spin() {
+        assert_eq!(sane_expiry(u64::MAX), MAX_EXPIRY_SECS);
+        assert_eq!(sane_expiry(0), MIN_EXPIRY_SECS);
+        assert_eq!(sane_expiry(900), 900);
+        assert_eq!(sane_interval(0), MIN_INTERVAL_SECS);
+        assert_eq!(sane_interval(u64::MAX), MAX_INTERVAL_SECS);
+        assert_eq!(sane_interval(5), 5);
+
+        let _ = Instant::now() + Duration::from_secs(sane_expiry(u64::MAX));
+
+        let h = handle(MAX_INTERVAL_SECS);
+        h.back_off(Some(u64::MAX));
+        assert_eq!(h.interval_secs(), MAX_INTERVAL_SECS);
+    }
+
+    #[test]
     fn scopes_are_the_narrowest_that_can_push() {
         assert_eq!(DEFAULT_SCOPES, &["repo"]);
         assert_eq!(PUBLIC_REPO_SCOPES, &["public_repo"]);
@@ -541,19 +721,22 @@ mod tests {
     }
 
     #[test]
-    fn the_keychain_account_is_stable_and_cannot_collide_with_a_workspace() {
-        assert_eq!(KEYRING_ACCOUNT_SCOPE, "auth");
+    fn the_identity_is_stored_apart_from_every_workspace() {
         assert_eq!(TOKEN_ENV, "github");
         assert_eq!(TOKEN_KEY, "token");
-        assert!(uuid::Uuid::parse_str(KEYRING_ACCOUNT_SCOPE).is_err());
-    }
 
-    #[cfg(feature = "keychain")]
-    #[test]
-    fn the_keychain_account_key_is_auth_github_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.toml");
+        let auth = crate::secrets::LocalStore::auth_at(&path);
+        store_token_in(&auth, "gho_scope_fixture").unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("[auth.github]"));
         assert_eq!(
-            crate::capability::KeyringStore::entry_key(KEYRING_ACCOUNT_SCOPE, TOKEN_ENV, TOKEN_KEY),
-            "auth/github/token"
+            crate::secrets::LocalStore::at(&path, "any-workspace")
+                .get(TOKEN_ENV, TOKEN_KEY)
+                .unwrap(),
+            None
         );
     }
 
@@ -572,6 +755,15 @@ mod tests {
     async fn an_empty_token_never_reaches_the_network() {
         let error = whoami_at("http://127.0.0.1:1", "  ").await.unwrap_err();
         assert_eq!(error.code(), "E_REQUEST");
+    }
+
+    #[tokio::test]
+    async fn create_repo_rejects_a_bad_name_before_the_network() {
+        let error = create_repo_at("http://127.0.0.1:1", "gho_x", "bad name!", false)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "E_REQUEST");
+        assert!(error.to_string().contains("not a valid"));
     }
 
     #[test]

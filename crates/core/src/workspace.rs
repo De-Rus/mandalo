@@ -1,4 +1,4 @@
-use crate::capability::{SecretStore, SecretWriter};
+use crate::capability::{SecretStore, SecretWriter, VarSource};
 use crate::error::{CoreError, CoreResult};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
@@ -27,11 +27,60 @@ pub struct WorkspaceOpen {
     pub workspace: WorkspaceInfo,
 }
 
+/// How Sync and Export present the workspace to the outside world. The on-disk
+/// Mandalo files stay the source of truth; `Postman` adds a generated mirror.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareFormat {
+    #[default]
+    Native,
+    Postman,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareConfig {
+    #[serde(default)]
+    pub format: ShareFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+impl ShareConfig {
+    pub fn postman() -> Self {
+        ShareConfig {
+            format: ShareFormat::Postman,
+            dir: None,
+        }
+    }
+
+    pub fn is_postman(&self) -> bool {
+        matches!(self.format, ShareFormat::Postman)
+    }
+
+    /// Directory under the workspace root that holds generated Postman JSON.
+    pub fn dir_name(&self) -> &str {
+        match self.dir.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => s,
+            _ => "postman",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Manifest {
     pub schema_version: u32,
     pub id: String,
     pub name: String,
+    /// Set only on a workspace that arrived from a link. Its presence is what
+    /// makes the workspace read-only, so it has to survive every rewrite of this
+    /// file — and it is serialized last, because TOML puts tables after values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<crate::remote::RemoteOrigin>,
+    /// Optional share settings. Written by Export when the user picks Postman,
+    /// or by hand in `mandalo.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<ShareConfig>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -145,22 +194,147 @@ pub fn write_manifest(workspace: &Path, manifest: &Manifest) -> CoreResult<()> {
     atomic_write(&manifest_path(workspace), &raw)
 }
 
+/// Share settings from `mandalo.toml`, or `None` when the stanza is absent.
+pub fn share_config(workspace: &Path) -> CoreResult<Option<ShareConfig>> {
+    Ok(read_manifest(workspace)?.and_then(|m| m.share))
+}
+
+/// Persist `[share]` (or clear it when `share` is `None`). Preserves id/name/remote.
+pub fn set_share(workspace: &Path, share: Option<ShareConfig>) -> CoreResult<Manifest> {
+    let Some(mut manifest) = read_manifest(workspace)? else {
+        return Err(CoreError::NotFound(format!(
+            "{} is not a Mándalo workspace — there is no mandalo.toml in it",
+            workspace.display()
+        )));
+    };
+    manifest.share = share;
+    write_manifest(workspace, &manifest)?;
+    Ok(manifest)
+}
+
 fn dir_is_empty(path: &Path) -> CoreResult<bool> {
     let mut entries = std::fs::read_dir(path).map_err(|e| CoreError::io(path.display(), e))?;
     Ok(entries.next().is_none())
 }
 
-fn scaffold(workspace: &Path, name: &str) -> CoreResult<Manifest> {
+/// What `open_workspace` sees before writing anything.
+#[derive(Debug, PartialEq, Eq)]
+enum OpenKind {
+    Workspace,
+    Empty,
+    OpenApiRoot,
+    ChildWorkspaceHint { children: Vec<String> },
+    ForeignNonEmpty,
+}
+
+fn child_workspace_names(path: &Path) -> CoreResult<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(path).map_err(|e| CoreError::io(path.display(), e))? {
+        let entry = entry.map_err(|e| CoreError::io(path.display(), e))?;
+        let child = entry.path();
+        if !child.is_dir() {
+            continue;
+        }
+        if child.join("mandalo.toml").is_file() {
+            if let Some(name) = child.file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with('.') {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn classify_open_target(path: &Path) -> CoreResult<OpenKind> {
+    if read_manifest(path)?.is_some() {
+        return Ok(OpenKind::Workspace);
+    }
+    if dir_is_empty(path)? {
+        return Ok(OpenKind::Empty);
+    }
+    let children = child_workspace_names(path)?;
+    if !children.is_empty() {
+        return Ok(OpenKind::ChildWorkspaceHint { children });
+    }
+    if crate::openapi::has_root_openapi(path) {
+        return Ok(OpenKind::OpenApiRoot);
+    }
+    Ok(OpenKind::ForeignNonEmpty)
+}
+
+fn open_kind_conflict(path: &Path, kind: &OpenKind) -> CoreError {
+    match kind {
+        OpenKind::ChildWorkspaceHint { children } => {
+            let listed = children
+                .iter()
+                .map(|name| format!("{}/{name}", path.file_name().and_then(|n| n.to_str()).unwrap_or(".")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            CoreError::Conflict(format!(
+                "{} is not a Mándalo workspace — it contains other workspaces ({listed}). Open one of those folders instead, or pick an empty directory",
+                path.display()
+            ))
+        }
+        OpenKind::ForeignNonEmpty => CoreError::Conflict(format!(
+            "{} is not empty and is not a Mándalo workspace — open a folder that already has mandalo.toml, import an OpenAPI/Postman file into an existing workspace, or pick an empty directory",
+            path.display()
+        )),
+        OpenKind::Workspace | OpenKind::Empty | OpenKind::OpenApiRoot => CoreError::Conflict(
+            format!("{} cannot be opened as a workspace", path.display()),
+        ),
+    }
+}
+
+/// If the user picked `…/<ws>/collections` or `…/<ws>/environments` of an
+/// existing workspace, open `<ws>` instead of scaffolding inside it.
+fn resolve_workspace_dir(path: &Path) -> PathBuf {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return path.to_path_buf();
+    };
+    if !matches!(name, "collections" | "environments") {
+        return path.to_path_buf();
+    }
+    let Some(parent) = path.parent() else {
+        return path.to_path_buf();
+    };
+    if parent.join("mandalo.toml").is_file() {
+        parent.to_path_buf()
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn directory_label(workspace: &Path) -> String {
+    workspace
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Workspace")
+        .to_string()
+}
+
+fn scaffold_with(
+    workspace: &Path,
+    name: &str,
+    preferred_id: Option<&str>,
+) -> CoreResult<Manifest> {
     let manifest = match read_manifest(workspace)? {
         Some(existing) => Manifest {
             schema_version: SCHEMA_VERSION,
             id: existing.id,
             name: name.to_string(),
+            remote: existing.remote,
+            share: existing.share,
         },
         None => Manifest {
             schema_version: SCHEMA_VERSION,
-            id: uuid::Uuid::new_v4().to_string(),
+            id: preferred_id
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name: name.to_string(),
+            remote: None,
+            share: None,
         },
     };
     std::fs::create_dir_all(workspace.join("environments"))
@@ -169,6 +343,53 @@ fn scaffold(workspace: &Path, name: &str) -> CoreResult<Manifest> {
         .map_err(|e| CoreError::io(workspace.display(), e))?;
     write_manifest(workspace, &manifest)?;
     Ok(manifest)
+}
+
+fn scaffold(workspace: &Path, name: &str) -> CoreResult<Manifest> {
+    scaffold_with(workspace, name, None)
+}
+
+fn finish_open(workspace: &Path, manifest: Manifest) -> CoreResult<Manifest> {
+    crate::collection::heal_nested_workspace_scaffold(workspace);
+    let _ = crate::openapi::seed_if_empty(workspace)?;
+    Ok(manifest)
+}
+
+/// Make a registered path usable: restore a missing `mandalo.toml` for empty or
+/// OpenAPI-root folders, seed requests when needed, or fail loud for foreign dirs.
+pub fn ensure_ready(registry: &Path, workspace: &Path) -> CoreResult<Manifest> {
+    require_absolute(workspace)?;
+    let workspace = resolve_workspace_dir(workspace);
+    if !workspace.is_dir() {
+        return Err(CoreError::NotFound(format!(
+            "workspace directory does not exist: {}",
+            workspace.display()
+        )));
+    }
+    if let Some(existing) = read_manifest(&workspace)? {
+        return finish_open(&workspace, existing);
+    }
+    let kind = classify_open_target(&workspace)?;
+    match kind {
+        OpenKind::Empty | OpenKind::OpenApiRoot => {
+            let reg = read_registry(registry)?;
+            let existing = reg
+                .workspaces
+                .iter()
+                .find(|w| same_path(&w.path, &workspace));
+            let preferred_id = existing.map(|w| w.id.clone());
+            let name = existing
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| directory_label(&workspace));
+            let manifest = scaffold_with(&workspace, &name, preferred_id.as_deref())?;
+            finish_open(&workspace, manifest)
+        }
+        OpenKind::Workspace => Err(CoreError::NotFound(format!(
+            "{} is not a Mándalo workspace yet — open it first",
+            workspace.display()
+        ))),
+        other => Err(open_kind_conflict(&workspace, &other)),
+    }
 }
 
 fn register(registry: &Path, workspace: &Path, manifest: &Manifest) -> CoreResult<WorkspaceInfo> {
@@ -187,8 +408,52 @@ fn register(registry: &Path, workspace: &Path, manifest: &Manifest) -> CoreResul
     Ok(info)
 }
 
+fn repair_registry(registry: &Path, mut reg: Registry) -> CoreResult<Registry> {
+    let mut kept = Vec::new();
+    let mut active_gone = false;
+    for entry in reg.workspaces.drain(..) {
+        let path = PathBuf::from(&entry.path);
+        if !path.is_dir() {
+            if entry.id == reg.active {
+                active_gone = true;
+            }
+            continue;
+        }
+        if let Some(manifest) = read_manifest(&path)? {
+            let _ = finish_open(&path, manifest)?;
+            kept.push(entry);
+            continue;
+        }
+        match classify_open_target(&path)? {
+            OpenKind::Empty | OpenKind::OpenApiRoot => {
+                let manifest = scaffold_with(&path, &entry.name, Some(&entry.id))?;
+                let _ = finish_open(&path, manifest)?;
+                kept.push(entry);
+            }
+            _ => {
+                if entry.id == reg.active {
+                    active_gone = true;
+                }
+            }
+        }
+    }
+    reg.workspaces = kept;
+    if reg.workspaces.is_empty() {
+        reg.active.clear();
+    } else if active_gone || !reg.workspaces.iter().any(|w| w.id == reg.active) {
+        reg.active = reg.workspaces[0].id.clone();
+    }
+    write_registry(registry, &reg)?;
+    Ok(reg)
+}
+
 pub fn list_workspaces(registry: &Path, default_path: &Path) -> CoreResult<WorkspaceList> {
     let reg = read_registry(registry)?;
+    let reg = if reg.workspaces.is_empty() {
+        reg
+    } else {
+        repair_registry(registry, reg)?
+    };
     if reg.workspaces.is_empty() {
         let info = create_workspace(registry, default_path, "Personal")?;
         return Ok(WorkspaceList {
@@ -213,6 +478,7 @@ pub fn create_workspace(
     name: &str,
 ) -> CoreResult<WorkspaceInfo> {
     require_absolute(workspace)?;
+    let workspace = resolve_workspace_dir(workspace);
     if name.trim().is_empty() {
         return Err(CoreError::InvalidName(
             "workspace name must not be empty".to_string(),
@@ -225,49 +491,72 @@ pub fn create_workspace(
                 workspace.display()
             )));
         }
-        if !dir_is_empty(workspace)? && read_manifest(workspace)?.is_none() {
-            return Err(CoreError::Conflict(format!(
-                "directory is not empty and is not a Mándalo workspace: {}",
-                workspace.display()
-            )));
+        if !dir_is_empty(&workspace)? && read_manifest(&workspace)?.is_none() {
+            let kind = classify_open_target(&workspace)?;
+            match kind {
+                OpenKind::OpenApiRoot => {}
+                OpenKind::Empty => {}
+                other => return Err(open_kind_conflict(&workspace, &other)),
+            }
         }
     }
-    let manifest = scaffold(workspace, name)?;
-    register(registry, workspace, &manifest)
+    let manifest = scaffold(&workspace, name)?;
+    let manifest = finish_open(&workspace, manifest)?;
+    register(registry, &workspace, &manifest)
 }
 
 pub fn open_workspace(registry: &Path, workspace: &Path) -> CoreResult<WorkspaceOpen> {
     require_absolute(workspace)?;
+    let workspace = resolve_workspace_dir(workspace);
     if !workspace.is_dir() {
         return Err(CoreError::NotFound(format!(
             "workspace directory does not exist: {}",
             workspace.display()
         )));
     }
-    let name = match read_manifest(workspace)? {
+    let kind = classify_open_target(&workspace)?;
+    match &kind {
+        OpenKind::Workspace | OpenKind::Empty | OpenKind::OpenApiRoot => {}
+        other => return Err(open_kind_conflict(&workspace, other)),
+    }
+    let preferred = read_registry(registry)?
+        .workspaces
+        .into_iter()
+        .find(|w| same_path(&w.path, &workspace));
+    let preferred_id = preferred.as_ref().map(|w| w.id.clone());
+    let name = match read_manifest(&workspace)? {
         Some(existing) => existing.name,
-        None => workspace
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Workspace")
-            .to_string(),
+        None => preferred
+            .map(|w| w.name)
+            .unwrap_or_else(|| directory_label(&workspace)),
     };
-    let manifest = scaffold(workspace, &name)?;
-    let info = register(registry, workspace, &manifest)?;
+    let manifest = scaffold_with(&workspace, &name, preferred_id.as_deref())?;
+    let manifest = finish_open(&workspace, manifest)?;
+    let info = register(registry, &workspace, &manifest)?;
     Ok(WorkspaceOpen { workspace: info })
 }
 
 pub fn set_active_workspace(registry: &Path, id: &str) -> CoreResult<WorkspaceInfo> {
-    let mut reg = read_registry(registry)?;
+    let reg = read_registry(registry)?;
     let info = reg
         .workspaces
         .iter()
         .find(|w| w.id == id)
         .cloned()
         .ok_or_else(|| CoreError::NotFound(format!("unknown workspace id: {id}")))?;
-    reg.active = info.id.clone();
+    ensure_ready(registry, Path::new(&info.path))?;
+    let mut reg = read_registry(registry)?;
+    if !reg.workspaces.iter().any(|w| w.id == id) {
+        return Err(CoreError::NotFound(format!(
+            "workspace {id} could not be repaired — remove it and open the folder again"
+        )));
+    }
+    reg.active = id.to_string();
     write_registry(registry, &reg)?;
-    Ok(info)
+    reg.workspaces
+        .into_iter()
+        .find(|w| w.id == id)
+        .ok_or_else(|| CoreError::NotFound(format!("unknown workspace id: {id}")))
 }
 
 pub fn remove_workspace(registry: &Path, id: &str) -> CoreResult<()> {
@@ -299,37 +588,82 @@ pub fn resolve_workspace(registry: &Path, workspace: &str) -> CoreResult<PathBuf
         .ok_or_else(|| CoreError::NotFound(format!("unknown workspace: {workspace}")))
 }
 
-/// A variable **declaration**. `Secret` has no `value` field: the type makes it
-/// impossible to put a secret value in a file that is meant to be committed.
+/// A variable **declaration**, answering two orthogonal questions.
+///
+/// `shared` says *where the value lives* — in the committed file, or only on
+/// this machine. `secret` says *how it is treated* — masked in the UI and
+/// registered with the redactor. A colleague's `devUrl` is not shared and not
+/// confidential; a token is both.
+///
+/// The type settles both by construction. [`VarDef::Shared`] is the only
+/// variant with a `value` field, so a value that is not shared cannot be
+/// serialized into a committed file at all; and there is no variant for a
+/// shared secret, so `secret = true` implies `shared = false` with nothing to
+/// override.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum VarDef {
-    Plain { value: String },
+    Shared { value: String },
+    Local { hosts: Vec<String> },
     Secret { hosts: Vec<String> },
 }
 
 impl VarDef {
     pub fn secret(hosts: &[&str]) -> Self {
         VarDef::Secret {
-            hosts: hosts.iter().map(|h| h.to_ascii_lowercase()).collect(),
+            hosts: lowercased(hosts),
         }
     }
 
-    pub fn plain(value: impl Into<String>) -> Self {
-        VarDef::Plain {
+    pub fn local(hosts: &[&str]) -> Self {
+        VarDef::Local {
+            hosts: lowercased(hosts),
+        }
+    }
+
+    pub fn shared(value: impl Into<String>) -> Self {
+        VarDef::Shared {
             value: value.into(),
         }
     }
 
+    /// Confidential: masked in every view, redacted out of every diagnostic.
     pub fn is_secret(&self) -> bool {
         matches!(self, VarDef::Secret { .. })
     }
+
+    /// Its value belongs in the committed file.
+    pub fn is_shared(&self) -> bool {
+        matches!(self, VarDef::Shared { .. })
+    }
+
+    pub fn hosts(&self) -> Option<&[String]> {
+        match self {
+            VarDef::Shared { .. } => None,
+            VarDef::Local { hosts } | VarDef::Secret { hosts } => Some(hosts),
+        }
+    }
+
+    fn hosts_mut(&mut self) -> Option<&mut Vec<String>> {
+        match self {
+            VarDef::Shared { .. } => None,
+            VarDef::Local { hosts } | VarDef::Secret { hosts } => Some(hosts),
+        }
+    }
+}
+
+fn lowercased(hosts: &[&str]) -> Vec<String> {
+    hosts.iter().map(|h| h.to_ascii_lowercase()).collect()
 }
 
 impl Serialize for VarDef {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(2))?;
         match self {
-            VarDef::Plain { value } => map.serialize_entry("value", value)?,
+            VarDef::Shared { value } => map.serialize_entry("value", value)?,
+            VarDef::Local { hosts } => {
+                map.serialize_entry("shared", &false)?;
+                map.serialize_entry("hosts", hosts)?;
+            }
             VarDef::Secret { hosts } => {
                 map.serialize_entry("secret", &true)?;
                 map.serialize_entry("hosts", hosts)?;
@@ -356,27 +690,25 @@ impl EnvDoc {
         }
     }
 
-    /// The plain-value view the runner, the CLI and importers work with. Secret
-    /// declarations are absent by construction — they have no value to give.
-    pub fn plain_view(&self) -> Environment {
+    /// The shared-value view the runner, the CLI and importers work with. A
+    /// variable that is not shared is absent by construction — it has no value
+    /// to give.
+    pub fn shared_view(&self) -> Environment {
         Environment {
             name: self.name.clone(),
             vars: self
                 .vars
                 .iter()
                 .filter_map(|(k, v)| match v {
-                    VarDef::Plain { value } => Some((k.clone(), value.clone())),
-                    VarDef::Secret { .. } => None,
+                    VarDef::Shared { value } => Some((k.clone(), value.clone())),
+                    VarDef::Local { .. } | VarDef::Secret { .. } => None,
                 })
                 .collect(),
         }
     }
 
     pub fn secret_hosts(&self, key: &str) -> Option<&[String]> {
-        match self.vars.get(key) {
-            Some(VarDef::Secret { hosts }) => Some(hosts),
-            _ => None,
-        }
+        self.vars.get(key).and_then(VarDef::hosts)
     }
 }
 
@@ -388,7 +720,7 @@ impl From<&Environment> for EnvDoc {
             vars: env
                 .vars
                 .iter()
-                .map(|(k, v)| (k.clone(), VarDef::plain(v.clone())))
+                .map(|(k, v)| (k.clone(), VarDef::shared(v.clone())))
                 .collect(),
         }
     }
@@ -404,8 +736,66 @@ enum RawVar {
 #[derive(Deserialize)]
 struct RawVarTable {
     value: Option<String>,
+    shared: Option<bool>,
     secret: Option<bool>,
     hosts: Option<Vec<String>>,
+}
+
+/// Every combination that cannot be honoured is an error, never a coercion: a
+/// file that says something impossible about a credential is not a file to
+/// guess at.
+fn validate_var(context: &str, key: &str, t: RawVarTable) -> CoreResult<VarDef> {
+    let secret = t.secret.unwrap_or(false);
+    let hosts = lowercased(
+        &t.hosts
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+
+    if secret && t.shared == Some(true) {
+        return Err(CoreError::Schema(format!(
+            "{context}: variable {key:?} is declared secret = true and shared = true; \
+             a secret is never shared — its value stays on this machine. Remove `shared = true`"
+        )));
+    }
+    if secret && t.value.is_some() {
+        return Err(CoreError::Schema(format!(
+            "{context}: variable {key:?} is declared secret = true and also carries a value; \
+             a secret value never lives in a workspace file — delete the value and store it with \
+             `mandalo env set-secret`"
+        )));
+    }
+    if t.shared == Some(false) && t.value.is_some() {
+        return Err(CoreError::Schema(format!(
+            "{context}: variable {key:?} is declared shared = false and also carries a value; \
+             a value that is not shared never lives in a workspace file — delete the value and \
+             store it with `mandalo env set-local`"
+        )));
+    }
+    if secret {
+        return Ok(VarDef::Secret { hosts });
+    }
+    if t.shared == Some(false) {
+        return Ok(VarDef::Local { hosts });
+    }
+    match t.value {
+        Some(value) => {
+            if t.hosts.is_some() {
+                return Err(CoreError::Schema(format!(
+                    "{context}: variable {key:?} binds hosts but is shared; \
+                     a value already committed to git has nothing left to protect. \
+                     Declare it `secret = true` or `shared = false` to bind it to a host"
+                )));
+            }
+            Ok(VarDef::Shared { value })
+        }
+        None => Err(CoreError::Schema(format!(
+            "{context}: variable {key:?} has none of a value, `secret = true` or `shared = false`"
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -430,37 +820,8 @@ impl RawEnvDoc {
         let mut vars = BTreeMap::new();
         for (key, raw) in self.vars {
             let def = match raw {
-                RawVar::Flat(value) => VarDef::Plain { value },
-                RawVar::Table(t) => match (t.secret.unwrap_or(false), t.value) {
-                    (true, Some(_)) => {
-                        return Err(CoreError::Schema(format!(
-                            "{context}: variable {key:?} is declared secret = true and also carries a value; \
-                             secret values never live in a workspace file — delete the value and store it with set_secret"
-                        )))
-                    }
-                    (true, None) => VarDef::Secret {
-                        hosts: t
-                            .hosts
-                            .unwrap_or_default()
-                            .iter()
-                            .map(|h| h.to_ascii_lowercase())
-                            .collect(),
-                    },
-                    (false, Some(value)) => {
-                        if t.hosts.is_some() {
-                            return Err(CoreError::Schema(format!(
-                                "{context}: variable {key:?} binds hosts but is not declared secret = true; \
-                                 a host-bound value belongs in the keychain, not in this file"
-                            )));
-                        }
-                        VarDef::Plain { value }
-                    }
-                    (false, None) => {
-                        return Err(CoreError::Schema(format!(
-                            "{context}: variable {key:?} has neither a value nor secret = true"
-                        )))
-                    }
-                },
+                RawVar::Flat(value) => VarDef::Shared { value },
+                RawVar::Table(t) => validate_var(context, &key, t)?,
             };
             vars.insert(key, def);
         }
@@ -493,16 +854,21 @@ pub struct EnvDocList {
     pub skipped: Vec<String>,
 }
 
-/// What a UI may know about a variable. A secret's `value` is always `None`;
-/// `set` says whether this machine holds a value for it.
+/// What a UI may know about a variable. `value` is the **committed** value and
+/// is `None` for anything not shared, so what the editor shows is what saving
+/// writes back. `set` says whether a value is reachable at all, and `source`
+/// says from where.
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VarInfo {
+    pub shared: bool,
     pub secret: bool,
     pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosts: Option<Vec<String>>,
     pub set: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<VarSource>,
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
@@ -523,18 +889,23 @@ impl EnvironmentView {
     pub fn build(doc: &EnvDoc, secrets: &dyn SecretStore) -> CoreResult<Self> {
         let mut vars = BTreeMap::new();
         for (key, def) in &doc.vars {
+            let held = secrets.source(&doc.name, key)?;
             let info = match def {
-                VarDef::Plain { value } => VarInfo {
+                VarDef::Shared { value } => VarInfo {
+                    shared: true,
                     secret: false,
                     value: Some(value.clone()),
                     hosts: None,
                     set: true,
+                    source: held.or(Some(VarSource::File)),
                 },
-                VarDef::Secret { hosts } => VarInfo {
-                    secret: true,
+                VarDef::Local { hosts } | VarDef::Secret { hosts } => VarInfo {
+                    shared: false,
+                    secret: def.is_secret(),
                     value: None,
                     hosts: Some(hosts.clone()),
-                    set: secrets.get(&doc.name, key)?.is_some(),
+                    set: held.is_some(),
+                    source: held,
                 },
             };
             vars.insert(key.clone(), info);
@@ -655,6 +1026,9 @@ pub fn list_env_docs(workspace: &Path) -> CoreResult<EnvDocList> {
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
+        if crate::scan::is_local_values_file(&path) {
+            continue;
+        }
         let context = path.display().to_string();
         let parsed = std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
@@ -672,7 +1046,7 @@ pub fn list_env_docs(workspace: &Path) -> CoreResult<EnvDocList> {
 pub fn list_environments(workspace: &Path) -> CoreResult<EnvironmentList> {
     let docs = list_env_docs(workspace)?;
     Ok(EnvironmentList {
-        items: docs.items.iter().map(EnvDoc::plain_view).collect(),
+        items: docs.items.iter().map(EnvDoc::shared_view).collect(),
         skipped: docs.skipped,
     })
 }
@@ -693,6 +1067,7 @@ pub fn list_environment_views(
 }
 
 pub fn save_env_doc(workspace: &Path, doc: &EnvDoc) -> CoreResult<PathBuf> {
+    crate::remote::ensure_writable(workspace)?;
     validate_env_name(&doc.name)?;
     for key in doc.vars.keys() {
         validate_var_name(key)?;
@@ -705,41 +1080,85 @@ pub fn save_env_doc(workspace: &Path, doc: &EnvDoc) -> CoreResult<PathBuf> {
     Ok(path)
 }
 
-/// Writes the plain variables of an environment. Refuses to give a value to a
-/// variable that is declared secret, and keeps every secret declaration the file
-/// already had — a caller that only knows about plain values cannot erase them.
-pub fn save_environment(workspace: &Path, env: &Environment) -> CoreResult<PathBuf> {
+/// Saves an environment, **routing every value by its declaration**: a shared
+/// variable's value goes into the committed file, and anything not shared is
+/// diverted to this machine's own store instead. The caller hands over a flat
+/// name→value map and cannot get the split wrong.
+///
+/// Every declaration the file already had is kept — a caller that only knows
+/// about values cannot erase them. An empty value for a non-shared variable
+/// clears it, which is what emptying the field in an editor means.
+pub fn save_environment(
+    workspace: &Path,
+    secrets: &dyn SecretWriter,
+    env: &Environment,
+) -> CoreResult<PathBuf> {
     validate_env_name(&env.name)?;
-    let existing = read_env_doc(workspace, &env.name)?;
     let mut doc = EnvDoc::new(&env.name);
-    if let Some(previous) = &existing {
-        for (key, def) in &previous.vars {
-            if def.is_secret() {
-                if env.vars.contains_key(key) {
-                    return Err(CoreError::Secret(format!(
-                        "{}.{key} is declared secret; its value never goes in the environment file — write it with set_secret",
-                        env.name
-                    )));
+    let unshared: BTreeMap<String, VarDef> = read_env_doc(workspace, &env.name)?
+        .map(|previous| {
+            previous
+                .vars
+                .into_iter()
+                .filter(|(_, def)| !def.is_shared())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for (key, value) in &env.vars {
+        validate_var_name(key)?;
+        match unshared.get(key) {
+            Some(def) => {
+                if value.is_empty() {
+                    secrets.delete(&env.name, key)?;
+                } else {
+                    secrets.set(&env.name, key, value)?;
+                    if def.is_secret() {
+                        crate::redact::register(&env.name, key, value);
+                    }
                 }
-                doc.vars.insert(key.clone(), def.clone());
+            }
+            None => {
+                doc.vars.insert(key.clone(), VarDef::shared(value.clone()));
             }
         }
     }
-    for (key, value) in &env.vars {
-        validate_var_name(key)?;
-        doc.vars.insert(key.clone(), VarDef::plain(value.clone()));
-    }
+    doc.vars.extend(unshared);
     save_env_doc(workspace, &doc)
 }
 
-/// Declares `key` secret in the committed file and stores its value out of band.
-/// A plain variable of the same name is promoted: its value leaves the file.
+/// Declares `key` secret — masked, redacted, and stored only on this machine —
+/// and writes its value there. A shared variable of the same name is promoted:
+/// its value leaves the committed file.
 pub fn set_secret(
     workspace: &Path,
     secrets: &dyn SecretWriter,
     env: &str,
     key: &str,
     value: &str,
+) -> CoreResult<PathBuf> {
+    set_unshared(workspace, secrets, env, key, value, true)
+}
+
+/// Declares `key` local to this machine without marking it confidential — a
+/// colleague's `devUrl`, which must not be shared and is pointless to mask.
+pub fn set_local(
+    workspace: &Path,
+    secrets: &dyn SecretWriter,
+    env: &str,
+    key: &str,
+    value: &str,
+) -> CoreResult<PathBuf> {
+    set_unshared(workspace, secrets, env, key, value, false)
+}
+
+fn set_unshared(
+    workspace: &Path,
+    secrets: &dyn SecretWriter,
+    env: &str,
+    key: &str,
+    value: &str,
+    secret: bool,
 ) -> CoreResult<PathBuf> {
     validate_env_name(env)?;
     validate_var_name(key)?;
@@ -754,8 +1173,15 @@ pub fn set_secret(
         .map(<[String]>::to_vec)
         .unwrap_or_default();
     secrets.set(env, key, value)?;
-    crate::redact::register(env, key, value);
-    doc.vars.insert(key.to_string(), VarDef::Secret { hosts });
+    if secret {
+        crate::redact::register(env, key, value);
+    }
+    let def = if secret {
+        VarDef::Secret { hosts }
+    } else {
+        VarDef::Local { hosts }
+    };
+    doc.vars.insert(key.to_string(), def);
     save_env_doc(workspace, &doc)
 }
 
@@ -771,12 +1197,12 @@ pub fn clear_secret(
     validate_var_name(key)?;
     let doc = read_env_doc(workspace, env)?
         .ok_or_else(|| CoreError::NotFound(format!("unknown environment: {env}")))?;
-    if !doc.vars.get(key).map(VarDef::is_secret).unwrap_or(false) {
-        return Err(CoreError::NotFound(format!(
-            "{env}.{key} is not declared secret"
-        )));
+    match doc.vars.get(key) {
+        Some(def) if !def.is_shared() => secrets.delete(env, key),
+        _ => Err(CoreError::NotFound(format!(
+            "{env}.{key} holds no value on this machine; it is shared, so its value is in the environment file"
+        ))),
     }
-    secrets.delete(env, key)
 }
 
 /// Drops a variable from the environment file, and its value from this machine
@@ -792,8 +1218,8 @@ pub fn delete_var(
     let mut doc = read_env_doc(workspace, env)?
         .ok_or_else(|| CoreError::NotFound(format!("unknown environment: {env}")))?;
     match doc.vars.remove(key) {
-        Some(VarDef::Secret { .. }) => secrets.delete(env, key)?,
-        Some(VarDef::Plain { .. }) => {}
+        Some(VarDef::Local { .. }) | Some(VarDef::Secret { .. }) => secrets.delete(env, key)?,
+        Some(VarDef::Shared { .. }) => {}
         None => {
             return Err(CoreError::NotFound(format!(
                 "unknown variable: {env}.{key}"
@@ -803,7 +1229,9 @@ pub fn delete_var(
     save_env_doc(workspace, &doc)
 }
 
-/// Binds a secret to a host, so it can never be sent anywhere else.
+/// Binds a variable to a host, so its value can never be sent anywhere else.
+/// Only a variable whose value stays on this machine has anything left to
+/// protect, so only those can be bound.
 pub fn bind_secret_host(
     workspace: &Path,
     env: &str,
@@ -818,11 +1246,11 @@ pub fn bind_secret_host(
     }
     let mut doc = read_env_doc(workspace, env)?
         .ok_or_else(|| CoreError::NotFound(format!("unknown environment: {env}")))?;
-    let hosts = match doc.vars.get_mut(key) {
-        Some(VarDef::Secret { hosts }) => hosts,
-        _ => {
+    let hosts = match doc.vars.get_mut(key).and_then(VarDef::hosts_mut) {
+        Some(hosts) => hosts,
+        None => {
             return Err(CoreError::NotFound(format!(
-                "{env}.{key} is not declared secret"
+                "{env}.{key} is shared, so there is nothing to bind to a host"
             )))
         }
     };
@@ -835,7 +1263,9 @@ pub fn bind_secret_host(
     Ok(bound)
 }
 
-/// Which secrets of `env` have a value on this machine.
+/// Which of `env`'s non-shared variables have a value on this machine. A
+/// workspace that arrived from a colleague answers `false` for all of them,
+/// which is what the app shows instead of failing cryptically at send time.
 pub fn secret_status(
     workspace: &Path,
     secrets: &dyn SecretStore,
@@ -845,14 +1275,28 @@ pub fn secret_status(
         .ok_or_else(|| CoreError::NotFound(format!("unknown environment: {env}")))?;
     let mut status = BTreeMap::new();
     for (key, def) in &doc.vars {
-        if def.is_secret() {
-            status.insert(key.clone(), secrets.get(env, key)?.is_some());
+        if !def.is_shared() {
+            status.insert(key.clone(), secrets.source(env, key)?.is_some());
         }
     }
     Ok(status)
 }
 
+/// Non-shared variables of `env` with no value anywhere on this machine.
+pub fn missing_values(
+    workspace: &Path,
+    secrets: &dyn SecretStore,
+    env: &str,
+) -> CoreResult<Vec<String>> {
+    Ok(secret_status(workspace, secrets, env)?
+        .into_iter()
+        .filter(|(_, held)| !held)
+        .map(|(key, _)| key)
+        .collect())
+}
+
 pub fn delete_environment(workspace: &Path, name: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
     validate_env_name(name)?;
     let path = env_path(workspace, name);
     std::fs::remove_file(&path).map_err(|e| CoreError::io(path.display(), e))
@@ -889,8 +1333,8 @@ mod tests {
             &[("base", "https://staging.x.dev"), ("token", "t1")],
         );
         let prod = env("prod", &[("base", "https://x.dev")]);
-        save_environment(dir.path(), &staging).unwrap();
-        save_environment(dir.path(), &prod).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &staging).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &prod).unwrap();
         assert_eq!(
             list_environments(dir.path()).unwrap().items,
             vec![prod, staging]
@@ -900,7 +1344,12 @@ mod tests {
     #[test]
     fn save_writes_readable_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let path = save_environment(dir.path(), &env("staging", &[("base", "b")])).unwrap();
+        let path = save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("staging", &[("base", "b")]),
+        )
+        .unwrap();
         let raw = std::fs::read_to_string(path).unwrap();
         assert_eq!(
             raw,
@@ -922,7 +1371,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut doc = EnvDoc::new("prod");
         doc.vars
-            .insert("base".to_string(), VarDef::plain("https://api.acme.com"));
+            .insert("base".to_string(), VarDef::shared("https://api.acme.com"));
         doc.vars.insert(
             "access_token".to_string(),
             VarDef::secret(&["api.acme.com"]),
@@ -959,7 +1408,7 @@ mod tests {
     }
 
     #[test]
-    fn a_var_that_is_neither_a_value_nor_a_secret_fails_loud() {
+    fn a_var_that_declares_none_of_the_three_things_fails_loud() {
         let dir = tempfile::tempdir().unwrap();
         write_raw(
             dir.path(),
@@ -976,7 +1425,10 @@ mod tests {
         );
         let err = read_env_doc(dir.path(), "other").unwrap_err();
         assert_eq!(err.code(), "E_SCHEMA");
-        assert!(err.to_string().contains("not declared secret"), "{err}");
+        assert!(
+            err.to_string().contains("binds hosts but is shared"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -988,45 +1440,54 @@ mod tests {
             "name = \"prod\"\n[vars]\nbase = \"https://x.dev\"\nregion = \"eu\"\n",
         );
         let doc = read_env_doc(dir.path(), "prod").unwrap().unwrap();
-        assert_eq!(doc.vars["base"], VarDef::plain("https://x.dev"));
-        assert_eq!(doc.vars["region"], VarDef::plain("eu"));
+        assert_eq!(doc.vars["base"], VarDef::shared("https://x.dev"));
+        assert_eq!(doc.vars["region"], VarDef::shared("eu"));
         assert_eq!(
             list_environments(dir.path()).unwrap().items,
             vec![env("prod", &[("base", "https://x.dev"), ("region", "eu")])]
         );
 
-        save_environment(dir.path(), &doc.plain_view()).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &doc.shared_view()).unwrap();
         assert!(read_raw(dir.path(), "prod").contains("[vars.base]"));
         assert_eq!(read_env_doc(dir.path(), "prod").unwrap().unwrap(), doc);
     }
 
     #[test]
-    fn saving_plain_values_can_never_fill_in_a_secret() {
+    fn saving_diverts_an_unshared_value_instead_of_writing_it_to_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemorySecrets::new();
         set_secret(dir.path(), &store, "prod", "token", "s3cr3t").unwrap();
 
-        let err = save_environment(
+        save_environment(
             dir.path(),
+            &store,
             &env(
                 "prod",
                 &[("base", "https://x.dev"), ("token", "typed-here")],
             ),
         )
-        .unwrap_err();
-        assert_eq!(err.code(), "E_SECRET");
-        assert!(err.to_string().contains("declared secret"), "{err}");
+        .unwrap();
         assert!(!read_raw(dir.path(), "prod").contains("typed-here"));
+        assert!(read_raw(dir.path(), "prod").contains("secret = true"));
+        assert_eq!(
+            store.get("prod", "token").unwrap(),
+            Some("typed-here".to_string())
+        );
     }
 
     #[test]
-    fn saving_plain_values_keeps_the_secret_declarations_it_does_not_know_about() {
+    fn saving_keeps_the_unshared_declarations_it_does_not_know_about() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemorySecrets::new();
         set_secret(dir.path(), &store, "prod", "token", "s3cr3t").unwrap();
         bind_secret_host(dir.path(), "prod", "token", "API.acme.com").unwrap();
 
-        save_environment(dir.path(), &env("prod", &[("base", "https://x.dev")])).unwrap();
+        save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("prod", &[("base", "https://x.dev")]),
+        )
+        .unwrap();
         let doc = read_env_doc(dir.path(), "prod").unwrap().unwrap();
         assert_eq!(
             doc.vars["token"],
@@ -1034,24 +1495,29 @@ mod tests {
                 hosts: vec!["api.acme.com".to_string()]
             }
         );
-        assert_eq!(doc.vars["base"], VarDef::plain("https://x.dev"));
+        assert_eq!(doc.vars["base"], VarDef::shared("https://x.dev"));
     }
 
     #[test]
-    fn set_secret_promotes_a_plain_variable_and_takes_its_value_out_of_the_file() {
+    fn set_secret_promotes_a_shared_variable_and_takes_its_value_out_of_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemorySecrets::new();
-        save_environment(dir.path(), &env("prod", &[("token", "was-committed")])).unwrap();
+        save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("prod", &[("token", "was-committed")]),
+        )
+        .unwrap();
         assert!(read_raw(dir.path(), "prod").contains("was-committed"));
 
-        set_secret(dir.path(), &store, "prod", "token", "now-in-the-keychain").unwrap();
+        set_secret(dir.path(), &store, "prod", "token", "now-on-this-machine").unwrap();
         let raw = read_raw(dir.path(), "prod");
         assert!(!raw.contains("was-committed"), "{raw}");
-        assert!(!raw.contains("now-in-the-keychain"), "{raw}");
+        assert!(!raw.contains("now-on-this-machine"), "{raw}");
         assert!(raw.contains("secret = true"), "{raw}");
         assert_eq!(
             store.get("prod", "token").unwrap(),
-            Some("now-in-the-keychain".to_string())
+            Some("now-on-this-machine".to_string())
         );
     }
 
@@ -1063,7 +1529,7 @@ mod tests {
         let mut doc = read_env_doc(dir.path(), "prod").unwrap().unwrap();
         doc.vars
             .insert("other".to_string(), VarDef::Secret { hosts: Vec::new() });
-        doc.vars.insert("base".to_string(), VarDef::plain("b"));
+        doc.vars.insert("base".to_string(), VarDef::shared("b"));
         save_env_doc(dir.path(), &doc).unwrap();
 
         let status = secret_status(dir.path(), &store, "prod").unwrap();
@@ -1137,7 +1603,12 @@ mod tests {
     fn a_view_never_carries_a_secret_value() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemorySecrets::new();
-        save_environment(dir.path(), &env("prod", &[("base", "https://x.dev")])).unwrap();
+        save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("prod", &[("base", "https://x.dev")]),
+        )
+        .unwrap();
         set_secret(dir.path(), &store, "prod", "token", "s3cr3t-view-value").unwrap();
         bind_secret_host(dir.path(), "prod", "token", "x.dev").unwrap();
 
@@ -1146,19 +1617,23 @@ mod tests {
         assert_eq!(
             vars["base"],
             VarInfo {
+                shared: true,
                 secret: false,
                 value: Some("https://x.dev".to_string()),
                 hosts: None,
                 set: true,
+                source: Some(VarSource::File),
             }
         );
         assert_eq!(
             vars["token"],
             VarInfo {
+                shared: false,
                 secret: true,
                 value: None,
                 hosts: Some(vec!["x.dev".to_string()]),
                 set: true,
+                source: Some(VarSource::Local),
             }
         );
         let json = serde_json::to_string(&list.items[0]).unwrap();
@@ -1178,14 +1653,19 @@ mod tests {
     fn variable_names_are_validated_on_the_way_in() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemorySecrets::new();
-        assert!(save_environment(dir.path(), &env("prod", &[("../evil", "x")])).is_err());
+        assert!(save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("prod", &[("../evil", "x")])
+        )
+        .is_err());
         assert!(set_secret(dir.path(), &store, "prod", "../evil", "s3cr3t-value").is_err());
     }
 
     #[test]
     fn save_leaves_no_temp_files() {
         let dir = tempfile::tempdir().unwrap();
-        save_environment(dir.path(), &env("staging", &[])).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &env("staging", &[])).unwrap();
         let names: Vec<_> = std::fs::read_dir(dir.path().join("environments"))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -1196,20 +1676,22 @@ mod tests {
     #[test]
     fn rejects_path_traversal_names() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(save_environment(dir.path(), &env("../evil", &[])).is_err());
-        assert!(save_environment(dir.path(), &env("", &[])).is_err());
+        assert!(save_environment(dir.path(), &MemorySecrets::new(), &env("../evil", &[])).is_err());
+        assert!(save_environment(dir.path(), &MemorySecrets::new(), &env("", &[])).is_err());
     }
 
     #[test]
     fn rejects_non_ascii_names() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(save_environment(dir.path(), &env("prodücción", &[])).is_err());
+        assert!(
+            save_environment(dir.path(), &MemorySecrets::new(), &env("prodücción", &[])).is_err()
+        );
     }
 
     #[test]
     fn delete_removes_file() {
         let dir = tempfile::tempdir().unwrap();
-        save_environment(dir.path(), &env("tmp", &[])).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &env("tmp", &[])).unwrap();
         delete_environment(dir.path(), "tmp").unwrap();
         assert!(list_environments(dir.path()).unwrap().items.is_empty());
     }
@@ -1238,7 +1720,7 @@ mod tests {
     #[test]
     fn corrupt_env_is_skipped_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
-        save_environment(dir.path(), &env("good", &[])).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &env("good", &[])).unwrap();
         let bad = dir.path().join("environments").join("bad.toml");
         std::fs::write(&bad, "not [ valid toml").unwrap();
         let list = list_environments(dir.path()).unwrap();
@@ -1320,7 +1802,11 @@ mod tests {
         let err = create_workspace(&registry, &path, "Stuff")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("not a Mándalo workspace"));
+        assert!(
+            err.contains("not empty and is not a Mándalo workspace")
+                || err.contains("not a Mándalo workspace"),
+            "{err}"
+        );
         assert!(!path.join("mandalo.toml").exists());
     }
 
@@ -1334,6 +1820,136 @@ mod tests {
         assert_eq!(again.id, first.id);
         assert_eq!(again.name, "Renamed");
         assert_eq!(list_workspaces(&registry, &path).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn open_workspace_refuses_foreign_non_empty_directories() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let path = home.path().join("repo");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("README.md"), "hi").unwrap();
+        let err = open_workspace(&registry, &path).unwrap_err().to_string();
+        assert!(err.contains("not empty"), "{err}");
+        assert!(!path.join("mandalo.toml").exists());
+    }
+
+    #[test]
+    fn open_workspace_hints_child_workspaces() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let parent = home.path().join("examples");
+        let child = parent.join("mock-workspace");
+        std::fs::create_dir_all(&child).unwrap();
+        create_workspace(&registry, &child, "Mock").unwrap();
+        let err = open_workspace(&registry, &parent).unwrap_err().to_string();
+        assert!(err.contains("mock-workspace"), "{err}");
+        assert!(!parent.join("mandalo.toml").exists());
+    }
+
+    #[test]
+    fn open_workspace_seeds_a_root_openapi_document() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let path = home.path().join("petstore");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("README.md"), "demo").unwrap();
+        std::fs::write(
+            path.join("openapi.json"),
+            r#"{
+              "openapi": "3.0.3",
+              "info": {"title": "Petstore", "version": "1"},
+              "servers": [{"url": "https://petstore.example"}],
+              "paths": {
+                "/pets": {
+                  "get": {"operationId": "listPets", "tags": ["pets"]}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let opened = open_workspace(&registry, &path).unwrap();
+        assert!(path.join("mandalo.toml").exists());
+        let tree = crate::collection::list_tree(&path).unwrap();
+        assert_eq!(tree.collections.len(), 1);
+        assert!(
+            tree.collections[0]
+                .folders
+                .iter()
+                .any(|f| !f.requests.is_empty())
+                || !tree.collections[0].requests.is_empty()
+        );
+        assert_eq!(opened.workspace.name, "petstore");
+    }
+
+    #[test]
+    fn list_workspaces_repairs_stale_openapi_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let path = home.path().join("petstore");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("openapi.json"),
+            r#"{
+              "openapi": "3.0.3",
+              "info": {"title": "Petstore", "version": "1"},
+              "servers": [{"url": "https://petstore.example"}],
+              "paths": {
+                "/ping": {"get": {"operationId": "ping"}}
+              }
+            }"#,
+        )
+        .unwrap();
+        let id = "11111111-1111-1111-1111-111111111111";
+        write_registry(
+            &registry,
+            &Registry {
+                schema_version: SCHEMA_VERSION,
+                active: id.to_string(),
+                workspaces: vec![WorkspaceInfo {
+                    id: id.to_string(),
+                    path: path_string(&path).unwrap(),
+                    name: "petstore".to_string(),
+                }],
+            },
+        )
+        .unwrap();
+        let list = list_workspaces(&registry, &home.path().join("Personal")).unwrap();
+        assert_eq!(list.items.len(), 1);
+        assert_eq!(list.items[0].id, id);
+        assert!(path.join("mandalo.toml").exists());
+        let manifest = read_manifest(&path).unwrap().unwrap();
+        assert_eq!(manifest.id, id);
+        ensure_ready(&registry, &path).unwrap();
+        let tree = crate::collection::list_tree(&path).unwrap();
+        assert!(!tree.collections.is_empty());
+    }
+
+    #[test]
+    fn list_workspaces_drops_unrepairable_stale_entries() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let path = home.path().join("random");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("code.rs"), "fn main() {}").unwrap();
+        let id = "22222222-2222-2222-2222-222222222222";
+        write_registry(
+            &registry,
+            &Registry {
+                schema_version: SCHEMA_VERSION,
+                active: id.to_string(),
+                workspaces: vec![WorkspaceInfo {
+                    id: id.to_string(),
+                    path: path_string(&path).unwrap(),
+                    name: "random".to_string(),
+                }],
+            },
+        )
+        .unwrap();
+        let list = list_workspaces(&registry, &home.path().join("Personal")).unwrap();
+        assert!(!list.items.iter().any(|w| w.id == id));
+        assert!(!path.join("mandalo.toml").exists());
+        assert!(!list.items.is_empty());
     }
 
     #[test]
@@ -1358,6 +1974,21 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("does not exist"));
+    }
+
+    #[test]
+    fn open_workspace_redirects_collections_subdir_to_parent() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = registry_file(&home);
+        let root = home.path().join("Team");
+        let created = create_workspace(&registry, &root, "Team").unwrap();
+        let nested = root.join("collections");
+        let opened = open_workspace(&registry, &nested).unwrap();
+        assert_eq!(opened.workspace.id, created.id);
+        assert_eq!(opened.workspace.path, path_string(&root).unwrap());
+        assert!(!nested.join("mandalo.toml").exists());
+        assert!(!nested.join("collections").exists());
+        assert!(!nested.join("environments").exists());
     }
 
     #[test]
@@ -1471,12 +2102,17 @@ mod tests {
             sanitize_env_name(dir.path(), "Staging (EU)"),
             "Staging--EU-"
         );
-        save_environment(dir.path(), &env("Staging--EU-", &[])).unwrap();
+        save_environment(dir.path(), &MemorySecrets::new(), &env("Staging--EU-", &[])).unwrap();
         assert_eq!(
             sanitize_env_name(dir.path(), "Staging (EU)"),
             "Staging--EU--2"
         );
-        save_environment(dir.path(), &env("Staging--EU--2", &[])).unwrap();
+        save_environment(
+            dir.path(),
+            &MemorySecrets::new(),
+            &env("Staging--EU--2", &[]),
+        )
+        .unwrap();
         assert_eq!(
             sanitize_env_name(dir.path(), "Staging (EU)"),
             "Staging--EU--3"
