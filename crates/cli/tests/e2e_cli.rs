@@ -52,12 +52,12 @@ async fn the_shipped_example_workspace_lists_every_request_file() {
     let text = stdout(&out);
 
     for file in [
-        "http.http#",
-        "auth.http#",
-        "graphql.http#",
-        "upload.http#",
-        "chain.http#",
-        "grpc.grpc#",
+        "http/echo.http#",
+        "auth/methods.http#",
+        "graphql/queries.http#",
+        "uploads/bodies.http#",
+        "chaining/login-flow.http#",
+        "grpc/service.grpc#",
     ] {
         assert!(text.contains(file), "{file} missing from:\n{text}");
     }
@@ -122,7 +122,7 @@ async fn the_json_reporter_carries_the_real_results() {
             s["path"]
                 .as_str()
                 .unwrap_or_default()
-                .starts_with("auth.http#")
+                .starts_with("auth/methods.http#")
         })
         .map(|s| s["response"]["status"].as_u64().expect("a status"))
         .collect();
@@ -146,7 +146,7 @@ async fn the_junit_reporter_carries_the_real_results() {
     );
     assert!(xml.contains("failures=\"0\""), "{xml}");
     assert!(
-        xml.contains("<testcase classname=\"mock.graphql.http#0\""),
+        xml.contains("<testcase classname=\"mock.graphql/queries.http#0\""),
         "{xml}"
     );
     assert!(xml.contains("</testsuites>"), "{xml}");
@@ -213,7 +213,7 @@ async fn send_prints_one_response() {
 
     let out = fixture
         .cmd()
-        .args(["send", "mock", "http.http#0", "--env", "local"])
+        .args(["send", "mock", "http/echo.http#0", "--env", "local"])
         .assert()
         .success();
 

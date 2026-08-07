@@ -578,12 +578,47 @@ fn github_actions_masks_every_resolved_secret() {
 
     let out = mandalo(ws.path())
         .env("GITHUB_ACTIONS", "true")
+        .env("GITHUB_RUN_ID", "1")
+        .env("GITHUB_WORKFLOW", "ci")
+        .env("GITHUB_ACTION", "run")
+        .env("CI", "true")
         .env("MANDALO_SECRET__LOCAL__TOKEN", "masked-value")
         .args(["send", "api", "whoami.http", "--env", "local"])
         .assert()
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).to_string();
     assert!(text.contains("::add-mask::masked-value"), "{text}");
+}
+
+/// `::add-mask::` prints the secret on purpose. One exported variable anybody
+/// can set must not be enough to turn that on.
+#[test]
+fn one_exported_variable_does_not_make_the_cli_print_a_secret() {
+    let url = serve(vec![r#"{"ok":true}"#.to_string()]);
+    let ws = workspace();
+    std::fs::write(
+        ws.path().join("environments/local.toml"),
+        "name = \"local\"\n[vars]\n",
+    )
+    .unwrap();
+    write_request(
+        ws.path(),
+        "whoami.http",
+        &format!("### Who am I\nGET {url}/me\nAuthorization: Bearer {{{{token}}}}\n"),
+    );
+
+    let out = mandalo(ws.path())
+        .env("GITHUB_ACTIONS", "true")
+        .env_remove("GITHUB_RUN_ID")
+        .env_remove("GITHUB_WORKFLOW")
+        .env_remove("GITHUB_ACTION")
+        .env_remove("CI")
+        .env("MANDALO_SECRET__LOCAL__TOKEN", "masked-value")
+        .args(["send", "api", "whoami.http", "--env", "local"])
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(!text.contains("masked-value"), "{text}");
 }
 
 #[test]
@@ -673,9 +708,10 @@ fn export_then_import_round_trips_a_workspace() {
     mandalo(ws.path())
         .arg("export")
         .arg(&bundle)
+        .arg("--yes")
         .assert()
         .success()
-        .stdout(predicates::str::contains("workspace exported"));
+        .stdout(predicates::str::contains("exported 1 request"));
 
     let other = workspace();
     mandalo(other.path())
@@ -702,4 +738,105 @@ fn an_unknown_collection_fails_with_its_error_code() {
         .code(1)
         .stderr(predicates::str::contains("unknown collection: ghost"))
         .stderr(predicates::str::contains("E_NOT_FOUND"));
+}
+
+/// An import that half-creates a workspace leaves a directory every later command
+/// refuses to read, so it has to be refused before it writes anything.
+#[test]
+fn import_into_a_directory_that_is_not_a_workspace_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = dir.path().join("openapi.json");
+    std::fs::write(
+        &spec,
+        r#"{"openapi":"3.0.0","info":{"title":"T","version":"1"},"paths":{}}"#,
+    )
+    .unwrap();
+    let target = tempfile::tempdir().unwrap();
+
+    let assert = mandalo(target.path())
+        .args(["import", spec.to_str().unwrap()])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("is not a Mándalo workspace"), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(target.path()).unwrap().count(),
+        0,
+        "the refused import left files behind"
+    );
+}
+
+#[test]
+fn ls_on_a_directory_that_is_not_a_workspace_fails_loud() {
+    let dir = tempfile::tempdir().unwrap();
+    let assert = mandalo(dir.path()).arg("ls").assert().failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("is not a Mándalo workspace"), "{stderr}");
+    assert!(stderr.contains("mandalo init"), "{stderr}");
+    assert!(
+        String::from_utf8(assert.get_output().stdout.clone())
+            .unwrap()
+            .is_empty(),
+        "an empty project and a typo must not look the same"
+    );
+}
+
+#[test]
+fn init_creates_a_workspace_a_relative_path_can_then_address() {
+    let home = tempfile::tempdir().unwrap();
+    let mut init = Command::cargo_bin("mandalo").unwrap();
+    init.env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("NO_COLOR", "1")
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .args(["init", "ws-example", "--name", "Example"])
+        .assert()
+        .success();
+
+    assert!(
+        !home.path().join("Mandalo").exists(),
+        "init must not create a default workspace on the side"
+    );
+    let created = home.path().join("ws-example");
+    assert!(created.join("mandalo.toml").is_file());
+    assert!(created.join("collections").is_dir());
+    assert!(created.join("environments").is_dir());
+
+    let mut ls = Command::cargo_bin("mandalo").unwrap();
+    let assert = ls
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("NO_COLOR", "1")
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .args(["--workspace", "./ws-example", "ls"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("no collections yet"), "{stdout}");
+}
+
+#[test]
+fn scan_staged_outside_a_git_repository_says_so_in_one_line() {
+    let ws = workspace();
+    let assert = mandalo(ws.path())
+        .args(["scan", "--staged"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("not inside a git repository"), "{stderr}");
+    assert!(stderr.lines().count() <= 2, "{stderr}");
+}
+
+#[test]
+fn the_send_help_addresses_a_request_the_way_the_product_does() {
+    let ws = workspace();
+    let assert = mandalo(ws.path())
+        .args(["send", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("auth/login.http#0"), "{stdout}");
+    assert!(!stdout.contains(".toml"), "{stdout}");
 }

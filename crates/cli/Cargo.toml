@@ -11,7 +11,7 @@ name = "mandalo"
 path = "src/main.rs"
 
 [dependencies]
-mandalo-core = { workspace = true, features = ["keychain"] }
+mandalo-core = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
