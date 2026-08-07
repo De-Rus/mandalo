@@ -9,8 +9,8 @@ use crate::request::Auth;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
-use std::net::IpAddr;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
@@ -57,6 +57,9 @@ impl StreamKind {
 pub struct StreamLimits {
     pub max_message_bytes: usize,
     pub max_buffered_events: usize,
+    /// How much memory the parked events may hold. A count alone is not a
+    /// budget: a thousand slots of a megabyte each is a gigabyte.
+    pub max_buffered_bytes: usize,
     pub max_reconnect_attempts: u32,
     pub connect_timeout_ms: u64,
     /// No inbound traffic for this long ends the stream. `0` disables it.
@@ -70,6 +73,7 @@ impl Default for StreamLimits {
         StreamLimits {
             max_message_bytes: 1024 * 1024,
             max_buffered_events: 1024,
+            max_buffered_bytes: 8 * 1024 * 1024,
             max_reconnect_attempts: 5,
             connect_timeout_ms: 15_000,
             idle_timeout_ms: 300_000,
@@ -79,6 +83,14 @@ impl Default for StreamLimits {
     }
 }
 
+const MESSAGE_BYTES_CEILING: usize = 64 * 1024 * 1024;
+const BUFFERED_EVENTS_CEILING: usize = 65_536;
+const BUFFERED_BYTES_CEILING: usize = 256 * 1024 * 1024;
+const RECONNECT_ATTEMPTS_CEILING: u32 = 1_000;
+const CONNECT_TIMEOUT_CEILING_MS: u64 = 300_000;
+const IDLE_TIMEOUT_CEILING_MS: u64 = 24 * 60 * 60 * 1000;
+const BACKOFF_CEILING_MS: u64 = 600_000;
+
 impl StreamLimits {
     fn backoff(&self, attempt: u32) -> u64 {
         let shift = attempt.saturating_sub(1).min(16);
@@ -86,6 +98,27 @@ impl StreamLimits {
             .saturating_mul(1u64 << shift)
             .min(self.backoff_max_ms)
             .max(1)
+    }
+
+    /// Limits arrive straight off IPC, so every field is pulled back into a
+    /// range this process can actually honour before anything is sized by it.
+    pub fn sanitized(&self) -> StreamLimits {
+        let max_message_bytes = self.max_message_bytes.clamp(1, MESSAGE_BYTES_CEILING);
+        let backoff_base_ms = self.backoff_base_ms.clamp(1, BACKOFF_CEILING_MS);
+        StreamLimits {
+            max_message_bytes,
+            max_buffered_events: self.max_buffered_events.clamp(1, BUFFERED_EVENTS_CEILING),
+            max_buffered_bytes: self
+                .max_buffered_bytes
+                .clamp(max_message_bytes, BUFFERED_BYTES_CEILING),
+            max_reconnect_attempts: self.max_reconnect_attempts.min(RECONNECT_ATTEMPTS_CEILING),
+            connect_timeout_ms: self.connect_timeout_ms.clamp(1, CONNECT_TIMEOUT_CEILING_MS),
+            idle_timeout_ms: self.idle_timeout_ms.min(IDLE_TIMEOUT_CEILING_MS),
+            backoff_base_ms,
+            backoff_max_ms: self
+                .backoff_max_ms
+                .clamp(backoff_base_ms, BACKOFF_CEILING_MS),
+        }
     }
 }
 
@@ -204,6 +237,92 @@ impl StreamSpec {
             ..StreamSpec::default()
         }
     }
+}
+
+/// The connection a saved request describes, ready to open. Which options apply
+/// is decided by the request's kind, so the protocol is never written twice; the
+/// url, headers and auth travel from the request as they are, and the two
+/// headers the SSE transport owns are lifted out so they are not sent twice.
+pub fn spec_for(
+    request: &crate::collection::SavedRequest,
+    vars: BTreeMap<String, String>,
+) -> CoreResult<StreamSpec> {
+    let kind = crate::collection::stream_kind(&request.kind).ok_or_else(|| {
+        CoreError::Unsupported(format!(
+            "a {} request is not a stream — send it with `mandalo send` instead",
+            request.kind
+        ))
+    })?;
+    let stream = request.stream.clone().unwrap_or_default();
+    let mut headers = request.headers.clone();
+    let mut sse = SseOptions::default();
+    if kind == StreamKind::Sse {
+        headers.retain(|(k, v)| {
+            let owned_by_the_transport = k.eq_ignore_ascii_case("last-event-id")
+                || (k.eq_ignore_ascii_case("accept")
+                    && crate::http_format::accepts_event_stream(v));
+            !owned_by_the_transport
+        });
+        sse.last_event_id = stream.last_event_id.clone();
+        sse.auto_reconnect = stream.auto_reconnect.unwrap_or(true);
+    }
+    let defaults = MqttOptions::default();
+    Ok(StreamSpec {
+        kind,
+        url: request.url.clone(),
+        headers,
+        auth: request.auth.clone(),
+        vars,
+        limits: StreamLimits::default(),
+        ws: WsOptions {
+            subprotocols: stream.subprotocols.clone(),
+            auto_reconnect: stream.auto_reconnect.unwrap_or(false),
+            ping_interval_ms: stream.ping_interval_ms.unwrap_or(0),
+        },
+        sse,
+        mqtt: MqttOptions {
+            client_id: stream.client_id.clone(),
+            username: stream.username.clone(),
+            password: stream.password.clone(),
+            clean_session: stream.clean_session.unwrap_or(defaults.clean_session),
+            keep_alive_secs: stream.keep_alive_secs.unwrap_or(defaults.keep_alive_secs),
+            subscriptions: stream.subscriptions.clone(),
+            protocol_version: stream.protocol_version.unwrap_or_default(),
+        },
+    })
+}
+
+/// The named message a saved stream sends, with every `{{var}}` resolved — the
+/// topic included, because a topic that still holds a template publishes nowhere.
+pub fn outgoing_for(
+    stream: &crate::collection::SavedStream,
+    name: &str,
+    vars: &BTreeMap<String, String>,
+) -> CoreResult<Outgoing> {
+    let saved = stream.message(name)?;
+    let apply = |value: &str| interpolate::apply(value, vars);
+    Ok(match &saved.message {
+        Outgoing::Text { text } => Outgoing::text(apply(text)?),
+        Outgoing::Publish {
+            topic,
+            payload,
+            qos,
+            retain,
+        } => Outgoing::Publish {
+            topic: apply(topic)?,
+            payload: apply(payload)?,
+            qos: *qos,
+            retain: *retain,
+        },
+        Outgoing::Subscribe { topic, qos } => Outgoing::Subscribe {
+            topic: apply(topic)?,
+            qos: *qos,
+        },
+        Outgoing::Unsubscribe { topic } => Outgoing::Unsubscribe {
+            topic: apply(topic)?,
+        },
+        other => other.clone(),
+    })
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -423,16 +542,100 @@ pub(crate) enum Command {
 /// `Dropped` event instead of unbounded memory or a stalled reader.
 pub(crate) struct Emitter {
     tx: mpsc::Sender<StreamEvent>,
+    parked: VecDeque<usize>,
+    parked_bytes: usize,
+    budget: usize,
     dropped: u64,
     alive: bool,
 }
 
+/// What one event costs the buffer: the strings it owns plus the fixed weight of
+/// the enum itself, so a flood of tiny events is bounded too.
+fn event_bytes(event: &StreamEvent) -> usize {
+    const BASE: usize = 128;
+    let owned = match event {
+        StreamEvent::Connecting { url, .. } => url.len(),
+        StreamEvent::Connected { info, .. } => {
+            info.url.len()
+                + info.protocol.as_ref().map(String::len).unwrap_or_default()
+                + info
+                    .headers
+                    .iter()
+                    .map(|(k, v)| k.len() + v.len())
+                    .sum::<usize>()
+        }
+        StreamEvent::Message { payload, meta, .. } => {
+            let body = match payload {
+                Payload::Text { text } => text.len(),
+                Payload::Binary { base64, .. } => base64.len(),
+            };
+            body + meta.event.as_ref().map(String::len).unwrap_or_default()
+                + meta.id.as_ref().map(String::len).unwrap_or_default()
+                + meta.topic.as_ref().map(String::len).unwrap_or_default()
+                + meta.frame.as_ref().map(String::len).unwrap_or_default()
+        }
+        StreamEvent::Reconnecting { reason, .. } => reason.len(),
+        StreamEvent::Dropped { reason, .. } => reason.len(),
+        StreamEvent::Disconnected { reason, .. } => reason.len(),
+        StreamEvent::Error { message, code, .. } => message.len() + code.len(),
+    };
+    BASE + owned
+}
+
 impl Emitter {
-    fn new(tx: mpsc::Sender<StreamEvent>) -> Self {
+    fn new(tx: mpsc::Sender<StreamEvent>, budget: usize) -> Self {
         Emitter {
             tx,
+            parked: VecDeque::new(),
+            parked_bytes: 0,
+            budget: budget.max(1),
             dropped: 0,
             alive: true,
+        }
+    }
+
+    /// The channel is FIFO, so the number of events still in it says how many of
+    /// the sizes recorded here have already been read and can stop counting.
+    fn settle(&mut self) {
+        let still_in = self
+            .tx
+            .max_capacity()
+            .saturating_sub(self.tx.capacity())
+            .min(self.parked.len());
+        while self.parked.len() > still_in {
+            let size = self.parked.pop_front().unwrap_or_default();
+            self.parked_bytes = self.parked_bytes.saturating_sub(size);
+        }
+    }
+
+    fn record(&mut self, size: usize) {
+        self.parked.push_back(size);
+        self.parked_bytes += size;
+    }
+
+    /// The drop notice is the only thing that makes a bounded buffer honest, so
+    /// it goes out even when the budget is spent.
+    fn report_drops(&mut self) -> bool {
+        if self.dropped == 0 {
+            return true;
+        }
+        let notice = StreamEvent::Dropped {
+            at: now_millis(),
+            count: self.dropped,
+            reason: "the event buffer was full".to_string(),
+        };
+        let size = event_bytes(&notice);
+        match self.tx.try_send(notice) {
+            Ok(()) => {
+                self.dropped = 0;
+                self.record(size);
+                true
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => true,
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.alive = false;
+                false
+            }
         }
     }
 
@@ -442,23 +645,20 @@ impl Emitter {
         if !self.alive {
             return false;
         }
-        if self.dropped > 0 {
-            let notice = StreamEvent::Dropped {
-                at: now_millis(),
-                count: self.dropped,
-                reason: "the event buffer was full".to_string(),
-            };
-            match self.tx.try_send(notice) {
-                Ok(()) => self.dropped = 0,
-                Err(mpsc::error::TrySendError::Full(_)) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    self.alive = false;
-                    return false;
-                }
-            }
+        self.settle();
+        if !self.report_drops() {
+            return false;
+        }
+        let size = event_bytes(&event);
+        if self.parked_bytes + size > self.budget {
+            self.dropped += 1;
+            return true;
         }
         match self.tx.try_send(event) {
-            Ok(()) => true,
+            Ok(()) => {
+                self.record(size);
+                true
+            }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.dropped += 1;
                 true
@@ -473,14 +673,17 @@ impl Emitter {
     pub(crate) fn connecting(&mut self, url: &str) -> bool {
         self.emit(StreamEvent::Connecting {
             at: now_millis(),
-            url: url.to_string(),
+            url: crate::redact::scrub(url),
         })
     }
 
     pub(crate) fn connected(&mut self, info: ConnectionInfo) -> bool {
         self.emit(StreamEvent::Connected {
             at: now_millis(),
-            info,
+            info: ConnectionInfo {
+                url: crate::redact::scrub(&info.url),
+                ..info
+            },
         })
     }
 
@@ -518,8 +721,12 @@ impl Emitter {
     /// A consumer that stops reading must not pin this task forever, so waiting
     /// for room to report the close is bounded.
     async fn send_final(&mut self, event: StreamEvent) -> bool {
+        let size = event_bytes(&event);
         match tokio::time::timeout(FINAL_EVENT_WAIT, self.tx.send(event)).await {
-            Ok(Ok(())) => true,
+            Ok(Ok(())) => {
+                self.record(size);
+                true
+            }
             Ok(Err(_)) | Err(_) => {
                 self.alive = false;
                 false
@@ -592,7 +799,7 @@ impl StreamHandle {
         StreamStatus {
             id: self.id.clone(),
             kind: self.kind,
-            url: self.url.clone(),
+            url: crate::redact::scrub(&self.url),
             open: self.is_open(),
         }
     }
@@ -653,17 +860,22 @@ impl StreamRegistry {
         StreamRegistry::default()
     }
 
+    /// Only `close` takes a stream out by name, so a server that hangs up would
+    /// otherwise leave its entry here for the life of the app.
+    fn live(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<StreamHandle>>> {
+        let mut streams = self.streams.lock().expect("stream registry lock");
+        streams.retain(|_, handle| handle.is_open());
+        streams
+    }
+
     pub fn insert(&self, handle: StreamHandle) -> String {
         let id = handle.id.clone();
-        self.streams
-            .lock()
-            .expect("stream registry lock")
-            .insert(id.clone(), Arc::new(handle));
+        self.live().insert(id.clone(), Arc::new(handle));
         id
     }
 
     pub fn len(&self) -> usize {
-        self.streams.lock().expect("stream registry lock").len()
+        self.live().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -671,18 +883,11 @@ impl StreamRegistry {
     }
 
     pub fn ids(&self) -> Vec<String> {
-        self.streams
-            .lock()
-            .expect("stream registry lock")
-            .keys()
-            .cloned()
-            .collect()
+        self.live().keys().cloned().collect()
     }
 
     fn get(&self, id: &str) -> CoreResult<Arc<StreamHandle>> {
-        self.streams
-            .lock()
-            .expect("stream registry lock")
+        self.live()
             .get(id)
             .cloned()
             .ok_or_else(|| CoreError::NotFound(format!("there is no open stream {id}")))
@@ -719,11 +924,45 @@ impl StreamRegistry {
 
 /// The url, headers, auth and protocol options with every `{{var}}` already
 /// resolved. Nothing downstream of this ever sees a template.
-#[derive(Debug)]
 pub(crate) struct Resolved {
     pub(crate) url: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) limits: StreamLimits,
+    pub(crate) policy: Arc<dyn HostPolicy>,
+}
+
+impl Resolved {
+    /// Every connect attempt asks again: the answer can change between the
+    /// first socket and the tenth, and a reconnect is a fresh egress.
+    pub(crate) async fn guard(&self, url: &str) -> CoreResult<Vec<SocketAddr>> {
+        let approved = guard_host(self.policy.as_ref(), url).await?;
+        Ok(sockets(url, &approved))
+    }
+}
+
+/// The addresses the policy approved, paired with the port to connect to. An
+/// empty list means the policy does not enforce and nothing needs pinning.
+fn sockets(url: &str, approved: &[IpAddr]) -> Vec<SocketAddr> {
+    let port = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.port().or_else(|| default_port(u.scheme())))
+        .unwrap_or(443);
+    approved
+        .iter()
+        .map(|ip| SocketAddr::new(*ip, port))
+        .collect()
+}
+
+/// The authority a redirect must keep for the request headers to travel with it.
+pub(crate) fn authority(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port().or_else(|| default_port(parsed.scheme()));
+    Some(format!(
+        "{}://{host}:{}",
+        parsed.scheme(),
+        port.unwrap_or_default()
+    ))
 }
 
 pub(crate) fn scheme_of(url: &str) -> CoreResult<String> {
@@ -755,7 +994,7 @@ pub(crate) fn apply_auth(auth: &Auth, vars: &BTreeMap<String, String>) -> CoreRe
         headers: Vec::new(),
         query: Vec::new(),
     };
-    match auth {
+    match auth.effective() {
         Auth::None => {}
         Auth::Bearer { token } => applied.headers.push((
             "Authorization".to_string(),
@@ -786,11 +1025,12 @@ pub(crate) fn apply_auth(auth: &Auth, vars: &BTreeMap<String, String>) -> CoreRe
                 }
             }
         }
+        Auth::Inherited { .. } => unreachable!("effective() peels the wrapper off"),
     }
     Ok(applied)
 }
 
-fn resolve(spec: &StreamSpec) -> CoreResult<Resolved> {
+fn resolve(spec: &StreamSpec, policy: Arc<dyn HostPolicy>) -> CoreResult<Resolved> {
     let vars = &spec.vars;
     let mut url = interpolate::apply(&spec.url, vars)?;
     let mut headers = resolve_pairs(&spec.headers, vars)?;
@@ -817,15 +1057,16 @@ fn resolve(spec: &StreamSpec) -> CoreResult<Resolved> {
     Ok(Resolved {
         url,
         headers,
-        limits: spec.limits,
+        limits: spec.limits.sanitized(),
+        policy,
     })
 }
 
 /// The same rule an HTTP request obeys: a realtime connection is egress too, so
 /// the policy decides before a socket is opened, not after.
-pub async fn guard_host(policy: &dyn HostPolicy, url: &str) -> CoreResult<()> {
+pub async fn guard_host(policy: &dyn HostPolicy, url: &str) -> CoreResult<Vec<IpAddr>> {
     if !policy.enforces() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| CoreError::Stream(format!("invalid url {url:?}: {e}")))?;
@@ -849,8 +1090,8 @@ pub async fn guard_host(policy: &dyn HostPolicy, url: &str) -> CoreResult<()> {
     if addresses.is_empty() {
         return Err(CoreError::Network(format!("{host} resolved to no address")));
     }
-    for ip in addresses {
-        match policy.allow(&host, &ip) {
+    for ip in &addresses {
+        match policy.allow(&host, ip) {
             Decision::Allow => {}
             Decision::Deny(reason) => {
                 return Err(CoreError::HostDenied(format!(
@@ -864,7 +1105,33 @@ pub async fn guard_host(policy: &dyn HostPolicy, url: &str) -> CoreResult<()> {
             }
         }
     }
-    Ok(())
+    Ok(addresses)
+}
+
+pub(crate) enum Waited {
+    Elapsed,
+    Closed,
+}
+
+/// A reconnect delay that ignores the command channel is a stream that keeps
+/// running after the user closed it, so the wait listens while it waits.
+pub(crate) async fn wait_before_reconnect(
+    delay_ms: u64,
+    commands: &mut mpsc::Receiver<Command>,
+    cannot_send: &str,
+) -> Waited {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(delay_ms);
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => return Waited::Elapsed,
+            command = commands.recv() => match command {
+                None | Some(Command::Close) => return Waited::Closed,
+                Some(Command::Send(_, reply)) => {
+                    let _ = reply.send(Err(CoreError::Stream(cannot_send.to_string())));
+                }
+            },
+        }
+    }
 }
 
 /// `0` means "no limit", which still has to be a real duration: a sentinel near
@@ -891,17 +1158,7 @@ pub(crate) fn default_port(scheme: &str) -> Option<u16> {
 pub fn event_channel(
     limits: &StreamLimits,
 ) -> (mpsc::Sender<StreamEvent>, mpsc::Receiver<StreamEvent>) {
-    mpsc::channel(limits.max_buffered_events.max(1))
-}
-
-/// rustls is in this build twice over (reqwest, tungstenite, rumqttc), so the
-/// provider is pinned once instead of letting the first TLS handshake panic on
-/// an ambiguous choice.
-fn ensure_crypto_provider() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
+    mpsc::channel(limits.sanitized().max_buffered_events)
 }
 
 pub async fn open(
@@ -909,8 +1166,8 @@ pub async fn open(
     policy: Arc<dyn HostPolicy>,
     events: mpsc::Sender<StreamEvent>,
 ) -> CoreResult<StreamHandle> {
-    ensure_crypto_provider();
-    let resolved = resolve(&spec)?;
+    crate::install_crypto_provider();
+    let resolved = resolve(&spec, policy.clone())?;
     let scheme = scheme_of(&resolved.url)?;
     match spec.kind {
         StreamKind::WebSocket if !matches!(scheme.as_str(), "ws" | "wss") => {
@@ -935,8 +1192,8 @@ pub async fn open(
 
     let id = uuid::Uuid::new_v4().to_string();
     let (commands, command_rx) = mpsc::channel(32);
-    let emitter = Emitter::new(events);
-    let url = resolved.url.clone();
+    let emitter = Emitter::new(events, resolved.limits.max_buffered_bytes);
+    let url = crate::redact::scrub(&resolved.url);
 
     let task = match spec.kind {
         StreamKind::WebSocket => {
@@ -1142,7 +1399,7 @@ mod tests {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let resolved = resolve(&spec).unwrap();
+        let resolved = resolve(&spec, Arc::new(crate::AllowAll)).unwrap();
         assert_eq!(resolved.url, "wss://x.dev/socket?api_key=trace");
         assert_eq!(
             resolved.headers,
@@ -1153,7 +1410,9 @@ mod tests {
     #[test]
     fn an_unresolved_variable_fails_before_anything_connects() {
         let spec = StreamSpec::new(StreamKind::WebSocket, "wss://{{host}}/socket");
-        let err = resolve(&spec).unwrap_err();
+        let err = resolve(&spec, Arc::new(crate::AllowAll))
+            .err()
+            .expect("an unresolved variable must fail");
         assert_eq!(err.code(), "E_UNRESOLVED_VAR");
     }
 
@@ -1164,7 +1423,7 @@ mod tests {
         spec.auth = Auth::Bearer {
             token: "fresh".to_string(),
         };
-        let resolved = resolve(&spec).unwrap();
+        let resolved = resolve(&spec, Arc::new(crate::AllowAll)).unwrap();
         assert_eq!(
             resolved.headers,
             vec![("Authorization".to_string(), "Bearer fresh".to_string())]
@@ -1189,7 +1448,7 @@ mod tests {
     #[tokio::test]
     async fn the_emitter_reports_what_it_had_to_drop() {
         let (tx, mut rx) = mpsc::channel(2);
-        let mut emitter = Emitter::new(tx);
+        let mut emitter = Emitter::new(tx, usize::MAX);
         for i in 0..6 {
             emitter.message(
                 Direction::Incoming,
@@ -1222,8 +1481,143 @@ mod tests {
     #[tokio::test]
     async fn the_emitter_stops_when_the_consumer_is_gone() {
         let (tx, rx) = mpsc::channel(4);
-        let mut emitter = Emitter::new(tx);
+        let mut emitter = Emitter::new(tx, usize::MAX);
         drop(rx);
         assert!(!emitter.connecting("wss://x.dev"));
+    }
+
+    #[tokio::test]
+    async fn a_slot_count_is_not_a_memory_budget_so_bytes_are_capped_too() {
+        let budget = 4 * 1024 * 1024;
+        let (tx, mut rx) = mpsc::channel(1024);
+        let mut emitter = Emitter::new(tx, budget);
+        let payload = "x".repeat(1024 * 1024);
+        for _ in 0..32 {
+            emitter.message(
+                Direction::Incoming,
+                Payload::text(payload.clone()),
+                MessageMeta::default(),
+            );
+        }
+        emitter.disconnected(None, "done").await;
+
+        let mut parked = 0usize;
+        let mut dropped = 0u64;
+        let mut delivered = 0u64;
+        while let Ok(event) = rx.try_recv() {
+            parked += event_bytes(&event);
+            match event {
+                StreamEvent::Dropped { count, .. } => dropped += count,
+                StreamEvent::Message { .. } => delivered += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(delivered, 3, "a 4 MiB budget holds three 1 MiB messages");
+        assert_eq!(
+            dropped, 29,
+            "every message it could not hold must be counted"
+        );
+        assert!(
+            parked <= budget,
+            "{parked} bytes were parked, over the {budget} byte budget"
+        );
+    }
+
+    #[test]
+    fn hostile_limits_are_pulled_back_into_range_instead_of_panicking() {
+        let limits: StreamLimits = serde_json::from_value(serde_json::json!({
+            "maxMessageBytes": usize::MAX,
+            "maxBufferedEvents": usize::MAX,
+            "maxBufferedBytes": usize::MAX,
+            "maxReconnectAttempts": u32::MAX,
+            "connectTimeoutMs": u64::MAX,
+            "idleTimeoutMs": u64::MAX,
+            "backoffBaseMs": u64::MAX,
+            "backoffMaxMs": 0,
+        }))
+        .unwrap();
+        let safe = limits.sanitized();
+        assert_eq!(safe.max_message_bytes, MESSAGE_BYTES_CEILING);
+        assert_eq!(safe.max_buffered_events, BUFFERED_EVENTS_CEILING);
+        assert_eq!(safe.max_buffered_bytes, BUFFERED_BYTES_CEILING);
+        assert_eq!(safe.max_reconnect_attempts, RECONNECT_ATTEMPTS_CEILING);
+        assert_eq!(safe.connect_timeout_ms, CONNECT_TIMEOUT_CEILING_MS);
+        assert_eq!(safe.idle_timeout_ms, IDLE_TIMEOUT_CEILING_MS);
+        assert_eq!(safe.backoff_base_ms, BACKOFF_CEILING_MS);
+        assert!(safe.backoff_max_ms >= safe.backoff_base_ms);
+
+        let (tx, _rx) = event_channel(&limits);
+        assert_eq!(tx.max_capacity(), BUFFERED_EVENTS_CEILING);
+
+        let zeroed = StreamLimits {
+            max_message_bytes: 0,
+            max_buffered_events: 0,
+            max_buffered_bytes: 0,
+            connect_timeout_ms: 0,
+            backoff_base_ms: 0,
+            ..StreamLimits::default()
+        }
+        .sanitized();
+        assert_eq!(zeroed.max_buffered_events, 1);
+        assert_eq!(zeroed.max_message_bytes, 1);
+        assert!(zeroed.max_buffered_bytes >= zeroed.max_message_bytes);
+        assert_eq!(zeroed.connect_timeout_ms, 1);
+        assert_eq!(zeroed.backoff_base_ms, 1);
+    }
+
+    #[tokio::test]
+    async fn a_url_with_a_secret_in_it_is_redacted_everywhere_it_is_shown() {
+        crate::redact::register("test", "stream_key", "sup3rs3cr3tvalue");
+        let url = "wss://x.dev/socket?api_key=sup3rs3cr3tvalue";
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut emitter = Emitter::new(tx, usize::MAX);
+        emitter.connecting(url);
+        emitter.connected(ConnectionInfo {
+            url: url.to_string(),
+            ..ConnectionInfo::default()
+        });
+
+        let shown = match rx.try_recv().unwrap() {
+            StreamEvent::Connecting { url, .. } => url,
+            other => panic!("expected connecting, got {other:?}"),
+        };
+        assert!(!shown.contains("sup3rs3cr3tvalue"), "{shown}");
+        let shown = match rx.try_recv().unwrap() {
+            StreamEvent::Connected { info, .. } => info.url,
+            other => panic!("expected connected, got {other:?}"),
+        };
+        assert!(!shown.contains("sup3rs3cr3tvalue"), "{shown}");
+
+        let handle = StreamHandle {
+            id: "s1".to_string(),
+            kind: StreamKind::WebSocket,
+            url: url.to_string(),
+            commands: mpsc::channel(1).0,
+            task: Mutex::new(None),
+        };
+        assert!(
+            !handle.status().url.contains("sup3rs3cr3tvalue"),
+            "{}",
+            handle.status().url
+        );
+    }
+
+    #[tokio::test]
+    async fn the_registry_forgets_a_stream_the_server_ended() {
+        let registry = StreamRegistry::new();
+        let task = tokio::spawn(async {});
+        let id = registry.insert(StreamHandle {
+            id: "gone".to_string(),
+            kind: StreamKind::Sse,
+            url: "https://x.dev/events".to_string(),
+            commands: mpsc::channel(1).0,
+            task: Mutex::new(Some(task)),
+        });
+        while registry.get(&id).map(|h| h.is_open()).unwrap_or_default() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(registry.len(), 0);
+        assert!(registry.ids().is_empty());
+        assert_eq!(registry.status(&id).unwrap_err().code(), "E_NOT_FOUND");
     }
 }

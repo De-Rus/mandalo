@@ -397,3 +397,140 @@ fn a_request_toml_left_in_a_collection_is_reported_not_silently_ignored() {
         "E_UNSUPPORTED"
     );
 }
+
+/// The two form-data spellings are one format: the readable one Mándalo writes and
+/// the literal one an import brings must reach the server as the same parts.
+#[tokio::test]
+async fn both_form_data_spellings_put_the_same_parts_on_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    let slug = workspace(ws);
+    let api = MockApi::start().await;
+    std::fs::create_dir_all(ws.join("files")).unwrap();
+    for (name, body) in [("a.txt", "alpha"), ("b.txt", "beta"), ("c.txt", "gamma")] {
+        std::fs::write(ws.join("files").join(name), body).unwrap();
+    }
+
+    let url = api.url("/body/multipart");
+    write(
+        ws,
+        &slug,
+        "readable.http",
+        &format!(
+            "@dir = files
+
+### Readable
+POST {url}
+Content-Type: multipart/form-data
+
+caption = two attachments, one field
+attachments = < ./files/a.txt < ./files/b.txt < ./{{{{dir}}}}/c.txt
+avatar = < ./files/a.txt; type=image/png
+"
+        ),
+    );
+    write(
+        ws,
+        &slug,
+        "literal.http",
+        &format!(
+            "### Literal
+POST {url}
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name=\"caption\"
+
+two attachments, one field
+--WebAppBoundary
+Content-Disposition: form-data; name=\"attachments\"; filename=\"a.txt\"
+
+< files/a.txt
+--WebAppBoundary
+Content-Disposition: form-data; name=\"attachments\"; filename=\"b.txt\"
+
+< files/b.txt
+--WebAppBoundary
+Content-Disposition: form-data; name=\"attachments\"; filename=\"c.txt\"
+
+< files/c.txt
+--WebAppBoundary
+Content-Disposition: form-data; name=\"avatar\"; filename=\"a.txt\"
+Content-Type: image/png
+
+< files/a.txt
+--WebAppBoundary--
+"
+        ),
+    );
+
+    let readable = collection::load_request(ws, &slug, "readable.http#0").unwrap();
+    let literal = collection::load_request(ws, &slug, "literal.http#0").unwrap();
+    assert_eq!(readable.body, literal.body, "one model, two spellings");
+
+    let mut echoes = Vec::new();
+    for request in [&readable, &literal] {
+        let step = runner()
+            .run_one(ws, request, None)
+            .await
+            .expect("the request reached the mock");
+        let body = step.response.expect("a response").body;
+        echoes.push(serde_json::from_str::<serde_json::Value>(&body).expect("a JSON echo"));
+    }
+    // Every part, in order, byte for byte. Only the boundary differs, and it is the
+    // HTTP client that mints it, per request.
+    assert_eq!(echoes[0]["parts"], echoes[1]["parts"]);
+    assert_eq!(echoes[0]["count"], echoes[1]["count"]);
+
+    let echo = &echoes[0];
+    assert_eq!(echo["count"], 5);
+    let names: Vec<&str> = echo["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "caption",
+            "attachments",
+            "attachments",
+            "attachments",
+            "avatar"
+        ],
+        "three files on one field arrive as three parts sharing the name, in order"
+    );
+    assert_eq!(echo["parts"][0]["text"], "two attachments, one field");
+    assert_eq!(echo["parts"][1]["filename"], "a.txt");
+    assert_eq!(echo["parts"][2]["text"], "beta");
+    assert_eq!(echo["parts"][3]["text"], "gamma");
+    assert_eq!(echo["parts"][4]["contentType"], "image/png");
+}
+
+#[tokio::test]
+async fn a_form_data_path_outside_the_workspace_is_refused_before_anything_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    let slug = workspace(ws);
+    let api = MockApi::start().await;
+
+    write(
+        ws,
+        &slug,
+        "leak.http",
+        &format!(
+            "### Leak
+POST {}
+Content-Type: multipart/form-data
+
+secret = < ../../../etc/passwd
+",
+            api.url("/body/multipart")
+        ),
+    );
+
+    let error = collection::load_request(ws, &slug, "leak.http#0").unwrap_err();
+    assert_eq!(error.code(), "E_PATH_ESCAPE");
+    assert!(api.received_requests().is_empty());
+}

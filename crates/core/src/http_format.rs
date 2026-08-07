@@ -1,6 +1,7 @@
 use crate::assertions::Scripts;
-use crate::body::{Body, RawLanguage};
+use crate::body::{Body, FormDataRow, RawLanguage};
 use crate::collection::SavedRequest;
+use crate::collection::SavedStream;
 use crate::error::{CoreError, CoreResult};
 use crate::request::Auth;
 use crate::text_format::{self as text, Line, Segment};
@@ -17,6 +18,44 @@ const VERSIONS: [&str; 5] = ["HTTP/1.1", "HTTP/1.0", "HTTP/2.0", "HTTP/2", "HTTP
 /// REST Client's own marker for a GraphQL request. It is consumed on the way out —
 /// the header exists to tell the client what the body means, not the server.
 const GRAPHQL_MARKER: &str = "X-REQUEST-TYPE";
+
+/// `# @auth inherited` marks the Authorization line below it as a collection-wide
+/// default the request did not ask for — see [`Auth::Inherited`].
+const INHERITED: &str = "inherited";
+
+/// What makes an HTTP request a server-sent-events stream. There is no marker to
+/// invent: this is the header the browser sends and the header the server keys
+/// off, so a request that carries it *is* an SSE request.
+pub const SSE_MEDIA_TYPE: &str = "text/event-stream";
+
+/// `# @reconnect off` turns off the automatic resume an SSE stream does by
+/// default. It is a directive rather than a header because there is no header
+/// for it — inventing one would put a made-up name on the wire.
+const RECONNECT: &str = "reconnect";
+
+/// The header a browser sends to resume an interrupted stream. It is a real
+/// header, so it is written as one — and lifted into the model, because the
+/// transport carries it forward across reconnects and would otherwise send it
+/// twice.
+const LAST_EVENT_ID: &str = "Last-Event-ID";
+
+/// An `Accept` value names `text/event-stream` when any of its media types is
+/// that one, `;q=` parameters and all.
+pub fn accepts_event_stream(value: &str) -> bool {
+    value.split(',').any(|part| {
+        part.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case(SSE_MEDIA_TYPE)
+    })
+}
+
+fn is_event_stream(headers: &[(String, String)]) -> bool {
+    headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("accept") && accepts_event_stream(v))
+}
 
 pub fn is_http_file(name: &str) -> bool {
     name.rsplit_once('.')
@@ -51,6 +90,8 @@ struct BlockSpans {
     headers_end: usize,
     body: Option<Range<usize>>,
     body_file: Option<String>,
+    formdata: Option<Vec<FormDataRow>>,
+    boundary: Option<String>,
     pre: Option<Range<usize>>,
     pre_outer: Option<Range<usize>>,
     post: Option<Range<usize>>,
@@ -59,6 +100,11 @@ struct BlockSpans {
     kind: String,
     marker_at: Option<usize>,
     auth_at: Option<usize>,
+    event_id_at: Option<usize>,
+    inherited_auth: bool,
+    inherited_span: Option<Range<usize>>,
+    auto_reconnect: bool,
+    reconnect_span: Option<Range<usize>>,
 }
 
 #[derive(Debug)]
@@ -112,7 +158,7 @@ fn auth_from_header(value: &str) -> Option<Auth> {
 }
 
 fn auth_header(auth: &Auth) -> CoreResult<Option<(String, String)>> {
-    Ok(match auth {
+    Ok(match auth.effective() {
         Auth::None => None,
         Auth::Bearer { token } => Some(("Authorization".to_string(), format!("Bearer {token}"))),
         Auth::Basic { username, password } => {
@@ -138,6 +184,7 @@ fn auth_header(auth: &Auth) -> CoreResult<Option<(String, String)>> {
                 )))
             }
         },
+        Auth::Inherited { .. } => unreachable!("effective() peels the wrapper off"),
     })
 }
 
@@ -180,6 +227,10 @@ struct Preamble {
     named: Option<String>,
     pre: Option<Range<usize>>,
     pre_outer: Option<Range<usize>>,
+    inherited_auth: bool,
+    inherited_span: Option<Range<usize>>,
+    auto_reconnect: bool,
+    reconnect_span: Option<Range<usize>>,
     consumed: usize,
 }
 
@@ -189,6 +240,10 @@ fn read_preamble(source: &str, lines: &[Line<'_>]) -> CoreResult<Preamble> {
         named: None,
         pre: None,
         pre_outer: None,
+        inherited_auth: false,
+        inherited_span: None,
+        auto_reconnect: true,
+        reconnect_span: None,
         consumed: 0,
     };
     let mut index = 0usize;
@@ -205,15 +260,44 @@ fn read_preamble(source: &str, lines: &[Line<'_>]) -> CoreResult<Preamble> {
                 let (key, rest) = directive
                     .split_once(char::is_whitespace)
                     .unwrap_or((directive, ""));
+                let value = rest.trim();
+                if key.eq_ignore_ascii_case("auth") {
+                    if !value.eq_ignore_ascii_case(INHERITED) {
+                        return Err(text::parse_err(
+                            line.number,
+                            format_args!(
+                                "`@auth` only takes `{INHERITED}` — write the auth itself as an Authorization header"
+                            ),
+                        ));
+                    }
+                    out.inherited_auth = true;
+                    out.inherited_span = Some(line.start..line.end);
+                    index += 1;
+                    continue;
+                }
+                if key.eq_ignore_ascii_case(RECONNECT) {
+                    out.auto_reconnect = match value.to_ascii_lowercase().as_str() {
+                        "on" | "" => true,
+                        "off" => false,
+                        other => {
+                            return Err(text::parse_err(
+                                line.number,
+                                format_args!("`@{RECONNECT}` is on or off, not {other:?}"),
+                            ))
+                        }
+                    };
+                    out.reconnect_span = Some(line.start..line.end);
+                    index += 1;
+                    continue;
+                }
                 if !key.eq_ignore_ascii_case("name") {
                     return Err(text::unsupported(
                         line.number,
                         format_args!(
-                            "Mándalo does not support the `@{key}` directive — a .http file it writes carries no directives beyond `@name`"
+                            "Mándalo does not support the `@{key}` directive — a .http file it writes carries no directives beyond `@name`, `@auth` and `@{RECONNECT}`"
                         ),
                     ));
                 }
-                let value = rest.trim();
                 if value.is_empty() {
                     return Err(text::parse_err(line.number, "`@name` needs a name"));
                 }
@@ -265,6 +349,9 @@ fn read_request_line(source: &str, lines: &[Line<'_>], index: usize) -> CoreResu
     let mut method_span = None;
     let mut rest = body;
 
+    if METHODS.contains(&body.to_ascii_uppercase().as_str()) {
+        return Err(text::parse_err(line.number, "this request line has no URL"));
+    }
     if let Some((first, tail)) = body.split_once(char::is_whitespace) {
         let upper = first.to_ascii_uppercase();
         if METHODS.contains(&upper.as_str()) {
@@ -364,12 +451,11 @@ fn read_headers(
             ));
         }
         let after = &raw[colon + 1..];
-        let value_lead = after.len() - after.trim_start().len();
-        let value_start = line.start + colon + 1 + value_lead;
-        let value_end = line.start + colon + 1 + after.trim_end().len();
+        let value = after.trim();
+        let value_start = line.start + colon + 1 + (after.len() - after.trim_start().len());
         headers.push(HeaderSpan {
             name: line.start + lead..line.start + lead + name.len(),
-            value: value_start..value_end.max(value_start),
+            value: value_start..value_start + value.len(),
             line: line.start..line.end,
         });
         end = line.end;
@@ -447,6 +533,463 @@ fn read_tail(
     Ok(out)
 }
 
+fn header_param(value: &str, name: &str) -> Option<String> {
+    for part in value.split(';').skip(1) {
+        let part = part.trim();
+        let (key, raw) = part.split_once('=')?;
+        if key.trim().eq_ignore_ascii_case(name) {
+            return Some(raw.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn is_multipart_formdata(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .eq_ignore_ascii_case("multipart/form-data")
+}
+
+/// Which of the two form-data spellings a body is written in, decided by its own
+/// first line: a boundary delimiter opens the literal wire format, anything else
+/// is the field-per-line form Mándalo writes.
+fn is_literal_multipart(body: &str) -> bool {
+    body.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with("--"))
+}
+
+fn multipart_file_ref(content: &str) -> Option<&str> {
+    let trimmed = content.trim_start();
+    trimmed
+        .strip_prefix('<')
+        .filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+}
+
+/// Repeated `name = < path` lines (or multipart parts with the same name) are
+/// one field holding several files — fold them so the editor shows one key.
+fn push_form_row(rows: &mut Vec<FormDataRow>, row: FormDataRow) {
+    if row.is_file() {
+        if let Some(last) = rows.last_mut() {
+            if last.is_file()
+                && last.key == row.key
+                && last.content_type == row.content_type
+                && last.enabled == row.enabled
+            {
+                last.files.extend(row.files);
+                return;
+            }
+        }
+    }
+    rows.push(row);
+}
+
+fn parse_multipart(body: &str, boundary: &str, first_line: usize) -> CoreResult<Vec<FormDataRow>> {
+    let delimiter = format!("--{boundary}");
+    let closing = format!("--{boundary}--");
+    let unclosed = |line: usize| {
+        text::parse_err(
+            line,
+            format!("this multipart body is never closed with `{closing}`"),
+        )
+    };
+    let lines: Vec<&str> = body.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let at = |index: usize| first_line + index;
+    let mut rows = Vec::new();
+    let mut index = 0;
+    while index < lines.len() && lines[index].trim() != delimiter {
+        if !lines[index].trim().is_empty() {
+            return Err(text::parse_err(
+                at(index),
+                format!("a multipart body starts at its first `{delimiter}` line — nothing may come before it"),
+            ));
+        }
+        index += 1;
+    }
+    if index == lines.len() {
+        return Err(text::parse_err(
+            first_line,
+            format!("this multipart body has no `{delimiter}` part"),
+        ));
+    }
+    while index < lines.len() {
+        let part_line = at(index);
+        index += 1;
+        let mut name = None;
+        let mut filename = None;
+        let mut content_type = None;
+        loop {
+            let Some(line) = lines.get(index) else {
+                return Err(unclosed(part_line));
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                index += 1;
+                break;
+            }
+            if trimmed == delimiter || trimmed == closing {
+                return Err(text::parse_err(
+                    at(index),
+                    "a part's headers end with a blank line before its content — add one before this boundary",
+                ));
+            }
+            let Some((key, value)) = trimmed.split_once(':') else {
+                return Err(text::parse_err(
+                    at(index),
+                    "a part header reads `Name: value`",
+                ));
+            };
+            let (key, value) = (key.trim(), value.trim());
+            if key.eq_ignore_ascii_case("content-disposition") {
+                if !value.to_ascii_lowercase().starts_with("form-data") {
+                    return Err(text::unsupported(
+                        at(index),
+                        format!("a form part's disposition is `form-data`, not {value:?}"),
+                    ));
+                }
+                name = header_param(value, "name");
+                filename = header_param(value, "filename");
+            } else if key.eq_ignore_ascii_case("content-type") {
+                content_type = Some(value.to_string());
+            } else {
+                return Err(text::unsupported(
+                    at(index),
+                    format!("Mándalo reads Content-Disposition and Content-Type part headers, not {key:?}"),
+                ));
+            }
+            index += 1;
+        }
+        let Some(key) = name.filter(|n| !n.is_empty()) else {
+            return Err(text::parse_err(
+                part_line,
+                "every part needs `Content-Disposition: form-data; name=\"…\"`",
+            ));
+        };
+        let content_first = index;
+        let mut content: Vec<&str> = Vec::new();
+        loop {
+            let Some(line) = lines.get(index) else {
+                return Err(unclosed(part_line));
+            };
+            let trimmed = line.trim();
+            if trimmed == delimiter || trimmed == closing {
+                break;
+            }
+            content.push(line);
+            index += 1;
+        }
+        while content.last().is_some_and(|l| l.trim().is_empty()) {
+            content.pop();
+        }
+        let text_content = content.join("\n");
+        let row = if let Some(rest) = multipart_file_ref(&text_content) {
+            if text_content.trim().lines().count() > 1 {
+                return Err(text::parse_err(
+                    at(content_first),
+                    "a `< file` part holds only the file line",
+                ));
+            }
+            FormDataRow {
+                content_type,
+                ..FormDataRow::file(
+                    key,
+                    text::workspace_relative(at(content_first), rest, "the form-data file")?,
+                )
+            }
+        } else if filename.is_some() {
+            return Err(text::unsupported(
+                at(content_first.min(lines.len().saturating_sub(1))),
+                "a file part references its file with `< path` — inline file content is not supported",
+            ));
+        } else if content_type.is_some() {
+            return Err(text::unsupported(
+                part_line,
+                "Mándalo sends a text part as plain text — a per-part content type belongs on a `< file` part",
+            ));
+        } else {
+            FormDataRow::text(key, text_content)
+        };
+        push_form_row(&mut rows, row);
+        if lines[index].trim() == closing {
+            for (extra, line) in lines.iter().enumerate().skip(index + 1) {
+                if !line.trim().is_empty() {
+                    return Err(text::parse_err(
+                        at(extra),
+                        format!("nothing may follow the closing `{closing}` line"),
+                    ));
+                }
+            }
+            return Ok(rows);
+        }
+    }
+    Err(unclosed(first_line))
+}
+
+/// The path in a `= < ./path` value, if that is what the value is. `<` opens a
+/// file reference only when whitespace or a `.` follows it, so `k = <b>bold</b>`
+/// stays the text it looks like — the same rule a `< ./file` body follows.
+fn form_file_ref(value: &str) -> Option<&str> {
+    value
+        .strip_prefix('<')
+        .filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '.']))
+}
+
+/// The `; type=…` a file field may carry, split off the path(s) it follows.
+fn split_file_ref(line: usize, rest: &str) -> CoreResult<(&str, Option<String>)> {
+    let Some((path, params)) = rest.split_once(';') else {
+        return Ok((rest, None));
+    };
+    let Some((key, value)) = params.split_once('=') else {
+        return Err(text::parse_err(
+            line,
+            "a form file takes one parameter, written `; type=text/plain`",
+        ));
+    };
+    if !key.trim().eq_ignore_ascii_case("type") {
+        return Err(text::unsupported(
+            line,
+            format_args!(
+                "a form file takes only `; type=…`, not {:?} — every other part header belongs on the request",
+                key.trim()
+            ),
+        ));
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(text::parse_err(line, "`; type=` needs a content type"));
+    }
+    Ok((path, Some(value.to_string())))
+}
+
+/// `<` opens another file on the same field when whitespace precedes it and a
+/// space, tab or `.` follows — the same rule a single `< ./path` uses.
+fn next_file_angle(s: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = s[from..].find('<') {
+        let i = from + rel;
+        if i > 0 {
+            let before = s[..i].chars().next_back()?;
+            if !before.is_whitespace() {
+                from = i + 1;
+                continue;
+            }
+        }
+        let after = &s[i + 1..];
+        if after.is_empty() || after.starts_with([' ', '\t', '.']) {
+            return Some(i);
+        }
+        from = i + 1;
+    }
+    None
+}
+
+fn strip_leading_file_angle(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix('<')?;
+    if rest.is_empty() || rest.starts_with([' ', '\t', '.']) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+/// One or more `< ./path` references on a single form field line.
+fn parse_file_paths(line: usize, raw: &str) -> CoreResult<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut rest = raw.trim();
+    if rest.is_empty() {
+        return Err(text::parse_err(line, "the form-data file needs a path"));
+    }
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        if let Some(after) = strip_leading_file_angle(rest) {
+            rest = after.trim_start();
+        } else if !paths.is_empty() {
+            return Err(text::parse_err(
+                line,
+                "another file on this field starts with `< ./path`",
+            ));
+        }
+        let (path, leftover) = match next_file_angle(rest) {
+            Some(i) => (rest[..i].trim(), &rest[i..]),
+            None => (rest.trim(), ""),
+        };
+        if path.is_empty() {
+            return Err(text::parse_err(line, "the form-data file needs a path"));
+        }
+        paths.push(text::workspace_relative(line, path, "the form-data file")?);
+        rest = leftover;
+    }
+    Ok(paths)
+}
+
+fn parse_form_fields(body: &str, first_line: usize) -> CoreResult<Vec<FormDataRow>> {
+    let mut rows = Vec::new();
+    for (offset, raw) in body.lines().enumerate() {
+        let line = first_line + offset;
+        let text = raw.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let Some((at, separator)) = text.char_indices().find(|(_, c)| *c == '=' || *c == '<')
+        else {
+            return Err(text::parse_err(
+                line,
+                format_args!(
+                    "a form field reads `name = value`, or `name = < ./path` to send a file, not {text:?}"
+                ),
+            ));
+        };
+        let key = text[..at].trim();
+        if key.is_empty() {
+            return Err(text::parse_err(
+                line,
+                format_args!("this form field has no name before its `{separator}`"),
+            ));
+        }
+        let value = text[at + separator.len_utf8()..].trim();
+        // `name < ./path` is the shape Mándalo wrote for one release. It still reads.
+        let reference = if separator == '<' {
+            Some(value)
+        } else {
+            form_file_ref(value)
+        };
+        push_form_row(
+            &mut rows,
+            match reference {
+                Some(reference) => {
+                    let (paths_raw, content_type) = split_file_ref(line, reference)?;
+                    let files = parse_file_paths(line, paths_raw)?;
+                    FormDataRow {
+                        content_type,
+                        files,
+                        ..FormDataRow::text(key, "")
+                    }
+                }
+                None => FormDataRow::text(key, value),
+            },
+        );
+    }
+    Ok(rows)
+}
+
+fn reject_unwritable_field(row: &FormDataRow) -> CoreResult<()> {
+    if !row.enabled {
+        return Err(CoreError::Unsupported(
+            "a .http file cannot keep a disabled form field — enable it or remove it".to_string(),
+        ));
+    }
+    if row.key.trim() != row.key || row.key.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "the form field name {:?} cannot be empty or padded with spaces in a .http file",
+            row.key
+        )));
+    }
+    Ok(())
+}
+
+fn render_form_fields(rows: &[FormDataRow]) -> CoreResult<String> {
+    let mut out = String::new();
+    for row in rows {
+        reject_unwritable_field(row)?;
+        if row.key.contains(['=', '<', '\n', '\r']) {
+            return Err(CoreError::Unsupported(format!(
+                "the form field name {:?} cannot carry `=`, `<` or a line break in a .http file",
+                row.key
+            )));
+        }
+        if row.is_file() {
+            for path in &row.files {
+                if path.contains(';') {
+                    return Err(CoreError::Unsupported(format!(
+                        "the form file path {path:?} cannot carry a semicolon in a .http file — `;` starts the `type=` parameter"
+                    )));
+                }
+                if path.contains('<') {
+                    return Err(CoreError::Unsupported(format!(
+                        "the form file path {path:?} cannot carry `<` in a .http file — `<` starts the next file on the field"
+                    )));
+                }
+            }
+            out.push_str(&row.key);
+            out.push_str(" =");
+            for path in &row.files {
+                out.push_str(&format!(" < {path}"));
+            }
+            if let Some(content_type) = &row.content_type {
+                out.push_str(&format!("; type={content_type}"));
+            }
+            out.push('\n');
+        } else {
+            if form_file_ref(&row.value).is_some() {
+                return Err(CoreError::Unsupported(format!(
+                    "the form field {:?} has a value starting with `<`, which a .http file would read back as a file reference",
+                    row.key
+                )));
+            }
+            if row.value.contains(['\n', '\r']) {
+                return Err(CoreError::Unsupported(format!(
+                    "the form field {:?} has a value spanning more than one line, which a .http file cannot write — keep it on one line",
+                    row.key
+                )));
+            }
+            if row.value.trim() != row.value {
+                return Err(CoreError::Unsupported(format!(
+                    "the form field {:?} has a value padded with spaces, which a .http file cannot write",
+                    row.key
+                )));
+            }
+            out.push_str(&format!("{} = {}\n", row.key, row.value));
+        }
+    }
+    Ok(out.trim_end().to_string())
+}
+
+fn render_formdata(rows: &[FormDataRow], boundary: &str) -> CoreResult<String> {
+    let mut out = String::new();
+    for row in rows {
+        reject_unwritable_field(row)?;
+        if row.key.contains('"') {
+            return Err(CoreError::Unsupported(format!(
+                "the form field name {:?} cannot carry a double quote in a .http file",
+                row.key
+            )));
+        }
+        if row.is_file() {
+            for path in &row.files {
+                let file_name = path.rsplit('/').next().unwrap_or(path);
+                out.push_str(&format!(
+                    "--{boundary}\nContent-Disposition: form-data; name=\"{}\"; filename=\"{file_name}\"\n",
+                    row.key
+                ));
+                if let Some(ct) = &row.content_type {
+                    out.push_str(&format!("Content-Type: {ct}\n"));
+                }
+                out.push_str(&format!("\n< {path}\n"));
+            }
+        } else {
+            if row.value.contains(&format!("--{boundary}")) {
+                return Err(CoreError::Unsupported(format!(
+                    "the form field {:?} contains the boundary line itself",
+                    row.key
+                )));
+            }
+            out.push_str(&format!(
+                "--{boundary}\nContent-Disposition: form-data; name=\"{}\"\n\n{}\n",
+                row.key, row.value
+            ));
+        }
+    }
+    out.push_str(&format!("--{boundary}--"));
+    Ok(out)
+}
+
 fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
     let lines = &segment.lines;
     let preamble = read_preamble(source, lines)?;
@@ -483,7 +1026,7 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
             .iter()
             .zip(&written)
             .find(|(_, w)| w.0 == *name)
-            .map(|(h, _)| source[..h.name.start].lines().count())
+            .map(|(h, _)| text::line_of(lines, h.name.start))
             .unwrap_or(1);
         return Err(text::unsupported(
             line,
@@ -492,6 +1035,9 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
             ),
         ));
     }
+    let event_id_at = written
+        .iter()
+        .position(|(k, _)| k.eq_ignore_ascii_case(LAST_EVENT_ID));
     let auth_at = written.iter().position(|(k, v)| {
         k.eq_ignore_ascii_case("authorization") && auth_from_header(v).is_some()
     });
@@ -499,13 +1045,39 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
     let mut body_file = None;
     let kind = if marker_at.is_some() {
         "graphql"
+    } else if is_event_stream(&written) {
+        "sse"
     } else {
         "http"
     };
+    if kind == "sse" {
+        if request_line.method != "GET" {
+            return Err(text::unsupported(
+                text::line_of(lines, request_line.url_span.start),
+                format_args!(
+                    "server-sent events arrive over a GET, so a request that accepts {SSE_MEDIA_TYPE} cannot be a {}",
+                    request_line.method
+                ),
+            ));
+        }
+        if let Some(span) = &tail.post {
+            return Err(text::unsupported(
+                text::line_of(lines, span.start),
+                "a server-sent-events stream has no single response, so a `> {% … %}` script has nothing to run against — read the events with `mandalo listen --json` instead",
+            ));
+        }
+    } else if let Some(span) = &preamble.reconnect_span {
+        return Err(text::unsupported(
+            text::line_of(lines, span.start),
+            format_args!(
+                "`@{RECONNECT}` only means something to a stream — add `Accept: {SSE_MEDIA_TYPE}` if this request is one"
+            ),
+        ));
+    }
     if let Some(span) = &tail.body {
         let raw = &source[span.clone()];
         let opener = raw.trim_start();
-        let line = source[..span.start].lines().count();
+        let line = text::line_of(lines, span.start);
         if opener.starts_with("<@") {
             return Err(text::unsupported(
                 line,
@@ -516,7 +1088,7 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
         // HTML body stays a body instead of being read as a path.
         if let Some(rest) = opener
             .strip_prefix('<')
-            .filter(|rest| rest.starts_with([' ', '\t']))
+            .filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
         {
             if raw.lines().filter(|l| !l.trim().is_empty()).count() > 1 {
                 return Err(text::parse_err(
@@ -525,6 +1097,37 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
                 ));
             }
             body_file = Some(text::workspace_relative(line, rest, "the body file")?);
+        }
+    }
+
+    let mut formdata = None;
+    let mut boundary = None;
+    if let (Some(span), None, "http") = (&tail.body, &body_file, kind) {
+        let content_type = written
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+        if let Some((_, value)) = content_type.filter(|(_, v)| is_multipart_formdata(v)) {
+            let line = text::line_of(lines, span.start);
+            let raw = &source[span.clone()];
+            let declared = header_param(value, "boundary").filter(|b| !b.is_empty());
+            if is_literal_multipart(raw) {
+                let found = declared.ok_or_else(|| {
+                    text::parse_err(
+                        line,
+                        "multipart/form-data needs a `boundary=` parameter in its Content-Type",
+                    )
+                })?;
+                formdata = Some(parse_multipart(raw, &found, line)?);
+                boundary = Some(found);
+            } else {
+                if declared.is_some() {
+                    return Err(text::parse_err(
+                        line,
+                        "this form body is written as `name = value` lines, which carry no boundary — remove the `boundary=` parameter, because the one on the wire is chosen when the request is sent",
+                    ));
+                }
+                formdata = Some(parse_form_fields(raw, line)?);
+            }
         }
     }
 
@@ -548,6 +1151,8 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
         headers_end,
         body: tail.body,
         body_file,
+        formdata,
+        boundary,
         pre: preamble.pre,
         pre_outer: preamble.pre_outer,
         post: tail.post,
@@ -556,6 +1161,11 @@ fn parse_block(source: &str, segment: &Segment<'_>) -> CoreResult<BlockSpans> {
         kind: kind.to_string(),
         marker_at,
         auth_at,
+        event_id_at: event_id_at.filter(|_| kind == "sse"),
+        inherited_auth: preamble.inherited_auth,
+        inherited_span: preamble.inherited_span,
+        auto_reconnect: preamble.auto_reconnect,
+        reconnect_span: preamble.reconnect_span,
     })
 }
 
@@ -628,39 +1238,58 @@ impl HttpDoc {
             })
             .collect();
 
+        // The folded headers come out from the back, so one removal cannot move
+        // the index of the next one.
         let mut auth = Auth::None;
-        if let Some(at) = block.auth_at {
-            if let Some(found) = auth_from_header(&headers[at].1) {
-                auth = found;
-                headers.remove(at);
+        let mut sse_id = None;
+        let mut lifted: Vec<usize> = [block.auth_at, block.marker_at, block.event_id_at]
+            .into_iter()
+            .flatten()
+            .collect();
+        lifted.sort_unstable();
+        for at in lifted.into_iter().rev() {
+            if Some(at) == block.auth_at {
+                match auth_from_header(&headers[at].1) {
+                    Some(found) => {
+                        auth = if block.inherited_auth {
+                            Auth::inherited(found)
+                        } else {
+                            found
+                        };
+                    }
+                    None => continue,
+                }
+            } else if Some(at) == block.event_id_at {
+                sse_id = Some(headers[at].1.clone());
             }
-        }
-        if let Some(at) = block.marker_at {
-            let at = if block.auth_at.is_some_and(|a| a < at) {
-                at - 1
-            } else {
-                at
-            };
             headers.remove(at);
         }
 
-        let body = match (&block.body, &block.body_file) {
-            (_, Some(file)) => Body::Binary {
+        let body = match (&block.body, &block.body_file, &block.formdata) {
+            (_, Some(file), _) => Body::Binary {
                 file: file.clone(),
                 content_type: None,
             },
-            (Some(span), None) if block.kind == "graphql" => {
+            (Some(span), None, None) if block.kind == "graphql" => {
                 let (query, variables) = split_graphql(&source[span.clone()]);
                 Body::Graphql { query, variables }
             }
-            (Some(span), None) => {
+            (Some(_), None, Some(rows)) => {
+                if let Some(at) = headers.iter().position(|(k, v)| {
+                    k.eq_ignore_ascii_case("content-type") && is_multipart_formdata(v)
+                }) {
+                    headers.remove(at);
+                }
+                Body::Formdata { rows: rows.clone() }
+            }
+            (Some(span), None, None) => {
                 let raw = &source[span.clone()];
                 Body::Raw {
                     language: language_for(&headers, raw),
                     text: raw.to_string(),
                 }
             }
-            (None, None) => Body::None,
+            (None, None, _) => Body::None,
         };
 
         Ok(HttpBlock {
@@ -677,6 +1306,11 @@ impl HttpDoc {
                 auth,
                 body,
                 grpc: None,
+                stream: (block.kind == "sse").then(|| SavedStream {
+                    auto_reconnect: (!block.auto_reconnect).then_some(false),
+                    last_event_id: sse_id,
+                    ..SavedStream::default()
+                }),
                 scripts: Scripts {
                     pre: block.pre.clone().map(|s| text::dedent(&source[s])),
                     post: block.post.clone().map(|s| text::dedent(&source[s])),
@@ -691,7 +1325,7 @@ impl HttpDoc {
     /// already applied, which is what makes a file-scoped name win over the
     /// environment's name.
     pub fn resolved(&self, index: usize) -> CoreResult<HttpBlock> {
-        let vars = text::resolve_vars(&self.vars);
+        let vars = text::resolve_vars(&self.vars)?;
         let mut block = self.raw(index)?;
         if vars.is_empty() {
             return Ok(block);
@@ -716,18 +1350,24 @@ impl HttpDoc {
                 file: text::substitute(&file, &vars),
                 content_type,
             },
+            Body::Formdata { rows } => Body::Formdata {
+                rows: rows
+                    .into_iter()
+                    .map(|row| FormDataRow {
+                        key: text::substitute(&row.key, &vars),
+                        value: text::substitute(&row.value, &vars),
+                        files: row
+                            .files
+                            .iter()
+                            .map(|f| text::substitute(f, &vars))
+                            .collect(),
+                        ..row
+                    })
+                    .collect(),
+            },
             other => other,
         };
-        request.auth = match std::mem::take(&mut request.auth) {
-            Auth::Bearer { token } => Auth::Bearer {
-                token: text::substitute(&token, &vars),
-            },
-            Auth::Basic { username, password } => Auth::Basic {
-                username: text::substitute(&username, &vars),
-                password: text::substitute(&password, &vars),
-            },
-            other => other,
-        };
+        request.auth = substitute_auth(std::mem::take(&mut request.auth), &vars);
         Ok(block)
     }
 
@@ -756,6 +1396,27 @@ impl HttpDoc {
         if request.kind == "graphql" {
             let at = block.marker_at.unwrap_or(0).min(out.len());
             out.insert(at, (GRAPHQL_MARKER.to_string(), "GraphQL".to_string()));
+        }
+        if let Some(id) = request
+            .stream
+            .as_ref()
+            .and_then(|s| s.last_event_id.as_ref())
+        {
+            let at = block.event_id_at.unwrap_or(out.len()).min(out.len());
+            out.insert(at, (LAST_EVENT_ID.to_string(), id.clone()));
+        }
+        if matches!(request.body, Body::Formdata { .. })
+            && !out
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        {
+            out.push((
+                "Content-Type".to_string(),
+                match block.boundary.as_deref() {
+                    Some(boundary) => format!("multipart/form-data; boundary={boundary}"),
+                    None => "multipart/form-data".to_string(),
+                },
+            ));
         }
         Ok(out)
     }
@@ -803,6 +1464,9 @@ impl HttpDoc {
             edits.push((block.url_span.clone(), request.url.clone()));
         }
 
+        edits.extend(self.inherited_edits(block, request));
+        edits.extend(self.reconnect_edits(block, request));
+
         let desired = self.wire_headers(block, request)?;
         let written = self.written_headers(block);
         if desired != written {
@@ -833,8 +1497,74 @@ impl HttpDoc {
                 "a gRPC request belongs in a .grpc file, not a .http file".to_string(),
             ));
         }
+        check_stream(request)?;
 
         Ok(text::splice(&self.source, edits))
+    }
+
+    /// The `# @auth inherited` line appears and disappears with the wrapper on the
+    /// request's auth, so a request that stops inheriting stops saying it does.
+    fn inherited_edits(
+        &self,
+        block: &BlockSpans,
+        request: &SavedRequest,
+    ) -> Vec<(Range<usize>, String)> {
+        let wanted = request.auth.is_inherited();
+        match (&block.inherited_span, wanted) {
+            (Some(span), false) => {
+                let mut end = span.end;
+                while end < self.source.len() && self.source[end..].starts_with(['\r', '\n']) {
+                    end += 1;
+                }
+                vec![(span.start..end, String::new())]
+            }
+            (None, true) => {
+                let at = block
+                    .method_span
+                    .as_ref()
+                    .map(|s| s.start)
+                    .unwrap_or(block.url_span.start);
+                vec![(at..at, format!("# @auth {INHERITED}{}", self.newline))]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The `# @reconnect off` line appears and disappears with the option it
+    /// carries, so a stream that stops resuming stops saying it does.
+    fn reconnect_edits(
+        &self,
+        block: &BlockSpans,
+        request: &SavedRequest,
+    ) -> Vec<(Range<usize>, String)> {
+        let resumes = request.kind != "sse"
+            || request
+                .stream
+                .as_ref()
+                .and_then(|s| s.auto_reconnect)
+                .unwrap_or(true);
+        match (&block.reconnect_span, resumes) {
+            (Some(span), _) if request.kind != "sse" => {
+                let mut end = span.end;
+                while end < self.source.len() && self.source[end..].starts_with(['\r', '\n']) {
+                    end += 1;
+                }
+                vec![(span.start..end, String::new())]
+            }
+            (Some(span), _) if block.auto_reconnect != resumes => vec![(
+                span.clone(),
+                format!("# @{RECONNECT} {}", if resumes { "on" } else { "off" }),
+            )],
+            (None, false) => {
+                let at = block
+                    .method_span
+                    .as_ref()
+                    .map(|s| s.start)
+                    .unwrap_or(block.url_span.start);
+                vec![(at..at, format!("# @{RECONNECT} off{}", self.newline))]
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Header names are matched in order, so a value edit stays on its own line and
@@ -887,7 +1617,7 @@ impl HttpDoc {
         request: &SavedRequest,
     ) -> CoreResult<Vec<(Range<usize>, String)>> {
         let nl = self.newline;
-        let rendered = render_body(&request.body)?;
+        let rendered = render_body(&request.body, block.boundary.as_deref())?;
         Ok(match (&block.body, rendered) {
             (Some(span), Some(text)) => vec![(span.clone(), text)],
             (Some(span), None) => vec![(block.headers_end..span.end, String::new())],
@@ -963,7 +1693,69 @@ impl HttpDoc {
     }
 }
 
-fn render_body(body: &Body) -> CoreResult<Option<String>> {
+/// A `.http` file says "this is a stream" by accepting `text/event-stream` and no
+/// other way, so a request whose kind and headers disagree is a hard stop rather
+/// than a file that reads back as something else.
+fn check_stream(request: &SavedRequest) -> CoreResult<()> {
+    let sse = request.kind == "sse";
+    if sse && !is_event_stream(&request.headers) {
+        return Err(CoreError::Unsupported(format!(
+            "a .http file marks a stream with `Accept: {SSE_MEDIA_TYPE}` — add that header, because there is no other way to write it"
+        )));
+    }
+    if !sse && is_event_stream(&request.headers) {
+        return Err(CoreError::Unsupported(format!(
+            "this request accepts {SSE_MEDIA_TYPE}, which a .http file reads back as a stream — save it as an sse request or drop the header"
+        )));
+    }
+    if !sse && request.stream.is_some() {
+        return Err(CoreError::Unsupported(
+            "a websocket or an mqtt connection belongs in its own .ws or .mqtt file, not a .http file".to_string(),
+        ));
+    }
+    let Some(stream) = request.stream.as_ref().filter(|_| sse) else {
+        return Ok(());
+    };
+    let unwritable = [
+        (!stream.subprotocols.is_empty(), "a subprotocol"),
+        (stream.ping_interval_ms.is_some(), "a ping interval"),
+        (stream.client_id.is_some(), "a client id"),
+        (
+            stream.username.is_some() || stream.password.is_some(),
+            "credentials",
+        ),
+        (stream.clean_session.is_some(), "a clean-session flag"),
+        (stream.keep_alive_secs.is_some(), "a keep-alive"),
+        (!stream.subscriptions.is_empty(), "subscriptions"),
+        (stream.protocol_version.is_some(), "a protocol version"),
+        (!stream.messages.is_empty(), "messages to send"),
+    ];
+    match unwritable.iter().find(|(set, _)| *set) {
+        Some((_, what)) => Err(CoreError::Unsupported(format!(
+            "server-sent events travel one way over a plain GET, so this request cannot carry {what}"
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn substitute_auth(auth: Auth, vars: &std::collections::BTreeMap<String, String>) -> Auth {
+    match auth {
+        Auth::Inherited { auth } => Auth::inherited(substitute_auth(*auth, vars)),
+        Auth::Bearer { token } => Auth::Bearer {
+            token: text::substitute(&token, vars),
+        },
+        Auth::Basic { username, password } => Auth::Basic {
+            username: text::substitute(&username, vars),
+            password: text::substitute(&password, vars),
+        },
+        other => other,
+    }
+}
+
+/// `boundary` is the one the file already wrote, and choosing it chooses the
+/// spelling: a block imported in the literal form keeps it, everything else gets
+/// the field-per-line form.
+fn render_body(body: &Body, boundary: Option<&str>) -> CoreResult<Option<String>> {
     Ok(match body {
         Body::None => None,
         Body::Raw { text, .. } if text.trim().is_empty() => None,
@@ -982,11 +1774,11 @@ fn render_body(body: &Body) -> CoreResult<Option<String>> {
                 "a .http file writes a form body as text — set Content-Type: application/x-www-form-urlencoded and write `a=1&b=2` as the body".to_string(),
             ))
         }
-        Body::Formdata { .. } => {
-            return Err(CoreError::Unsupported(
-                "a .http file cannot express a multipart form-data body with per-part content types".to_string(),
-            ))
-        }
+        Body::Formdata { rows } if rows.is_empty() => None,
+        Body::Formdata { rows } => Some(match boundary {
+            Some(boundary) => render_formdata(rows, boundary)?,
+            None => render_form_fields(rows)?,
+        }),
     })
 }
 
@@ -994,17 +1786,29 @@ fn render_body(body: &Body) -> CoreResult<Option<String>> {
 /// already exists on disk is edited in place instead, so this never reformats a
 /// file a person wrote.
 pub fn render_request(request: &SavedRequest, nl: &str) -> CoreResult<String> {
-    if request.kind != "http" && request.kind != "graphql" {
+    if !matches!(request.kind.as_str(), "http" | "graphql" | "sse") {
         return Err(CoreError::Unsupported(format!(
-            "a .http file holds http and graphql requests, not {:?}",
+            "a .http file holds http, graphql and sse requests, not {:?}",
             request.kind
         )));
     }
     text::reject_inexpressible(request, "http")?;
+    check_stream(request)?;
     let mut out = String::new();
     out.push_str("### ");
     out.push_str(&request.name);
     out.push_str(nl);
+    if request.auth.is_inherited() {
+        out.push_str(&format!("# @auth {INHERITED}{nl}"));
+    }
+    if request.kind == "sse"
+        && request
+            .stream
+            .as_ref()
+            .is_some_and(|s| s.auto_reconnect == Some(false))
+    {
+        out.push_str(&format!("# @{RECONNECT} off{nl}"));
+    }
     out.push_str(&text::description_comment(
         request.description.as_deref(),
         nl,
@@ -1034,7 +1838,22 @@ pub fn render_request(request: &SavedRequest, nl: &str) -> CoreResult<String> {
     for (name, value) in &request.headers {
         out.push_str(&format!("{name}: {value}{nl}"));
     }
-    if let Some(body) = render_body(&request.body)? {
+    if let Some(id) = request
+        .stream
+        .as_ref()
+        .and_then(|s| s.last_event_id.as_ref())
+    {
+        out.push_str(&format!("{LAST_EVENT_ID}: {id}{nl}"));
+    }
+    if matches!(request.body, Body::Formdata { .. })
+        && !request
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+    {
+        out.push_str(&format!("Content-Type: multipart/form-data{nl}"));
+    }
+    if let Some(body) = render_body(&request.body, None)? {
         out.push_str(nl);
         for line in body.split('\n') {
             out.push_str(line.trim_end_matches('\r'));

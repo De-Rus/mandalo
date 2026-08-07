@@ -1,9 +1,10 @@
-use mandalo_testkit::{MockApi, Options};
+use mandalo_testkit::{MockApi, MqttBroker, Options};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_GRPC_PORT: u16 = 50051;
+const DEFAULT_MQTT_PORT: u16 = 1883;
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     let mut iter = args.iter();
@@ -62,7 +63,11 @@ async fn main() {
     })
     .await;
 
+    let mqtt_port = port(&args, "--mqtt-port", "MQTT_PORT", DEFAULT_MQTT_PORT);
+    let mqtt = MqttBroker::start_on(mqtt_port, mqtt_port + 1, None).await;
+
     println!("{}", api.index());
+    println!("\n  MQTT  {}  (websocket {})", mqtt.url(), mqtt.ws_url());
     if let Some(limit) = requests_per_minute {
         println!("rate limit {limit} requests per minute per client address");
     }

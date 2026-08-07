@@ -367,38 +367,61 @@ async fn a_dropped_connection_is_retried_and_the_retry_is_visible() {
     }
 }
 
-#[tokio::test]
-async fn a_full_buffer_reports_what_it_dropped_instead_of_growing() {
-    let mock = MockApi::start().await;
-    let mut spec = spec(&ws_url(&mock, "/ws/firehose?n=400"));
-    spec.limits.max_buffered_events = 4;
+const SENT: u64 = 40;
+
+fn dropped_total(all: &[StreamEvent]) -> u64 {
+    all.iter()
+        .filter_map(|e| match e {
+            StreamEvent::Dropped { count, .. } => Some(*count),
+            _ => None,
+        })
+        .sum()
+}
+
+/// Every send comes back before the next one goes out, so by the time the last
+/// one returns the stream has offered the buffer `connecting`, `connected` and
+/// one event per send — while nothing here has read a single event. What the
+/// buffer could not hold it must report, on any machine at any speed.
+async fn fill_by_sending(spec: StreamSpec) -> Vec<StreamEvent> {
     let (tx, mut events) = stream::event_channel(&spec.limits);
     let handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
-
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let closing = tokio::spawn(async move { handle.close().await });
-
-    let mut dropped = 0u64;
-    let mut seen = 0usize;
-    loop {
-        let event = next_event(&mut events).await;
-        seen += 1;
-        if let StreamEvent::Dropped { count, .. } = &event {
-            dropped += count;
-        }
-        if event.is_terminal() {
-            break;
-        }
+    for i in 0..SENT {
+        handle.send(Outgoing::text(format!("m{i}"))).await.unwrap();
     }
+    let closing = tokio::spawn(async move { handle.close().await });
+    let all = drain(&mut events).await;
     closing.await.unwrap().unwrap();
+    all
+}
 
+#[tokio::test]
+async fn a_full_buffer_drops_and_reports_instead_of_growing() {
+    let mock = MockApi::start().await;
+    let mut spec = spec(&ws_url(&mock, "/ws/firehose?n=0"));
+    spec.limits.max_buffered_events = 4;
+    spec.limits.max_buffered_bytes = 8 * 1024 * 1024;
+
+    let all = fill_by_sending(spec).await;
+    let dropped = dropped_total(&all);
     assert!(
-        dropped > 300,
-        "a 400 message firehose into a 4 event buffer must drop most of it, dropped {dropped}"
+        dropped >= SENT + 1 - 4,
+        "{SENT} sends into a 4 event buffer that nobody read must report the rest as dropped, got {dropped}: {all:?}"
     );
+}
+
+#[tokio::test]
+async fn a_buffer_full_of_bytes_drops_and_reports_too() {
+    let mock = MockApi::start().await;
+    let mut spec = spec(&ws_url(&mock, "/ws/firehose?n=0"));
+    spec.limits.max_buffered_events = 1024;
+    spec.limits.max_message_bytes = 4096;
+    spec.limits.max_buffered_bytes = 4096;
+
+    let all = fill_by_sending(spec).await;
+    let dropped = dropped_total(&all);
     assert!(
-        seen < 100,
-        "the buffer must stay bounded, but {seen} events came through"
+        dropped >= SENT + 1 - 4096 / 128,
+        "a 4096 byte budget cannot park {SENT} events, got {dropped}: {all:?}"
     );
 }
 

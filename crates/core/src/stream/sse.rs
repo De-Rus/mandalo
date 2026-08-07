@@ -1,12 +1,19 @@
 use super::{
-    idle_timeout, too_big, Command, ConnectionInfo, Direction, Emitter, MessageMeta, Payload,
-    Resolved, SseOptions, StreamLimits, E_STREAM_AUTH, E_STREAM_CONNECT, E_STREAM_IDLE,
-    E_STREAM_LIMIT, E_STREAM_PROTOCOL, E_STREAM_TLS,
+    authority, idle_timeout, too_big, wait_before_reconnect, Command, ConnectionInfo, Direction,
+    Emitter, MessageMeta, Payload, Resolved, SseOptions, StreamLimits, Waited, E_STREAM_AUTH,
+    E_STREAM_CONNECT, E_STREAM_IDLE, E_STREAM_LIMIT, E_STREAM_PROTOCOL, E_STREAM_TLS,
 };
 use crate::error::{CoreError, CoreResult};
 use futures_util::StreamExt;
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// Long enough for the redirects a real endpoint uses, short enough that a
+/// server cannot walk the client around forever.
+const MAX_REDIRECTS: usize = 10;
+
+const NOTHING_TO_SEND: &str = "server-sent events only travel from the server to the client — there is nothing to send on this stream";
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SseFrame {
@@ -170,6 +177,18 @@ enum Attempt {
     Fatal(String, &'static str),
 }
 
+/// The server suggests the reconnect interval, it does not get to choose it:
+/// `retry: 0` would turn this client into the server's flooder.
+fn reconnect_delay(limits: &StreamLimits, retry_ms: Option<u64>, attempt: u32) -> u64 {
+    match retry_ms {
+        Some(ms) => ms.clamp(
+            limits.backoff_base_ms,
+            limits.backoff_max_ms.max(limits.backoff_base_ms),
+        ),
+        None => limits.backoff(attempt),
+    }
+}
+
 pub(crate) async fn run(
     resolved: Resolved,
     options: SseOptions,
@@ -219,14 +238,42 @@ pub(crate) async fn run(
                     return;
                 }
                 attempt += 1;
-                let delay = retry_ms.unwrap_or_else(|| limits.backoff(attempt));
+                let delay = reconnect_delay(&limits, retry_ms, attempt);
                 if !events.reconnecting(attempt, delay, &reason) {
                     return;
                 }
-                tokio::time::sleep(Duration::from_millis(delay)).await;
+                if let Waited::Closed =
+                    wait_before_reconnect(delay, &mut commands, NOTHING_TO_SEND).await
+                {
+                    events.disconnected(None, "closed by the client").await;
+                    return;
+                }
             }
         }
     }
+}
+
+/// One client per hop: redirects are followed by hand so the host policy sees
+/// every one of them, and the approved addresses are pinned so the name cannot
+/// be re-resolved to somewhere else between the check and the socket.
+fn client(pinned: &[SocketAddr], host: &str) -> CoreResult<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(60 * 60 * 24));
+    if !pinned.is_empty() {
+        builder = builder.resolve_to_addrs(host, pinned);
+    }
+    builder
+        .build()
+        .map_err(|e| CoreError::Network(e.to_string()))
+}
+
+fn host_of(url: &str) -> CoreResult<String> {
+    reqwest::Url::parse(url)
+        .map_err(|e| CoreError::Stream(format!("invalid url {url:?}: {e}")))?
+        .host_str()
+        .map(str::to_string)
+        .ok_or_else(|| CoreError::Stream(format!("url has no host: {url}")))
 }
 
 async fn once(
@@ -237,44 +284,106 @@ async fn once(
     last_event_id: &mut Option<String>,
     retry_ms: &mut Option<u64>,
 ) -> Attempt {
-    let client = match crate::request::client() {
-        Ok(client) => client,
-        Err(e) => return Attempt::Fatal(e.to_string(), E_STREAM_CONNECT),
-    };
-    let mut request = client
-        .get(&resolved.url)
-        .timeout(Duration::from_secs(60 * 60 * 24))
-        .header("Accept", "text/event-stream")
-        .header("Cache-Control", "no-store");
-    for (name, value) in &resolved.headers {
-        request = request.header(name, value);
-    }
-    // The server decides where to resume from, so the id it last sent goes back
-    // on every reconnect — without it a reconnect silently loses events.
-    if let Some(id) = last_event_id.as_deref() {
-        request = request.header("Last-Event-ID", id);
-    }
+    let mut url = resolved.url.clone();
+    let mut headers = resolved.headers.clone();
+    let mut resume = last_event_id.clone();
+    let mut hops = 0usize;
 
-    let response = match tokio::time::timeout(
-        Duration::from_millis(limits.connect_timeout_ms.max(1)),
-        request.send(),
-    )
-    .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(error)) => {
-            let (message, code) = explain(&resolved.url, &error);
-            events.error(message.clone(), code);
-            return Attempt::Lost(message);
+    let response = loop {
+        let pinned = match resolved.guard(&url).await {
+            Ok(pinned) => pinned,
+            Err(e) => return Attempt::Fatal(e.to_string(), E_STREAM_CONNECT),
+        };
+        let host = match host_of(&url) {
+            Ok(host) => host,
+            Err(e) => return Attempt::Fatal(e.to_string(), E_STREAM_CONNECT),
+        };
+        let client = match client(&pinned, &host) {
+            Ok(client) => client,
+            Err(e) => return Attempt::Fatal(e.to_string(), E_STREAM_CONNECT),
+        };
+        let mut request = client
+            .get(&url)
+            .timeout(Duration::from_secs(60 * 60 * 24))
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-store");
+        for (name, value) in &headers {
+            request = request.header(name, value);
         }
-        Err(_) => {
-            let message = format!(
-                "{} did not answer within {} ms",
-                resolved.url, limits.connect_timeout_ms
+        // The server decides where to resume from, so the id it last sent goes back
+        // on every reconnect — without it a reconnect silently loses events.
+        if let Some(id) = resume.as_deref() {
+            request = request.header("Last-Event-ID", id);
+        }
+
+        let response = match tokio::time::timeout(
+            Duration::from_millis(limits.connect_timeout_ms.max(1)),
+            request.send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                let (message, code) = explain(&url, &error);
+                events.error(message.clone(), code);
+                return Attempt::Lost(message);
+            }
+            Err(_) => {
+                let message = format!(
+                    "{url} did not answer within {} ms",
+                    limits.connect_timeout_ms
+                );
+                events.error(message.clone(), E_STREAM_CONNECT);
+                return Attempt::Lost(message);
+            }
+        };
+
+        if !response.status().is_redirection() {
+            break response;
+        }
+        let Some(location) = response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+        else {
+            return Attempt::Fatal(
+                format!("{url} answered a redirect with no location to go to"),
+                E_STREAM_PROTOCOL,
             );
-            events.error(message.clone(), E_STREAM_CONNECT);
-            return Attempt::Lost(message);
+        };
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Attempt::Fatal(
+                format!(
+                    "{url} redirected more than {MAX_REDIRECTS} times — the redirects never end"
+                ),
+                E_STREAM_PROTOCOL,
+            );
         }
+        let next = match reqwest::Url::parse(&url).and_then(|base| base.join(&location)) {
+            Ok(next) => next.to_string(),
+            Err(e) => {
+                return Attempt::Fatal(
+                    format!("{url} redirected to {location:?}, which is not a url: {e}"),
+                    E_STREAM_PROTOCOL,
+                )
+            }
+        };
+        match super::scheme_of(&next) {
+            Ok(scheme) if matches!(scheme.as_str(), "http" | "https") => {}
+            _ => {
+                return Attempt::Fatal(
+                    format!("{url} redirected to {next}, which is not an http url"),
+                    E_STREAM_PROTOCOL,
+                )
+            }
+        }
+        if authority(&next) != authority(&url) {
+            headers.clear();
+            resume = None;
+        }
+        url = next;
     };
 
     let status = response.status();
@@ -285,15 +394,9 @@ async fn once(
             E_STREAM_CONNECT
         };
         let message = if code == E_STREAM_AUTH {
-            format!(
-                "{} rejected the credentials with HTTP {status}",
-                resolved.url
-            )
+            format!("{} rejected the credentials with HTTP {status}", url)
         } else {
-            format!(
-                "{} answered HTTP {status}, not an event stream",
-                resolved.url
-            )
+            format!("{} answered HTTP {status}, not an event stream", url)
         };
         return if status.is_server_error() {
             events.error(message.clone(), code);
@@ -319,7 +422,7 @@ async fn once(
         return Attempt::Fatal(
             format!(
                 "{} answered with {:?}, not text/event-stream — this endpoint is not an event stream",
-                resolved.url,
+                url,
                 if content_type.is_empty() {
                     "no content type"
                 } else {
@@ -331,7 +434,7 @@ async fn once(
     }
 
     if !events.connected(ConnectionInfo {
-        url: resolved.url.clone(),
+        url: url.clone(),
         status: Some(status.as_u16()),
         protocol: None,
         headers: response
@@ -363,7 +466,7 @@ async fn once(
                     return Attempt::Lost("the server ended the event stream".to_string());
                 }
                 Ok(Some(Err(error))) => {
-                    let (message, code) = explain(&resolved.url, &error);
+                    let (message, code) = explain(&url, &error);
                     events.error(message.clone(), code);
                     return Attempt::Lost(message);
                 }
@@ -401,10 +504,7 @@ async fn once(
                     return Attempt::Done;
                 }
                 Some(Command::Send(_, reply)) => {
-                    let _ = reply.send(Err(CoreError::Stream(
-                        "server-sent events only travel from the server to the client — there is nothing to send on this stream"
-                            .to_string(),
-                    )));
+                    let _ = reply.send(Err(CoreError::Stream(NOTHING_TO_SEND.to_string())));
                 }
             },
         }
@@ -488,6 +588,20 @@ mod tests {
     fn a_leading_byte_order_mark_is_stripped() {
         let out = frames(&["\u{feff}data: a\n\n"]);
         assert_eq!(out[0].data, "a");
+    }
+
+    #[test]
+    fn the_servers_retry_interval_is_held_between_the_configured_bounds() {
+        let limits = StreamLimits {
+            backoff_base_ms: 500,
+            backoff_max_ms: 30_000,
+            ..StreamLimits::default()
+        };
+        assert_eq!(reconnect_delay(&limits, Some(0), 1), 500);
+        assert_eq!(reconnect_delay(&limits, Some(1), 1), 500);
+        assert_eq!(reconnect_delay(&limits, Some(2_000), 1), 2_000);
+        assert_eq!(reconnect_delay(&limits, Some(u64::MAX), 1), 30_000);
+        assert_eq!(reconnect_delay(&limits, None, 2), limits.backoff(2));
     }
 
     #[test]

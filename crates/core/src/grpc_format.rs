@@ -271,19 +271,14 @@ fn read_headers(
             ));
         }
         let after = &raw[colon + 1..];
-        let value_lead = after.len() - after.trim_start().len();
-        let value_start = line.start + colon + 1 + value_lead;
-        let value_end = line.start + colon + 1 + after.trim_end().len();
+        let value = after.trim();
+        let value_start = line.start + colon + 1 + (after.len() - after.trim_start().len());
         if is_proto {
-            text::workspace_relative(
-                line.number,
-                &raw[value_start - line.start..value_end - line.start],
-                "a `proto:` path",
-            )?;
+            text::workspace_relative(line.number, value, "a `proto:` path")?;
         }
         headers.push(HeaderSpan {
             name: line.start + lead..line.start + lead + name.len(),
-            value: value_start..value_end.max(value_start),
+            value: value_start..value_start + value.len(),
             line: line.start..line.end,
             is_proto,
         });
@@ -494,6 +489,7 @@ impl GrpcDoc {
                         .unwrap_or_else(|| "{}".to_string()),
                     metadata,
                 }),
+                stream: None,
                 scripts: Scripts {
                     pre: block.pre.clone().map(|s| text::dedent(&source[s])),
                     post: block.post.clone().map(|s| text::dedent(&source[s])),
@@ -505,7 +501,7 @@ impl GrpcDoc {
     }
 
     pub fn resolved(&self, index: usize) -> CoreResult<GrpcBlock> {
-        let vars = text::resolve_vars(&self.vars);
+        let vars = text::resolve_vars(&self.vars)?;
         let mut block = self.raw(index)?;
         if vars.is_empty() {
             return Ok(block);

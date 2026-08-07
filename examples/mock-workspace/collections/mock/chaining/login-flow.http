@@ -1,8 +1,15 @@
 ### 1 Login
+< {%
+pm.environment.set("username", "ada");
+pm.environment.set("password", "lovelace");
+%}
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
-{"username": "ada", "password": "lovelace"}
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
 
 > {%
 pm.test("status is 200", function () { pm.response.to.have.status(200); });
@@ -10,8 +17,17 @@ pm.environment.set("token", pm.response.json().token);
 %}
 
 ### 2 Authenticated call
+< {%
+var token = pm.environment.get("token");
+if (!token) {
+  throw new Error("no token — run “1 Login” first");
+}
+pm.request.headers.upsert({
+  key: "Authorization",
+  value: "Bearer " + token
+});
+%}
 GET {{baseUrl}}/auth/bearer
-Authorization: Bearer {{token}}
 
 > {%
 pm.test("status is 200", function () { pm.response.to.have.status(200); });

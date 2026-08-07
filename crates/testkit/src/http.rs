@@ -23,6 +23,7 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const MAX_BIG_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_SLOW_MS: u64 = 10_000;
 pub const MAX_REDIRECT_HOPS: u32 = 10;
+pub const MAX_STREAM_MB: usize = 128;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -206,6 +207,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/gzip", any(gzip))
         .route("/brotli", any(brotli_body))
         .route("/big", any(big))
+        .route("/stream", any(stream_mb))
         .route("/auth/login", post(login))
         .route("/auth/basic", any(auth_basic))
         .route("/auth/bearer", any(auth_bearer))
@@ -344,6 +346,33 @@ async fn big(Query(params): Query<BTreeMap<String, String>>) -> Response {
         body,
     )
         .into_response()
+}
+
+/// The same megabyte of `x` handed out N times: a body far larger than any
+/// client should accept, without the mock ever holding more than one chunk.
+async fn stream_mb(Query(params): Query<BTreeMap<String, String>>) -> Response {
+    let mb: usize = params
+        .get("mb")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .min(MAX_STREAM_MB);
+    let chunk = Bytes::from(vec![b'x'; 1024 * 1024]);
+    let chunks: Vec<Result<Bytes, std::io::Error>> =
+        std::iter::repeat_n(chunk, mb).map(Ok).collect();
+    let body = Body::from_stream(tokio_stream::iter(chunks));
+    let mut response = (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response();
+    if params.get("chunked").map(String::as_str) != Some("1") {
+        response.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from(mb as u64 * 1024 * 1024),
+        );
+    }
+    response
 }
 
 fn unauthorized(realm: &str) -> Response {

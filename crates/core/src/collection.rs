@@ -4,6 +4,8 @@ use crate::error::{CoreError, CoreResult};
 use crate::grpc_format::{self, GrpcDoc};
 use crate::http_format::{self, HttpDoc};
 use crate::request::Auth;
+use crate::stream::{MqttVersion, Outgoing, StreamKind, Subscription};
+use crate::stream_format::{self, Flavor, StreamDoc};
 use crate::workspace::SCHEMA_VERSION;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -28,6 +30,8 @@ pub struct SavedRequest {
     pub body: Body,
     #[serde(default)]
     pub grpc: Option<GrpcRequest>,
+    #[serde(default)]
+    pub stream: Option<SavedStream>,
     #[serde(default)]
     pub scripts: Scripts,
     #[serde(default)]
@@ -75,6 +79,8 @@ struct StoredRequest {
     #[serde(default)]
     grpc: Option<GrpcRequest>,
     #[serde(default)]
+    stream: Option<SavedStream>,
+    #[serde(default)]
     scripts: Scripts,
     #[serde(default)]
     tests: Vec<TestAssertion>,
@@ -102,6 +108,7 @@ impl From<StoredRequest> for SavedRequest {
             auth: stored.auth,
             body,
             grpc: stored.grpc,
+            stream: stored.stream,
             scripts: stored.scripts,
             tests: stored.tests,
             captures: stored.captures,
@@ -118,6 +125,101 @@ pub struct GrpcRequest {
     pub message: String,
     #[serde(default)]
     pub metadata: Vec<(String, String)>,
+}
+
+/// One message a saved socket can send, addressed by its name. A stream has no
+/// single body — it has a list of these, and the connection outlives all of them.
+/// The payload is an [`Outgoing`] because that is what actually goes out: the
+/// saved message and the live send are the same value.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedMessage {
+    pub id: String,
+    pub name: String,
+    pub message: Outgoing,
+}
+
+/// The connection half of a saved stream. Flat on purpose: which fields apply is
+/// decided by [`SavedRequest::kind`], so a protocol never appears twice and the
+/// two can never disagree. Every option is optional, and absent means "whatever
+/// the transport does by default".
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedStream {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subprotocols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reconnect: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping_interval_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clean_session: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<Subscription>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<MqttVersion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<SavedMessage>,
+}
+
+/// The protocol a request kind names, if it names one at all.
+pub fn stream_kind(kind: &str) -> Option<StreamKind> {
+    match kind {
+        "websocket" => Some(StreamKind::WebSocket),
+        "sse" => Some(StreamKind::Sse),
+        "mqtt" => Some(StreamKind::Mqtt),
+        _ => None,
+    }
+}
+
+impl SavedStream {
+    pub fn message(&self, name: &str) -> CoreResult<&SavedMessage> {
+        self.messages
+            .iter()
+            .find(|m| m.name == name)
+            .ok_or_else(|| {
+                CoreError::NotFound(match self.messages.is_empty() {
+                    true => "this stream has no named messages to send".to_string(),
+                    false => format!(
+                        "this stream has no message named {name:?} — it has {}",
+                        self.messages
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                })
+            })
+    }
+}
+
+/// A committed file must never hold a credential. `password` is unambiguously
+/// one — unlike a username or a header, it has no other use — so it takes a
+/// `{{variable}}` and nothing else, and the variable is where a secret already
+/// belongs: an environment entry marked `secret = true`, whose value lives on
+/// this machine and never enters the workspace.
+pub fn reject_literal_password(value: &str) -> CoreResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let templated = trimmed.starts_with("{{") && trimmed.ends_with("}}") && trimmed.len() > 4;
+    if templated && !trimmed[2..trimmed.len() - 2].contains("{{") {
+        return Ok(());
+    }
+    Err(CoreError::Unsupported(
+        "a password may not be written into a request file — put it in an environment as `password = { secret = true }` and write `password: {{password}}` here, so the value stays on this machine".to_string(),
+    ))
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -190,6 +292,29 @@ pub fn collections_dir(workspace: &Path) -> PathBuf {
     workspace.join("collections")
 }
 
+/// Directory names that must never be treated as collection slugs: they are the
+/// workspace layout itself. Opening `…/collections` as a workspace used to
+/// scaffold nested copies of these dirs; they are healed and ignored.
+pub fn is_reserved_collection_slug(slug: &str) -> bool {
+    matches!(slug, "collections" | "environments")
+}
+
+/// Drop the nested `mandalo.toml` / empty `collections` / `environments` dirs
+/// left behind when a collections folder was opened as a workspace root.
+pub fn heal_nested_workspace_scaffold(workspace: &Path) {
+    let root = collections_dir(workspace);
+    let nested_manifest = root.join("mandalo.toml");
+    if nested_manifest.is_file() {
+        let _ = std::fs::remove_file(&nested_manifest);
+    }
+    for name in ["collections", "environments"] {
+        let dir = root.join(name);
+        if dir.is_dir() && !manifest_path(&dir).exists() {
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+}
+
 pub fn slugify(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
@@ -231,6 +356,11 @@ pub fn validate_slug(slug: &str) -> CoreResult<()> {
     {
         return Err(CoreError::InvalidName(format!(
             "invalid collection slug: {slug:?}"
+        )));
+    }
+    if is_reserved_collection_slug(slug) {
+        return Err(CoreError::InvalidName(format!(
+            "collection name {slug:?} is reserved"
         )));
     }
     Ok(())
@@ -352,13 +482,20 @@ fn unique_request_file(dir: &Path, base: &str, ext: &str, keep: Option<&Path>) -
     }
 }
 
-/// Requests are plain text now: `.http`/`.rest` for HTTP and GraphQL, `.grpc` for
-/// gRPC. TOML is left to environments and the two manifests.
+/// Requests are plain text: `.http`/`.rest` for HTTP, GraphQL and server-sent
+/// events, `.grpc` for gRPC, `.ws` for websockets and `.mqtt` for MQTT. TOML is
+/// left to environments and the two manifests.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Format {
     Http,
     Grpc,
+    Ws,
+    Mqtt,
 }
+
+/// The one line every "which file holds what" message is written from.
+pub const FORMAT_MAP: &str =
+    "Mándalo stores HTTP, GraphQL and server-sent events in .http, gRPC in .grpc, websockets in .ws and MQTT in .mqtt";
 
 impl Format {
     fn of(name: &str) -> Option<Format> {
@@ -368,13 +505,24 @@ impl Format {
         if grpc_format::is_grpc_file(name) {
             return Some(Format::Grpc);
         }
+        if stream_format::is_ws_file(name) {
+            return Some(Format::Ws);
+        }
+        if stream_format::is_mqtt_file(name) {
+            return Some(Format::Mqtt);
+        }
         None
     }
 
+    /// Server-sent events are an HTTP GET that accepts `text/event-stream`, so
+    /// they live in `.http` with every other HTTP request rather than in a file
+    /// type of their own.
     fn for_kind(kind: &str) -> CoreResult<Format> {
         match kind {
-            "http" | "graphql" => Ok(Format::Http),
+            "http" | "graphql" | "sse" => Ok(Format::Http),
             "grpc" => Ok(Format::Grpc),
+            "websocket" => Ok(Format::Ws),
+            "mqtt" => Ok(Format::Mqtt),
             other => Err(CoreError::Unsupported(format!(
                 "unsupported request kind: {other}"
             ))),
@@ -385,6 +533,16 @@ impl Format {
         match self {
             Format::Http => "http",
             Format::Grpc => "grpc",
+            Format::Ws => stream_format::WS_EXTENSION,
+            Format::Mqtt => stream_format::MQTT_EXTENSION,
+        }
+    }
+
+    fn flavor(self) -> Option<Flavor> {
+        match self {
+            Format::Ws => Some(Flavor::Ws),
+            Format::Mqtt => Some(Flavor::Mqtt),
+            _ => None,
         }
     }
 }
@@ -392,13 +550,17 @@ impl Format {
 enum Doc {
     Http(HttpDoc),
     Grpc(GrpcDoc),
+    Stream(StreamDoc),
 }
 
 impl Doc {
     fn parse(format: Format, stem: &str, source: &str) -> CoreResult<Doc> {
-        Ok(match format {
-            Format::Http => Doc::Http(HttpDoc::parse(stem, source)?),
-            Format::Grpc => Doc::Grpc(GrpcDoc::parse(stem, source)?),
+        Ok(match format.flavor() {
+            Some(flavor) => Doc::Stream(StreamDoc::parse(flavor, stem, source)?),
+            None => match format {
+                Format::Grpc => Doc::Grpc(GrpcDoc::parse(stem, source)?),
+                _ => Doc::Http(HttpDoc::parse(stem, source)?),
+            },
         })
     }
 
@@ -406,6 +568,7 @@ impl Doc {
         match self {
             Doc::Http(doc) => doc.len(),
             Doc::Grpc(doc) => doc.len(),
+            Doc::Stream(doc) => doc.len(),
         }
     }
 
@@ -413,6 +576,7 @@ impl Doc {
         match self {
             Doc::Http(doc) => doc.index_of(fragment),
             Doc::Grpc(doc) => doc.index_of(fragment),
+            Doc::Stream(doc) => doc.index_of(fragment),
         }
     }
 
@@ -420,6 +584,7 @@ impl Doc {
         Ok(match self {
             Doc::Http(doc) => doc.raw(index)?.request,
             Doc::Grpc(doc) => doc.raw(index)?.request,
+            Doc::Stream(doc) => doc.raw(index)?.request,
         })
     }
 
@@ -427,6 +592,7 @@ impl Doc {
         Ok(match self {
             Doc::Http(doc) => doc.resolved(index)?.request,
             Doc::Grpc(doc) => doc.resolved(index)?.request,
+            Doc::Stream(doc) => doc.resolved(index)?.request,
         })
     }
 
@@ -434,6 +600,7 @@ impl Doc {
         match self {
             Doc::Http(doc) => doc.replace(index, request),
             Doc::Grpc(doc) => doc.replace(index, request),
+            Doc::Stream(doc) => doc.replace(index, request),
         }
     }
 
@@ -441,21 +608,26 @@ impl Doc {
         match self {
             Doc::Http(doc) => doc.remove(index),
             Doc::Grpc(doc) => doc.remove(index),
+            Doc::Stream(doc) => doc.remove(index),
         }
     }
 }
 
 fn render_one(request: &SavedRequest) -> CoreResult<String> {
-    Ok(match Format::for_kind(&request.kind)? {
-        Format::Http => http_format::render_request(request, "\n")?,
-        Format::Grpc => grpc_format::render_request(request, "\n")?,
+    let format = Format::for_kind(&request.kind)?;
+    Ok(match format.flavor() {
+        Some(flavor) => stream_format::render_request(request, flavor, "\n")?,
+        None => match format {
+            Format::Grpc => grpc_format::render_request(request, "\n")?,
+            _ => http_format::render_request(request, "\n")?,
+        },
     })
 }
 
 /// `auth/login.http#2` addresses one request inside a file. The fragment is an
 /// index — the canonical, always-unique form — or a block name when that name
 /// occurs exactly once.
-fn split_identity(path: &str) -> (&str, Option<&str>) {
+pub fn split_identity(path: &str) -> (&str, Option<&str>) {
     match path.rsplit_once('#') {
         Some((file, fragment)) if Format::of(file).is_some() => (file, Some(fragment)),
         _ => (path, None),
@@ -464,9 +636,7 @@ fn split_identity(path: &str) -> (&str, Option<&str>) {
 
 fn read_doc(file: &Path, rel: &str) -> CoreResult<(Format, Doc)> {
     let format = Format::of(rel).ok_or_else(|| {
-        CoreError::Unsupported(format!(
-            "{rel} is not a request file — Mándalo stores HTTP and GraphQL in .http and gRPC in .grpc"
-        ))
+        CoreError::Unsupported(format!("{rel} is not a request file — {FORMAT_MAP}"))
     })?;
     if !file.is_file() {
         return Err(CoreError::NotFound(format!("unknown request: {rel}")));
@@ -504,6 +674,7 @@ fn rel_string(root: &Path, path: &Path) -> CoreResult<String> {
 }
 
 pub fn list_collections(workspace: &Path) -> CoreResult<CollectionList> {
+    heal_nested_workspace_scaffold(workspace);
     let dir = collections_dir(workspace);
     let mut list = CollectionList {
         items: Vec::new(),
@@ -531,7 +702,12 @@ pub fn list_collections(workspace: &Path) -> CoreResult<CollectionList> {
                 slug: slug.to_string(),
                 name: manifest.name,
             }),
-            Err(e) => list.skipped.push(e.to_string()),
+            Err(e) => {
+                if is_reserved_collection_slug(slug) {
+                    continue;
+                }
+                list.skipped.push(e.to_string());
+            }
         }
     }
     list.items
@@ -541,6 +717,7 @@ pub fn list_collections(workspace: &Path) -> CoreResult<CollectionList> {
 }
 
 pub fn create_collection(workspace: &Path, name: &str) -> CoreResult<CollectionInfo> {
+    crate::remote::ensure_writable(workspace)?;
     if name.trim().is_empty() {
         return Err(CoreError::InvalidName(
             "collection name must not be empty".to_string(),
@@ -548,7 +725,13 @@ pub fn create_collection(workspace: &Path, name: &str) -> CoreResult<CollectionI
     }
     let root = collections_dir(workspace);
     std::fs::create_dir_all(&root).map_err(|e| CoreError::io(root.display(), e))?;
-    let slug = unique_dir_slug(&root, &slugify(name));
+    let base = slugify(name);
+    if is_reserved_collection_slug(&base) {
+        return Err(CoreError::InvalidName(format!(
+            "collection name {base:?} is reserved"
+        )));
+    }
+    let slug = unique_dir_slug(&root, &base);
     let dir = root.join(&slug);
     std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(dir.display(), e))?;
     let manifest = CollectionManifest {
@@ -570,6 +753,7 @@ pub fn ensure_collection(
     name: &str,
     id: Option<&str>,
 ) -> CoreResult<CollectionInfo> {
+    crate::remote::ensure_writable(workspace)?;
     validate_slug(slug)?;
     if name.trim().is_empty() {
         return Err(CoreError::InvalidName(
@@ -600,6 +784,7 @@ pub fn ensure_collection(
 }
 
 pub fn rename_collection(workspace: &Path, slug: &str, name: &str) -> CoreResult<CollectionInfo> {
+    crate::remote::ensure_writable(workspace)?;
     if name.trim().is_empty() {
         return Err(CoreError::InvalidName(
             "collection name must not be empty".to_string(),
@@ -609,6 +794,11 @@ pub fn rename_collection(workspace: &Path, slug: &str, name: &str) -> CoreResult
     let manifest = read_collection_manifest(&dir)?;
     let root = collections_dir(workspace);
     let wanted = slugify(name);
+    if is_reserved_collection_slug(&wanted) {
+        return Err(CoreError::InvalidName(format!(
+            "collection name {wanted:?} is reserved"
+        )));
+    }
     let new_slug = if wanted == slug {
         slug.to_string()
     } else {
@@ -632,6 +822,7 @@ pub fn rename_collection(workspace: &Path, slug: &str, name: &str) -> CoreResult
 }
 
 pub fn delete_collection(workspace: &Path, slug: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
     let dir = collection_dir(workspace, slug)?;
     std::fs::remove_dir_all(&dir).map_err(|e| CoreError::io(dir.display(), e))
 }
@@ -693,7 +884,7 @@ fn walk(
         let Some(format) = Format::of(name) else {
             if path.extension().and_then(|e| e.to_str()) == Some("toml") {
                 skipped.push(format!(
-                    "{}: requests are .http and .grpc files now — this TOML request has to be converted",
+                    "{}: requests are text files now — this TOML request has to be converted ({FORMAT_MAP})",
                     rel_string(root, &path)?
                 ));
             }
@@ -738,7 +929,7 @@ pub fn list_tree(workspace: &Path) -> CoreResult<Tree> {
     Ok(tree)
 }
 
-fn validate_request(request: &SavedRequest) -> CoreResult<()> {
+pub fn validate_request(request: &SavedRequest) -> CoreResult<()> {
     validate_id(&request.id)?;
     if request.name.trim().is_empty() {
         return Err(CoreError::InvalidName(
@@ -751,6 +942,73 @@ fn validate_request(request: &SavedRequest) -> CoreResult<()> {
     Ok(())
 }
 
+/// The text `file` holds once `requests` land in it, in order — nothing is
+/// written. A file that already holds exactly that many requests is edited in
+/// place, so its comments and spacing survive; any other file is rendered fresh.
+/// Rendering before writing is what lets an import validate a whole workspace
+/// and then either write all of it or none of it.
+pub fn plan_file(
+    workspace: &Path,
+    slug: &str,
+    file: &str,
+    requests: &[SavedRequest],
+) -> CoreResult<String> {
+    validate_slug(slug)?;
+    let format = Format::of(file).ok_or_else(|| {
+        CoreError::InvalidName(format!("{file} is not a request file — {FORMAT_MAP}"))
+    })?;
+    if requests.is_empty() {
+        return Err(CoreError::InvalidName(format!(
+            "{file} would hold no requests at all"
+        )));
+    }
+    let mut target = collections_dir(workspace).join(slug);
+    for part in components(file)? {
+        target.push(part);
+    }
+    for request in requests {
+        validate_request(request)?;
+        if Format::for_kind(&request.kind)? != format {
+            return Err(CoreError::InvalidName(format!(
+                "a {} request cannot be written to {file}",
+                request.kind
+            )));
+        }
+    }
+    if target.is_file() {
+        let raw =
+            std::fs::read_to_string(&target).map_err(|e| CoreError::io(target.display(), e))?;
+        let doc = Doc::parse(format, file, &raw)?;
+        if doc.len() == requests.len() {
+            let mut text = raw;
+            for (index, request) in requests.iter().enumerate() {
+                let doc = Doc::parse(format, file, &text)?;
+                text = doc.replace(index, request)?;
+            }
+            return Ok(text);
+        }
+    }
+    Ok(match format {
+        Format::Http => http_format::render_file(requests, "\n")?,
+        Format::Grpc => grpc_format::render_file(requests, "\n")?,
+        Format::Ws => stream_format::render_file(requests, Flavor::Ws, "\n")?,
+        Format::Mqtt => stream_format::render_file(requests, Flavor::Mqtt, "\n")?,
+    })
+}
+
+/// Writes text a [`plan_file`] call produced. The path is proven to stay inside
+/// the collection here, at the last moment before the bytes land.
+pub fn write_file(workspace: &Path, slug: &str, file: &str, contents: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
+    let root = collection_dir(workspace, slug)?;
+    let target = resolve_within(&root, file)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| CoreError::Io(format!("request has no parent directory: {file}")))?;
+    std::fs::create_dir_all(parent).map_err(|e| CoreError::io(parent.display(), e))?;
+    crate::workspace::atomic_write(&target, contents)
+}
+
 /// Saves one request. An existing request is edited in place, so only the spans
 /// that changed move and every comment, blank line and alignment around them
 /// survives; a new one gets its own file.
@@ -761,6 +1019,7 @@ pub fn save_request(
     folder: Option<&str>,
     request: &SavedRequest,
 ) -> CoreResult<SavedPath> {
+    crate::remote::ensure_writable(workspace)?;
     validate_request(request)?;
     let format = Format::for_kind(&request.kind)?;
     let root = collection_dir(workspace, slug)?;
@@ -807,6 +1066,7 @@ pub fn put_request(
     path: &str,
     request: &SavedRequest,
 ) -> CoreResult<SavedPath> {
+    crate::remote::ensure_writable(workspace)?;
     validate_request(request)?;
     let format = Format::for_kind(&request.kind)?;
     let root = collection_dir(workspace, slug)?;
@@ -866,7 +1126,7 @@ pub fn load_request(workspace: &Path, slug: &str, path: &str) -> CoreResult<Save
                     "{file}: a proto path that is only known at send time cannot be checked against the workspace — write {rel:?} as a workspace-relative path"
                 )));
             }
-            let found = crate::body::resolve_file(Some(workspace), rel)?;
+            let found = crate::body::resolve_workspace_file(Some(workspace), rel, "proto file")?;
             resolved.push(found.to_string_lossy().into_owned());
         }
         grpc.proto_paths = resolved;
@@ -889,6 +1149,7 @@ pub fn load_request_source(workspace: &Path, slug: &str, path: &str) -> CoreResu
 /// Deletes one request. A path with no fragment deletes the whole file; deleting
 /// the last request in a file deletes the file with it.
 pub fn delete_request(workspace: &Path, slug: &str, path: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
     let root = collection_dir(workspace, slug)?;
     let (file, fragment) = split_identity(path);
     let target = resolve_within(&root, file)?;
@@ -908,6 +1169,7 @@ pub fn delete_request(workspace: &Path, slug: &str, path: &str) -> CoreResult<()
 }
 
 pub fn create_folder(workspace: &Path, slug: &str, path: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
     let root = collection_dir(workspace, slug)?;
     let target = resolve_within(&root, path)?;
     if target == root {
@@ -929,6 +1191,7 @@ pub fn create_folder_named(
     parent: &str,
     name: &str,
 ) -> CoreResult<SavedPath> {
+    crate::remote::ensure_writable(workspace)?;
     let root = collection_dir(workspace, slug)?;
     let parent_dir = resolve_within(&root, parent)?;
     if !parent_dir.is_dir() {
@@ -942,6 +1205,7 @@ pub fn create_folder_named(
 }
 
 pub fn delete_folder(workspace: &Path, slug: &str, path: &str) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
     let root = collection_dir(workspace, slug)?;
     let target = resolve_within(&root, path)?;
     if target == root {
@@ -961,6 +1225,7 @@ pub fn rename_folder(
     path: &str,
     name: &str,
 ) -> CoreResult<SavedPath> {
+    crate::remote::ensure_writable(workspace)?;
     validate_component(name)?;
     let root = collection_dir(workspace, slug)?;
     let target = resolve_within(&root, path)?;
@@ -995,6 +1260,7 @@ pub fn move_request(
     from: &str,
     to_folder: &str,
 ) -> CoreResult<SavedPath> {
+    crate::remote::ensure_writable(workspace)?;
     let root = collection_dir(workspace, slug)?;
     let (file, fragment) = split_identity(from);
     let source = resolve_within(&root, file)?;
@@ -1060,6 +1326,8 @@ mod tests {
                 schema_version: SCHEMA_VERSION,
                 id: uuid::Uuid::new_v4().to_string(),
                 name: "Test".to_string(),
+                remote: None,
+                share: None,
             },
         )
         .unwrap();
@@ -1080,6 +1348,7 @@ mod tests {
             },
             body: Body::json("{\"a\": 1}"),
             grpc: None,
+            stream: None,
             scripts: Scripts::default(),
             tests: Vec::new(),
             captures: Vec::new(),
@@ -1144,6 +1413,39 @@ mod tests {
         assert_eq!(list.items.len(), 1);
         assert_eq!(list.skipped.len(), 1);
         assert!(list.skipped[0].contains("orphan"));
+    }
+
+    #[test]
+    fn nested_scaffold_dirs_are_healed_and_not_warned() {
+        let ws = workspace_dir();
+        create_collection(ws.path(), "Good").unwrap();
+        let root = collections_dir(ws.path());
+        std::fs::create_dir_all(root.join("collections")).unwrap();
+        std::fs::create_dir_all(root.join("environments")).unwrap();
+        std::fs::write(
+            root.join("mandalo.toml"),
+            "schema_version = 1\nid = \"x\"\nname = \"collections\"\n",
+        )
+        .unwrap();
+        let list = list_collections(ws.path()).unwrap();
+        assert_eq!(list.items.len(), 1);
+        assert!(list.skipped.is_empty(), "{:?}", list.skipped);
+        assert!(!root.join("mandalo.toml").exists());
+        assert!(!root.join("collections").exists());
+        assert!(!root.join("environments").exists());
+    }
+
+    #[test]
+    fn reserved_collection_names_fail_loud() {
+        let ws = workspace_dir();
+        assert!(create_collection(ws.path(), "collections")
+            .unwrap_err()
+            .to_string()
+            .contains("reserved"));
+        assert!(create_collection(ws.path(), "environments")
+            .unwrap_err()
+            .to_string()
+            .contains("reserved"));
     }
 
     #[test]
@@ -1510,35 +1812,53 @@ mod tests {
     fn a_form_body_the_text_format_cannot_write_is_refused() {
         let ws = workspace_dir();
         let c = create_collection(ws.path(), "Acme").unwrap();
-        for body in [
-            Body::Urlencoded {
-                rows: vec![
-                    FormRow::new("user", "ada"),
-                    FormRow {
-                        enabled: false,
-                        description: Some("only for staging".to_string()),
-                        ..FormRow::new("debug", "1")
-                    },
-                ],
-            },
-            Body::Formdata {
-                rows: vec![
-                    FormDataRow::text("caption", "hola"),
-                    FormDataRow::file("avatar", "files/avatar.png"),
-                    FormDataRow {
-                        content_type: Some("application/pdf".to_string()),
-                        ..FormDataRow::files("docs", ["files/a.pdf", "files/b.pdf"])
-                    },
-                ],
-            },
-        ] {
-            let mut req = request("Refused");
-            req.body = body.clone();
-            let err = save_request(ws.path(), &c.slug, None, None, &req)
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("a .http file"), "{body:?}: {err}");
-        }
+        let body = Body::Urlencoded {
+            rows: vec![
+                FormRow::new("user", "ada"),
+                FormRow {
+                    enabled: false,
+                    description: Some("only for staging".to_string()),
+                    ..FormRow::new("debug", "1")
+                },
+            ],
+        };
+        let mut req = request("Refused");
+        req.body = body.clone();
+        let err = save_request(ws.path(), &c.slug, None, None, &req)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a .http file"), "{body:?}: {err}");
+    }
+
+    #[test]
+    fn a_formdata_body_saves_as_http_text_and_reads_back_wire_equivalent() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let mut req = request("Upload");
+        req.body = Body::Formdata {
+            rows: vec![
+                FormDataRow::text("caption", "hola"),
+                FormDataRow::file("avatar", "files/avatar.png"),
+                FormDataRow {
+                    content_type: Some("application/pdf".to_string()),
+                    ..FormDataRow::files("docs", ["files/a.pdf", "files/b.pdf"])
+                },
+            ],
+        };
+        let path = save_request(ws.path(), &c.slug, None, None, &req)
+            .unwrap()
+            .path;
+        let Body::Formdata { rows } = load_request(ws.path(), &c.slug, &path).unwrap().body else {
+            panic!("expected a formdata body back");
+        };
+        // A row with two files renders as two parts under the same name, so the
+        // reread splits it — same bytes on the wire.
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].value, "hola");
+        assert_eq!(rows[1].files, vec!["files/avatar.png"]);
+        assert_eq!(rows[2].files, vec!["files/a.pdf"]);
+        assert_eq!(rows[3].files, vec!["files/b.pdf"]);
+        assert_eq!(rows[3].content_type.as_deref(), Some("application/pdf"));
     }
 
     #[test]

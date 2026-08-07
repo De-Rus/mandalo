@@ -20,6 +20,9 @@ pub(crate) struct Prepared {
     subscriptions: Vec<(String, QoS)>,
 }
 
+const RECONNECTING: &str =
+    "the mqtt connection is reconnecting — wait for the connected event before sending";
+
 fn qos(level: u8) -> CoreResult<QoS> {
     match level {
         0 => Ok(QoS::AtMostOnce),
@@ -37,12 +40,13 @@ fn credentials(
     auth: &Auth,
     vars: &BTreeMap<String, String>,
 ) -> CoreResult<Option<(String, String)>> {
-    match auth {
+    match auth.effective() {
         Auth::None => Ok(None),
         Auth::Basic { username, password } => Ok(Some((
             interpolate::apply(username, vars)?,
             interpolate::apply(password, vars)?,
         ))),
+        Auth::Inherited { .. } => unreachable!("effective() peels the wrapper off"),
         Auth::Bearer { .. } | Auth::Apikey { .. } => Err(CoreError::Unsupported(
             "mqtt signs in with a username and a password — use basic auth, or the mqtt username and password fields"
                 .to_string(),
@@ -96,6 +100,7 @@ pub(crate) fn prepare(spec: &StreamSpec, resolved: &Resolved) -> CoreResult<Prep
         resolved.limits.max_message_bytes,
         resolved.limits.max_message_bytes,
     );
+    crate::install_crypto_provider();
     options.set_transport(match scheme.as_str() {
         "mqtt" => Transport::Tcp,
         "mqtts" => Transport::tls_with_default_config(),
@@ -317,6 +322,13 @@ pub(crate) async fn run(
     if !events.connecting(&resolved.url) {
         return;
     }
+    if let Err(e) = resolved.guard(&resolved.url).await {
+        events.error(e.to_string(), e.code());
+        events
+            .disconnected(None, "the broker was never reached")
+            .await;
+        return;
+    }
 
     // The event loop is polled on its own task: `poll()` is not cancel-safe, so
     // it must never sit in a `select!` arm next to the command channel.
@@ -417,8 +429,22 @@ pub(crate) async fn run(
                     if !events.reconnecting(attempt, delay, &message) {
                         break;
                     }
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    if !events.connecting(&resolved.url) || resume_tx.send(()).await.is_err() {
+                    if let super::Waited::Closed =
+                        super::wait_before_reconnect(delay, &mut commands, RECONNECTING).await
+                    {
+                        let _ = client.disconnect().await;
+                        events.disconnected(None, "closed by the client").await;
+                        break;
+                    }
+                    if !events.connecting(&resolved.url) {
+                        break;
+                    }
+                    if let Err(e) = resolved.guard(&resolved.url).await {
+                        events.error(e.to_string(), e.code());
+                        events.disconnected(None, "the broker was never reached").await;
+                        break;
+                    }
+                    if resume_tx.send(()).await.is_err() {
                         break;
                     }
                 }
@@ -470,6 +496,7 @@ mod tests {
             url: url.to_string(),
             headers: Vec::new(),
             limits: StreamLimits::default(),
+            policy: std::sync::Arc::new(crate::AllowAll),
         }
     }
 

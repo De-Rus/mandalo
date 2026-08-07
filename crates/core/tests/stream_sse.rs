@@ -142,6 +142,7 @@ async fn the_servers_retry_interval_sets_the_reconnect_delay() {
     let mut spec = spec(&mock.url("/sse/retry"));
     spec.sse.auto_reconnect = true;
     spec.limits.max_reconnect_attempts = 1;
+    spec.limits.backoff_max_ms = RETRY_MS * 2;
     let (tx, mut events) = stream::event_channel(&spec.limits);
     let _handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
 
@@ -154,6 +155,43 @@ async fn the_servers_retry_interval_sets_the_reconnect_delay() {
         })
         .collect();
     assert_eq!(delays, vec![RETRY_MS]);
+}
+
+#[tokio::test]
+async fn closing_during_the_reconnect_wait_ends_the_stream_without_reconnecting() {
+    let mock = MockApi::start().await;
+    let mut spec = spec(&mock.url("/sse/basic?n=1"));
+    spec.sse.auto_reconnect = true;
+    spec.limits.backoff_base_ms = 2_000;
+    spec.limits.backoff_max_ms = 2_000;
+    let (tx, mut events) = stream::event_channel(&spec.limits);
+    let handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
+
+    loop {
+        if matches!(
+            next_event(&mut events).await,
+            StreamEvent::Reconnecting { .. }
+        ) {
+            break;
+        }
+    }
+    handle.close().await.unwrap();
+
+    let mut connects = 1;
+    loop {
+        let event = next_event(&mut events).await;
+        if matches!(event, StreamEvent::Connecting { .. }) {
+            connects += 1;
+        }
+        if let StreamEvent::Disconnected { reason, .. } = &event {
+            assert!(reason.contains("closed by the client"), "{reason}");
+            break;
+        }
+    }
+    assert_eq!(
+        connects, 1,
+        "a close during the wait must not open another connection"
+    );
 }
 
 #[tokio::test]
@@ -269,27 +307,73 @@ async fn strict_mode_refuses_a_loopback_event_stream() {
     assert_eq!(denied.code(), "E_HOST_DENIED");
 }
 
+/// The one slot is taken by `connecting`, and nothing is read from the channel
+/// until the refused send has come back — which only happens once the stream is
+/// connected, so `connected` was offered to a full buffer no matter how fast
+/// either side runs.
 #[tokio::test]
-async fn a_full_buffer_reports_what_it_dropped() {
+async fn a_full_buffer_drops_and_reports_instead_of_growing() {
     let mock = MockApi::start().await;
-    let mut spec = spec(&mock.url("/sse/forever"));
-    spec.limits.max_buffered_events = 4;
+    let mut spec = spec(&mock.url("/sse/basic?n=64"));
+    spec.limits.max_buffered_events = 1;
+    spec.limits.max_buffered_bytes = 8 * 1024 * 1024;
     let (tx, mut events) = stream::event_channel(&spec.limits);
     let handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
 
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let closing = tokio::spawn(async move { handle.close().await });
+    let refused = handle.send(Outgoing::text("nothing")).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("from the server to the client"),
+        "{refused}"
+    );
 
-    let mut dropped = 0u64;
-    loop {
-        let event = next_event(&mut events).await;
-        if let StreamEvent::Dropped { count, .. } = &event {
-            dropped += count;
-        }
-        if event.is_terminal() {
-            break;
-        }
-    }
+    let closing = tokio::spawn(async move { handle.close().await });
+    let all = drain(&mut events).await;
     closing.await.unwrap().unwrap();
-    assert!(dropped > 0, "a firehose into a 4 event buffer must drop");
+
+    let dropped: u64 = all
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::Dropped { count, .. } => Some(*count),
+            _ => None,
+        })
+        .sum();
+    assert!(
+        !all.iter()
+            .any(|e| matches!(e, StreamEvent::Connected { .. })),
+        "a one slot buffer must drop the connected event, not queue it: {all:?}"
+    );
+    assert!(dropped >= 1, "{all:?}");
+}
+
+/// A budget smaller than the fixed weight of a single event cannot hold one, so
+/// every event is dropped whatever the reader does, and the counts must add up
+/// to exactly what the stream produced: connecting, connected and two messages.
+#[tokio::test]
+async fn a_buffer_too_small_for_one_event_drops_them_all_and_counts_them() {
+    let mock = MockApi::start().await;
+    let mut spec = spec(&mock.url("/sse/basic?n=2"));
+    spec.limits.max_message_bytes = 64;
+    spec.limits.max_buffered_bytes = 64;
+    spec.limits.max_buffered_events = 16;
+    let (tx, mut events) = stream::event_channel(&spec.limits);
+    let _handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
+
+    let all = drain(&mut events).await;
+    let dropped: u64 = all
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::Dropped { count, .. } => Some(*count),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(dropped, 4, "{all:?}");
+    assert!(
+        all.iter().all(|e| matches!(
+            e,
+            StreamEvent::Dropped { .. } | StreamEvent::Disconnected { .. }
+        )),
+        "nothing may slip past a buffer that cannot hold it: {all:?}"
+    );
 }

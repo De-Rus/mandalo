@@ -1,0 +1,17 @@
+### Sensors
+{{mqttUrl}}
+client-id: mandalo-{{trace}}
+keep-alive: 30
+subscribe: sensors/#; qos=1
+
+>> report
+topic: sensors/{{room}}/temp
+qos: 1
+
+{"c": 21.5}
+
+>> retained hello
+topic: sensors/{{room}}/hello
+retain: true
+
+hola

@@ -320,6 +320,74 @@ async fn no_broker_listening_says_so_by_name() {
     );
 }
 
+const PUBLISHED: u64 = 40;
+
+/// Every publish comes back before the next one goes out, so by the time the
+/// last one returns the stream has offered the buffer one event per publish —
+/// while nothing here has read an event since the connect. What the buffer could
+/// not hold it must report, on any machine at any speed.
+async fn fill_by_publishing(spec: StreamSpec) -> Vec<StreamEvent> {
+    let (tx, mut events) = stream::event_channel(&spec.limits);
+    let handle = stream::open(spec, Arc::new(AllowAll), tx).await.unwrap();
+    wait_for(&mut events, |e| matches!(e, StreamEvent::Connected { .. })).await;
+
+    for i in 0..PUBLISHED {
+        handle
+            .send(Outgoing::Publish {
+                topic: "mandalo/full".to_string(),
+                payload: format!("m{i}"),
+                qos: 0,
+                retain: false,
+            })
+            .await
+            .unwrap();
+    }
+    let closing = tokio::spawn(async move { handle.close().await });
+    let all = drain(&mut events).await;
+    closing.await.unwrap().unwrap();
+    all
+}
+
+fn dropped_total(all: &[StreamEvent]) -> u64 {
+    all.iter()
+        .filter_map(|e| match e {
+            StreamEvent::Dropped { count, .. } => Some(*count),
+            _ => None,
+        })
+        .sum()
+}
+
+#[tokio::test]
+async fn a_full_buffer_drops_and_reports_instead_of_growing() {
+    let broker = MqttBroker::start().await;
+    let mut spec = spec(&broker.url(), &[]);
+    spec.limits.max_buffered_events = 4;
+    spec.limits.max_buffered_bytes = 8 * 1024 * 1024;
+
+    let all = fill_by_publishing(spec).await;
+    let dropped = dropped_total(&all);
+    assert!(
+        dropped >= PUBLISHED - 1 - 4,
+        "{PUBLISHED} publishes into a 4 event buffer that nobody read must report the rest as dropped, got {dropped}: {all:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_buffer_full_of_bytes_drops_and_reports_too() {
+    let broker = MqttBroker::start().await;
+    let mut spec = spec(&broker.url(), &[]);
+    spec.limits.max_buffered_events = 1024;
+    spec.limits.max_message_bytes = 4096;
+    spec.limits.max_buffered_bytes = 4096;
+
+    let all = fill_by_publishing(spec).await;
+    let dropped = dropped_total(&all);
+    assert!(
+        dropped >= PUBLISHED - 1 - 4096 / 128,
+        "a 4096 byte budget cannot park {PUBLISHED} events, got {dropped}: {all:?}"
+    );
+}
+
 #[tokio::test]
 async fn strict_mode_refuses_a_loopback_broker() {
     let broker = MqttBroker::start().await;

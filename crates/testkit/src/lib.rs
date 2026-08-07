@@ -253,6 +253,10 @@ const ENDPOINTS: &[Area] = &[
             ("/gzip", "gzip-encoded json"),
             ("/brotli", "brotli-encoded json"),
             ("/big?bytes=", "a large json body (capped at 5 MB)"),
+            (
+                "/stream?mb=&chunked=",
+                "mb megabytes, declared or chunked (capped at 128)",
+            ),
             ("/headers/echo", "every request header, duplicates kept"),
             ("/cookies/set", "sets a cookie"),
             ("/health", "status + version"),

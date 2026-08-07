@@ -3,3 +3,7 @@ name = "local"
 [vars]
 baseUrl = "http://localhost:8787"
 grpcUrl = "http://localhost:50051"
+wsUrl = "ws://localhost:8787"
+mqttUrl = "mqtt://localhost:1883"
+trace = "local"
+room = "kitchen"

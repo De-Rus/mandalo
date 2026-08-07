@@ -19,6 +19,7 @@ pub fn request(name: &str, method: &str, url: &str) -> SavedRequest {
         auth: Auth::None,
         body: Body::None,
         grpc: None,
+        stream: None,
         scripts: Scripts::default(),
         tests: Vec::new(),
         captures: Vec::new(),
@@ -39,6 +40,8 @@ pub fn workspace(dir: &Path) -> String {
             schema_version: SCHEMA_VERSION,
             id: "testkit".to_string(),
             name: "Testkit".to_string(),
+            remote: None,
+            share: None,
         },
     )
     .expect("workspace manifest");
@@ -54,6 +57,7 @@ pub fn environment(dir: &Path, name: &str, vars: &[(&str, &str)]) {
         .collect();
     workspace::save_environment(
         dir,
+        &mandalo_core::capability::RefuseLocalWrites,
         &Environment {
             name: name.to_string(),
             vars,

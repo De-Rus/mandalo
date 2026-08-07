@@ -38,6 +38,16 @@ impl RawLanguage {
         }
     }
 
+    pub fn to_postman(self) -> &'static str {
+        match self {
+            RawLanguage::Json => "json",
+            RawLanguage::Text => "text",
+            RawLanguage::Xml => "xml",
+            RawLanguage::Html => "html",
+            RawLanguage::Javascript => "javascript",
+        }
+    }
+
     /// Only used when reading the pre-body-enum format, where a raw body was a
     /// bare string with no language recorded.
     fn sniff(text: &str) -> RawLanguage {
@@ -302,6 +312,10 @@ pub struct ResolvedFile {
     pub bytes: Vec<u8>,
 }
 
+/// The most a single file may weigh before Mándalo refuses to send it as a body:
+/// the bytes are held in memory and copied again by the HTTP client.
+pub const MAX_BODY_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Resolves a body file path against the workspace root.
 ///
 /// A collection is shared, untrusted configuration: without this every import
@@ -309,21 +323,31 @@ pub struct ResolvedFile {
 /// therefore workspace-relative only, and the resolved file must still be under
 /// the workspace after symlinks are followed.
 pub fn resolve_file(workspace: Option<&Path>, rel: &str) -> CoreResult<PathBuf> {
+    resolve_workspace_file(workspace, rel, "body file")
+}
+
+/// The same resolution for any file a request points at. `what` names the kind of
+/// file in every message, so a missing `proto:` never reports a missing body.
+pub fn resolve_workspace_file(
+    workspace: Option<&Path>,
+    rel: &str,
+    what: &str,
+) -> CoreResult<PathBuf> {
     let rel = rel.trim();
     if rel.is_empty() {
-        return Err(CoreError::Request(
-            "this body needs a file: pick one inside the workspace".to_string(),
-        ));
+        return Err(CoreError::Request(format!(
+            "this {what} needs a path: pick a file inside the workspace"
+        )));
     }
     let root = workspace.ok_or_else(|| {
         CoreError::Request(format!(
-            "cannot read the body file {rel:?}: this request has no workspace root, so files cannot be resolved"
+            "cannot read the {what} {rel:?}: this request has no workspace root, so files cannot be resolved"
         ))
     })?;
     let path = Path::new(rel);
     if path.is_absolute() || rel.starts_with('/') || rel.starts_with('\\') {
         return Err(CoreError::PathEscape(format!(
-            "body file must be a path inside the workspace, not an absolute path: {rel:?}"
+            "{what} must be a path inside the workspace, not an absolute path: {rel:?}"
         )));
     }
     for component in path.components() {
@@ -331,7 +355,7 @@ pub fn resolve_file(workspace: Option<&Path>, rel: &str) -> CoreResult<PathBuf> 
             Component::Normal(_) | Component::CurDir => {}
             _ => {
                 return Err(CoreError::PathEscape(format!(
-                    "body file must stay inside the workspace: {rel:?}"
+                    "{what} must stay inside the workspace: {rel:?}"
                 )))
             }
         }
@@ -339,14 +363,14 @@ pub fn resolve_file(workspace: Option<&Path>, rel: &str) -> CoreResult<PathBuf> 
     let target = root.join(path);
     if !target.is_file() {
         return Err(CoreError::NotFound(format!(
-            "body file not found inside the workspace: {rel:?}"
+            "{what} not found inside the workspace: {rel:?}"
         )));
     }
     let real_root = std::fs::canonicalize(root).map_err(|e| CoreError::io(root.display(), e))?;
     let real = std::fs::canonicalize(&target).map_err(|e| CoreError::io(target.display(), e))?;
     if !real.starts_with(&real_root) {
         return Err(CoreError::PathEscape(format!(
-            "body file must stay inside the workspace: {rel:?}"
+            "{what} must stay inside the workspace: {rel:?}"
         )));
     }
     Ok(real)
@@ -360,6 +384,14 @@ pub fn read_file(
 ) -> CoreResult<ResolvedFile> {
     let rel = interpolate::apply(rel, vars)?;
     let path = resolve_file(workspace, &rel)?;
+    let size = std::fs::metadata(&path)
+        .map_err(|e| CoreError::io(path.display(), e))?
+        .len();
+    if size > MAX_BODY_FILE_BYTES {
+        return Err(CoreError::Unsupported(format!(
+            "{rel:?} is {size} bytes, past the {MAX_BODY_FILE_BYTES}-byte limit for a file Mándalo sends as a body — point the request at a smaller file"
+        )));
+    }
     let bytes = std::fs::read(&path).map_err(|e| CoreError::io(path.display(), e))?;
     let file_name = path
         .file_name()

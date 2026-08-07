@@ -147,7 +147,7 @@ with the message the transport has always given:
 
 | Not expressible | What happens |
 | --- | --- |
-| An HTTP or GraphQL request | ``a .grpc file holds gRPC requests, not "http"`` |
+| An HTTP, GraphQL or stream request | ``a .grpc file holds gRPC requests, not "http"`` — websockets and MQTT live in [`.ws` and `.mqtt`](stream-formats.md) |
 | Declarative `[[tests]]` and `[[captures]]` | ``a .grpc file cannot carry declarative tests or captures — assert and capture from a `> {% … %}` response script instead`` |
 | A per-request description **as an editable field** | ``a .grpc file keeps a description in the `#` comments above the request, so it cannot be edited as a field — change the comment in the file``. Creating a request with one writes the comment lines for you; parsing reports the description as `None`. |
 | Server reflection instead of a `proto:` file | Not implemented — there is nothing to lose on save. Point at the `.proto`. |

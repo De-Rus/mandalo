@@ -8,6 +8,7 @@ primary_region = "cdg"
   BIND = "0.0.0.0"
   PORT = "8080"
   GRPC_PORT = "8081"
+  MQTT_PORT = "1883"
   RATE_LIMIT_PER_MINUTE = "600"
 
 [http_service]
@@ -30,8 +31,23 @@ primary_region = "cdg"
   auto_stop_machines = "stop"
   auto_start_machines = true
 
+  [services.http_options]
+  h2_backend = true
+
   [[services.ports]]
     port = 8443
+    handlers = ["tls", "http"]
+
+# The MQTT broker's WebSocket transport (TCP port + 1). A browser can only reach
+# MQTT over WebSocket, so this is the port the web build uses.
+[[services]]
+  protocol = "tcp"
+  internal_port = 1884
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+
+  [[services.ports]]
+    port = 8884
     handlers = ["tls", "http"]
 
 [[vm]]

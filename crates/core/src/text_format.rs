@@ -207,7 +207,7 @@ pub fn dedent(text: &str) -> String {
     let indent = body
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
+        .map(|l| l.chars().take_while(|c| c.is_whitespace()).count())
         .min()
         .unwrap_or(0);
     body.lines()
@@ -257,15 +257,46 @@ pub fn substitute(text: &str, vars: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// The most one `@var` may expand to, and the most every `@var` in a file may
+/// expand to together. Each definition resolves against the already-expanded ones,
+/// so a handful of short lines can otherwise multiply into gigabytes.
+pub const MAX_VAR_BYTES: usize = 64 * 1024;
+pub const MAX_VARS_BYTES: usize = 1024 * 1024;
+
 /// Resolves `@var` definitions in declaration order, each against the ones before
 /// it, so `@url = {{host}}/v1` works.
-pub fn resolve_vars(vars: &[(String, String)]) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
+pub fn resolve_vars(vars: &[(String, String)]) -> CoreResult<BTreeMap<String, String>> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut total = 0usize;
     for (name, value) in vars {
         let resolved = substitute(value, &out);
-        out.insert(name.clone(), resolved);
+        if resolved.len() > MAX_VAR_BYTES {
+            return Err(CoreError::Parse(format!(
+                "@{name} expands to {} bytes, past the {MAX_VAR_BYTES}-byte limit for one variable — a variable that repeats other variables grows fast, so write this value out instead",
+                resolved.len()
+            )));
+        }
+        total += resolved.len();
+        if let Some(previous) = out.insert(name.clone(), resolved) {
+            total -= previous.len();
+        }
+        if total > MAX_VARS_BYTES {
+            return Err(CoreError::Parse(format!(
+                "the @variables in this file expand to more than {MAX_VARS_BYTES} bytes together — remove or shorten the ones built out of other variables"
+            )));
+        }
     }
-    out
+    Ok(out)
+}
+
+/// The line a byte offset falls on, in `O(log n)` — turning an offset into a line
+/// by counting newlines from the start of the file makes parsing quadratic.
+pub fn line_of(lines: &[Line<'_>], offset: usize) -> usize {
+    let after = lines.partition_point(|line| line.start <= offset);
+    lines
+        .get(after.saturating_sub(1))
+        .map(|line| line.number)
+        .unwrap_or(1)
 }
 
 /// Applies non-overlapping replacements to `source`, right to left, so every span
@@ -300,7 +331,10 @@ pub fn description_comment(description: Option<&str>, nl: &str) -> String {
         return String::new();
     };
     text.lines()
-        .map(|line| format!("# {}{nl}", line.trim_end()))
+        .map(|line| match line.trim_end() {
+            "" => format!("#{nl}"),
+            body => format!("# {body}{nl}"),
+        })
         .collect()
 }
 
@@ -392,8 +426,50 @@ mod tests {
         let out = resolve_vars(&[
             ("host".to_string(), "x.dev".to_string()),
             ("base".to_string(), "https://{{host}}/v1".to_string()),
-        ]);
+        ])
+        .expect("nested variables resolve");
         assert_eq!(out["base"], "https://x.dev/v1");
+    }
+
+    #[test]
+    fn doubling_vars_stop_at_the_size_limit() {
+        let mut vars = vec![("a0".to_string(), "x".repeat(64))];
+        for step in 1..20 {
+            let previous = format!("{{{{a{}}}}}", step - 1);
+            vars.push((format!("a{step}"), previous.repeat(4)));
+        }
+        let err = resolve_vars(&vars).unwrap_err();
+        assert_eq!(err.code(), "E_PARSE");
+        assert!(
+            err.to_string().contains(&MAX_VAR_BYTES.to_string()),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn many_small_vars_stop_at_the_total_limit() {
+        let vars: Vec<(String, String)> = (0..40)
+            .map(|index| (format!("v{index}"), "x".repeat(48 * 1024)))
+            .collect();
+        let err = resolve_vars(&vars).unwrap_err();
+        assert_eq!(err.code(), "E_PARSE");
+        assert!(
+            err.to_string().contains(&MAX_VARS_BYTES.to_string()),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn line_of_finds_the_line_a_byte_falls_on() {
+        let source = "aa\nbbbb\n\ncc\n";
+        let all = lines(source);
+        assert_eq!(line_of(&all, 0), 1);
+        assert_eq!(line_of(&all, 2), 1);
+        assert_eq!(line_of(&all, 3), 2);
+        assert_eq!(line_of(&all, 6), 2);
+        assert_eq!(line_of(&all, 8), 3);
+        assert_eq!(line_of(&all, 9), 4);
+        assert_eq!(line_of(&[], 5), 1);
     }
 
     #[test]
@@ -408,5 +484,34 @@ mod tests {
     #[test]
     fn dedent_strips_the_common_indentation() {
         assert_eq!(dedent("\n  a\n    b\n  "), "a\n  b");
+    }
+
+    #[test]
+    fn dedent_counts_indentation_in_characters_not_bytes() {
+        assert_eq!(
+            dedent("\n\u{a0}\u{a0}x = 1;\n\u{a0}\u{a0}y = 2;\n"),
+            "x = 1;\ny = 2;"
+        );
+        assert_eq!(
+            dedent("\n  x = 1;\n\u{a0}\u{a0}\u{a0}y = 2;\n"),
+            "x = 1;\n\u{a0}y = 2;"
+        );
+        assert_eq!(
+            dedent("\n\u{3000}\u{3000}const s = \"€ 5 — añadir\";\n\u{3000}\u{3000}  run(s);\n"),
+            "const s = \"€ 5 — añadir\";\n  run(s);"
+        );
+    }
+
+    #[test]
+    fn dedent_keeps_multibyte_content_after_the_indent_intact() {
+        assert_eq!(
+            dedent("\n    // café — 日本語\n    const y = 2;\n"),
+            "// café — 日本語\nconst y = 2;"
+        );
+    }
+
+    #[test]
+    fn dedent_survives_lines_shorter_than_the_common_indent() {
+        assert_eq!(dedent("\n    a\n \n\u{a0}\n    b\n"), "a\n\n\nb");
     }
 }

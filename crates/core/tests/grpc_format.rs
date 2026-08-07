@@ -216,6 +216,7 @@ fn rendering_a_request_and_parsing_it_back_returns_the_same_request() {
             message: "{\"text\": \"hola\"}".to_string(),
             metadata: vec![("x-trace".to_string(), "mandalo".to_string())],
         }),
+        stream: None,
         scripts: Scripts {
             pre: None,
             post: Some("pm.test(\"ok\", () => {});".to_string()),
@@ -277,4 +278,56 @@ fn a_description_becomes_a_comment_on_a_new_block_and_cannot_be_edited_as_a_fiel
         doc(MULTI).replace(0, &fresh).unwrap_err().code(),
         "E_UNSUPPORTED"
     );
+}
+
+#[test]
+fn a_missing_proto_file_is_reported_as_a_proto_file_not_a_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let slug = mandalo_testkit::fixtures::workspace(dir.path());
+    std::fs::write(
+        mandalo_core::collection::collections_dir(dir.path())
+            .join(&slug)
+            .join("echo.grpc"),
+        "### Echo\ngrpc://localhost:50051/mock.v1.Mock/Echo\nproto: protos/ghost.proto\n\n{}\n",
+    )
+    .unwrap();
+
+    let error =
+        mandalo_core::collection::load_request(dir.path(), &slug, "echo.grpc#0").unwrap_err();
+    assert_eq!(error.code(), "E_NOT_FOUND");
+    assert!(
+        error.to_string().contains("proto file not found"),
+        "a missing proto is not a missing body: {error}"
+    );
+}
+
+#[test]
+fn a_proto_path_that_is_only_whitespace_fails_loud() {
+    for source in [
+        "grpc://localhost:50051/mock.v1.Mock/Echo\nproto: \n\n{}\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\nproto:\t\n\n{}\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\r\nproto: \r\n\r\n{}\r\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\r\nproto:\t \r\n\r\n{}\r\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\nproto:\n\n{}\n",
+    ] {
+        let error = GrpcDoc::parse("mock", source).unwrap_err();
+        assert_eq!(error.code(), "E_PARSE", "{source:?}");
+        assert!(error.to_string().contains("needs a path"), "{error}");
+    }
+}
+
+#[test]
+fn metadata_whose_value_is_only_whitespace_parses_as_empty() {
+    for source in [
+        "grpc://localhost:50051/mock.v1.Mock/Echo\nx-trace: \n\n{}\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\nx-trace:\t\n\n{}\n",
+        "grpc://localhost:50051/mock.v1.Mock/Echo\r\nx-trace: \r\n\r\n{}\r\n",
+    ] {
+        let request = request_at(source, 0);
+        assert_eq!(
+            request.grpc.expect("a gRPC request").metadata,
+            vec![("x-trace".to_string(), String::new())],
+            "{source:?}"
+        );
+    }
 }

@@ -32,7 +32,7 @@ fn spec(ws: &Path, url: &str, body: Body) -> RequestSpec {
 }
 
 async fn send(spec: RequestSpec) -> ResponseData {
-    request::send_request(spec)
+    request::send_request(spec, &mandalo_core::AllowAll)
         .await
         .expect("the request reached the mock")
 }
@@ -328,14 +328,17 @@ async fn a_file_outside_the_workspace_stops_the_send() {
         "../../../etc/passwd".to_string(),
         outside.path().join("id_rsa").to_string_lossy().into_owned(),
     ] {
-        let error = request::send_request(spec(
-            ws.path(),
-            &api.url("/body/binary"),
-            Body::Binary {
-                file: file.clone(),
-                content_type: None,
-            },
-        ))
+        let error = request::send_request(
+            spec(
+                ws.path(),
+                &api.url("/body/binary"),
+                Body::Binary {
+                    file: file.clone(),
+                    content_type: None,
+                },
+            ),
+            &mandalo_core::AllowAll,
+        )
         .await
         .unwrap_err();
         assert_eq!(error.code(), "E_PATH_ESCAPE", "{file}");
@@ -347,16 +350,19 @@ async fn a_file_outside_the_workspace_stops_the_send() {
 async fn one_bad_file_in_a_multi_file_row_names_the_field_and_sends_nothing() {
     let ws = workspace();
     let api = MockApi::start().await;
-    let error = request::send_request(spec(
-        ws.path(),
-        &api.url("/body/multipart"),
-        Body::Formdata {
-            rows: vec![FormDataRow::files(
-                "attachments",
-                ["files/a.txt", "files/ghost.txt"],
-            )],
-        },
-    ))
+    let error = request::send_request(
+        spec(
+            ws.path(),
+            &api.url("/body/multipart"),
+            Body::Formdata {
+                rows: vec![FormDataRow::files(
+                    "attachments",
+                    ["files/a.txt", "files/ghost.txt"],
+                )],
+            },
+        ),
+        &mandalo_core::AllowAll,
+    )
     .await
     .unwrap_err();
 
@@ -382,7 +388,9 @@ async fn a_body_file_without_a_workspace_root_fails_loud() {
         },
     );
     spec.workspace = None;
-    let error = request::send_request(spec).await.unwrap_err();
+    let error = request::send_request(spec, &mandalo_core::AllowAll)
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("no workspace root"), "{error}");
 }
@@ -398,18 +406,27 @@ async fn the_example_workspace_upload_requests_run_green_end_to_end() {
         &api.proto_path(),
     );
 
-    let paths: Vec<String> = mandalo_core::collection::list_tree(dir.path())
+    fn walk(folder: &mandalo_core::collection::FolderNode, out: &mut Vec<String>) {
+        out.extend(folder.requests.iter().map(|r| r.path.clone()));
+        for child in &folder.folders {
+            walk(child, out);
+        }
+    }
+    let mock = mandalo_core::collection::list_tree(dir.path())
         .unwrap()
         .collections
         .into_iter()
         .find(|c| c.slug == "mock")
-        .expect("the mock collection")
-        .requests
+        .expect("the mock collection");
+    let mut all: Vec<String> = mock.requests.iter().map(|r| r.path.clone()).collect();
+    for folder in &mock.folders {
+        walk(folder, &mut all);
+    }
+    let paths: Vec<String> = all
         .into_iter()
-        .map(|r| r.path)
-        .filter(|p| p.starts_with("upload.http#"))
+        .filter(|p| p.starts_with("uploads/bodies.http#"))
         .collect();
-    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert_eq!(paths.len(), 4, "{paths:?}");
 
     let runner = mandalo_core::Runner::new(mandalo_core::NoSecrets, mandalo_core::AllowAll);
     for path in paths {

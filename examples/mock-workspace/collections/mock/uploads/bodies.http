@@ -1,0 +1,74 @@
+### Form login
+POST {{baseUrl}}/body/urlencoded
+Content-Type: application/x-www-form-urlencoded
+
+username=ada+lovelace&password=lovelace
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the pairs arrived as written", function () {
+  pm.expect(pm.response.json().raw).to.equal("username=ada+lovelace&password=lovelace");
+});
+%}
+
+### Send a JSON file as the body
+POST {{baseUrl}}/body/binary
+
+< ./files/payload.json
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the extension set the content type", function () {
+  pm.expect(pm.response.json().contentType).to.equal("application/json");
+});
+pm.test("the file's bytes are the body", function () {
+  pm.expect(JSON.parse(pm.response.json().text).name).to.equal("nova");
+});
+%}
+
+### Send a PDF as the body
+POST {{baseUrl}}/body/binary
+
+< ./files/report.pdf
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("the extension set the content type", function () {
+  pm.expect(pm.response.json().contentType).to.equal("application/pdf");
+});
+%}
+
+### Multipart: several files under one key
+POST {{baseUrl}}/body/multipart
+Content-Type: multipart/form-data
+
+caption = two files, one field
+attachments = < ./files/alpha.txt < ./files/beta.txt
+report = < ./files/report.pdf; type=application/x-invoice
+
+> {%
+pm.test("status is 200", function () { pm.response.to.have.status(200); });
+pm.test("all four parts arrived", function () {
+  pm.expect(pm.response.json().count).to.equal(4);
+});
+pm.test("both files share the field name", function () {
+  const names = pm.response.json().parts.map(function (p) { return p.name; });
+  pm.expect(names).to.eql(["caption", "attachments", "attachments", "report"]);
+});
+pm.test("the files kept their names and type", function () {
+  const files = pm.response.json().parts;
+  pm.expect(files.map(function (p) { return p.filename; })).to.eql([
+    null,
+    "alpha.txt",
+    "beta.txt",
+    "report.pdf",
+  ]);
+  pm.expect(files[1].contentType).to.equal("text/plain");
+});
+pm.test("the declared type won over the extension", function () {
+  pm.expect(pm.response.json().parts[3].contentType).to.equal("application/x-invoice");
+});
+pm.test("the caption stayed text", function () {
+  pm.expect(pm.response.json().parts[0].text).to.equal("two files, one field");
+});
+%}

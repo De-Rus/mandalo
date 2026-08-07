@@ -188,8 +188,8 @@ async fn a_redirect_chain_is_followed_and_the_hop_cap_fails_loud() {
             &mut VarFrame::default(),
         )
         .await
-        .expect_err("11 hops is over the reqwest redirect cap");
-    assert_eq!(error.code(), "E_NETWORK");
+        .expect_err("11 hops is over the redirect cap");
+    assert_eq!(error.code(), "E_REQUEST");
     assert!(
         error.to_string().to_lowercase().contains("redirect"),
         "{error}"

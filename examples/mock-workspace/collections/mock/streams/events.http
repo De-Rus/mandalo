@@ -1,0 +1,10 @@
+### Server-sent events
+{{baseUrl}}/sse/basic
+Accept: text/event-stream
+
+### Server-sent events, one pass
+# `@reconnect off` stops the automatic resume, so this stream ends when the
+# server closes it instead of connecting again.26
+{{baseUrl}}/sse/ids
+Accept: text/event-stream
+Last-Event-ID: 2

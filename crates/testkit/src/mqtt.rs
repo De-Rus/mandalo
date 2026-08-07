@@ -32,10 +32,20 @@ fn connections(auth: Option<HashMap<String, String>>) -> ConnectionSettings {
     }
 }
 
+/// Tests want loopback so nothing else on the machine can reach the broker; the
+/// hosted mock has to answer its platform's proxy, which never comes from
+/// loopback. `BIND` is the same variable the HTTP server reads.
+fn listen_addr() -> IpAddr {
+    std::env::var("BIND")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
 fn server(name: &str, port: u16, auth: Option<HashMap<String, String>>) -> ServerSettings {
     ServerSettings {
         name: name.to_string(),
-        listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        listen: SocketAddr::new(listen_addr(), port),
         tls: None,
         next_connection_delay_ms: 1,
         connections: connections(auth),
@@ -57,8 +67,16 @@ impl MqttBroker {
     }
 
     pub async fn start_with(auth: Option<HashMap<String, String>>) -> MqttBroker {
-        let tcp_port = free_port();
-        let ws_port = free_port();
+        MqttBroker::start_on(free_port(), free_port(), auth).await
+    }
+
+    /// A broker on ports the caller picked. The long-running mock needs a port a
+    /// saved `.mqtt` file can name; the tests need one nothing else can take.
+    pub async fn start_on(
+        tcp_port: u16,
+        ws_port: u16,
+        auth: Option<HashMap<String, String>>,
+    ) -> MqttBroker {
         let config = Config {
             id: 0,
             router: RouterConfig {

@@ -1,0 +1,9 @@
+# >>> mandalo — managed block, edits here are overwritten
+*.local.toml
+.mandalo/
+secrets.toml
+.secrets.toml
+*.secret.toml
+.env
+.env.*
+# <<< mandalo

@@ -1,11 +1,14 @@
 use super::{
-    default_port, idle_timeout, too_big, wrong_message, Command, ConnectionInfo, Direction,
-    Emitter, MessageMeta, Outgoing, Payload, Resolved, WsOptions, E_STREAM_AUTH, E_STREAM_CONNECT,
-    E_STREAM_IDLE, E_STREAM_LIMIT, E_STREAM_PROTOCOL, E_STREAM_TLS,
+    default_port, idle_timeout, too_big, wait_before_reconnect, wrong_message, Command,
+    ConnectionInfo, Direction, Emitter, MessageMeta, Outgoing, Payload, Resolved, Waited,
+    WsOptions, E_STREAM_AUTH, E_STREAM_CONNECT, E_STREAM_IDLE, E_STREAM_LIMIT, E_STREAM_PROTOCOL,
+    E_STREAM_TLS,
 };
 use crate::error::{CoreError, CoreResult};
 use futures_util::{SinkExt, StreamExt};
+use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -181,6 +184,42 @@ fn incoming_message(
     })
 }
 
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+/// The handshake goes to an address the policy just approved, not to whatever
+/// the name resolves to a moment later.
+async fn dial(
+    request: http::Request<()>,
+    config: WebSocketConfig,
+    pinned: &[SocketAddr],
+) -> Result<(Socket, http::Response<Option<Vec<u8>>>), WsError> {
+    crate::install_crypto_provider();
+    if pinned.is_empty() {
+        return tokio_tungstenite::connect_async_with_config(request, Some(config), false).await;
+    }
+    let mut refusal = None;
+    for addr in pinned {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                return tokio_tungstenite::client_async_tls_with_config(
+                    request,
+                    stream,
+                    Some(config),
+                    None,
+                )
+                .await
+            }
+            Err(e) => refusal = Some(WsError::Io(e)),
+        }
+    }
+    Err(refusal.unwrap_or_else(|| {
+        WsError::Io(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "no approved address to connect to",
+        ))
+    }))
+}
+
 pub(crate) async fn run(
     resolved: Resolved,
     options: WsOptions,
@@ -194,6 +233,16 @@ pub(crate) async fn run(
         if !events.connecting(&resolved.url) {
             return;
         }
+        let pinned = match resolved.guard(&resolved.url).await {
+            Ok(pinned) => pinned,
+            Err(e) => {
+                events.error(e.to_string(), e.code());
+                events
+                    .disconnected(None, "the websocket was never opened")
+                    .await;
+                return;
+            }
+        };
         let request = match request(&resolved, &options) {
             Ok(request) => request,
             Err(e) => {
@@ -208,10 +257,9 @@ pub(crate) async fn run(
             .max_message_size(Some(limits.max_message_bytes))
             .max_frame_size(Some(limits.max_message_bytes));
 
-        let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
         let outcome = tokio::time::timeout(
             Duration::from_millis(limits.connect_timeout_ms.max(1)),
-            connect,
+            dial(request, config, &pinned),
         )
         .await;
 
@@ -222,7 +270,16 @@ pub(crate) async fn run(
                 if !events.error(message.clone(), code) {
                     return;
                 }
-                match retry(&mut events, &options, &limits, &mut attempt, &message).await {
+                match retry(
+                    &mut events,
+                    &mut commands,
+                    &options,
+                    &limits,
+                    &mut attempt,
+                    &message,
+                )
+                .await
+                {
                     Retry::Again => continue,
                     Retry::Stop => return,
                 }
@@ -235,7 +292,16 @@ pub(crate) async fn run(
                 if !events.error(message.clone(), E_STREAM_CONNECT) {
                     return;
                 }
-                match retry(&mut events, &options, &limits, &mut attempt, &message).await {
+                match retry(
+                    &mut events,
+                    &mut commands,
+                    &options,
+                    &limits,
+                    &mut attempt,
+                    &message,
+                )
+                .await
+                {
                     Retry::Again => continue,
                     Retry::Stop => return,
                 }
@@ -254,7 +320,16 @@ pub(crate) async fn run(
                 if up_since.elapsed() >= super::HEALTHY_SESSION {
                     attempt = 0;
                 }
-                match retry(&mut events, &options, &limits, &mut attempt, &reason).await {
+                match retry(
+                    &mut events,
+                    &mut commands,
+                    &options,
+                    &limits,
+                    &mut attempt,
+                    &reason,
+                )
+                .await
+                {
                     Retry::Again => continue,
                     Retry::Stop => return,
                 }
@@ -274,8 +349,12 @@ enum Retry {
     Stop,
 }
 
+const RECONNECTING: &str =
+    "the websocket is reconnecting — wait for the connected event before sending";
+
 async fn retry(
     events: &mut Emitter,
+    commands: &mut mpsc::Receiver<Command>,
     options: &WsOptions,
     limits: &super::StreamLimits,
     attempt: &mut u32,
@@ -298,7 +377,10 @@ async fn retry(
     if !events.reconnecting(*attempt, delay, reason) {
         return Retry::Stop;
     }
-    tokio::time::sleep(Duration::from_millis(delay)).await;
+    if let Waited::Closed = wait_before_reconnect(delay, commands, RECONNECTING).await {
+        events.disconnected(None, "closed by the client").await;
+        return Retry::Stop;
+    }
     Retry::Again
 }
 
@@ -430,6 +512,7 @@ mod tests {
             url: url.to_string(),
             headers: vec![("X-Trace".to_string(), "on".to_string())],
             limits: StreamLimits::default(),
+            policy: std::sync::Arc::new(crate::AllowAll),
         }
     }
 
