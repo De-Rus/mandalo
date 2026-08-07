@@ -1,12 +1,25 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type {
+  Outgoing,
+  SavedMessage,
+  StreamEvent,
+  StreamKind,
+  StreamSpec,
+  StreamStatus,
+  Subscription,
+} from "./stream";
 
-export type Kind = "http" | "graphql" | "grpc";
+export type Kind = "http" | "graphql" | "grpc" | StreamKind;
 
 export type Auth =
   | { type: "none" }
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
-  | { type: "apikey"; key: string; value: string; placement: "header" | "query" };
+  | { type: "apikey"; key: string; value: string; placement: "header" | "query" }
+  /** A collection-wide default the request did not ask for. The editor shows the
+   * auth it wraps; dropping the wrapper on save would delete the `# @auth
+   * inherited` line and the credential under it. */
+  | { type: "inherited"; auth: Auth };
 
 export interface RequestSpec {
   kind: "http" | "graphql";
@@ -81,12 +94,22 @@ export interface Environment {
   vars: Record<string, string>;
 }
 
-/** What the UI may know about a variable. A secret's `value` is always null. */
+/** Which layer answered for a variable's value. */
+export type VarSource = "file" | "local" | "environment";
+
+/**
+ * What the UI may know about a variable. `shared` says where the value lives —
+ * the committed file, or only this machine; `secret` says how it is treated.
+ * `value` is the **committed** value and is null for anything not shared, so a
+ * secret's value never crosses this boundary and a local one never does either.
+ */
 export interface VarInfo {
+  shared: boolean;
   secret: boolean;
   value: string | null;
   hosts?: string[];
   set: boolean;
+  source?: VarSource;
 }
 
 export interface EnvironmentView {
@@ -106,14 +129,217 @@ export interface Finding {
   excerpt: string;
 }
 
-export interface ExportBundle {
-  json: string;
+export interface IncludedRequest {
+  path: string;
+  name: string;
+}
+
+export interface IncludedCollection {
+  slug: string;
+  name: string;
+  requests: IncludedRequest[];
+}
+
+export interface ExportIncluded {
+  collections: IncludedCollection[];
+  environments: string[];
+  requestCount: number;
+}
+
+export interface ExportExcluded {
+  secretValues: number;
+  localValues: number;
+  withheldNames: string[];
+  collections: string[];
+  requests: number;
+  environments: string[];
+}
+
+/**
+ * What an export *would* write. `token` pins the plan to the workspace as it was
+ * read; `run_export` refuses a token the workspace has moved past, so a review
+ * can never approve a bundle other than the one on screen.
+ */
+export interface ExportPlan {
+  included: ExportIncluded;
+  excluded: ExportExcluded;
   findings: Finding[];
+  bytes: number;
+  blocked: boolean;
+  token: string;
+  format: string;
+  warnings: string[];
+}
+
+export interface ExportSelection {
+  collections?: { slug: string; folders?: string[]; requests?: string[] }[];
+  environments?: string[];
+}
+
+export interface ExportReceipt {
+  path: string;
+  bytes: number;
+  requests: number;
+  collections: number;
+  environments: number;
+  forced: boolean;
+}
+
+/** A document fetched for import, and what came back over the wire. */
+export interface FetchedDocument {
+  url: string;
+  contentType: string | null;
+  bytes: number;
+  text: string;
+  status: number;
+}
+
+/** Where a read-only workspace came from. `null` for one the user owns. */
+export interface RemoteOrigin {
+  label: string;
+  url: string;
+  commit: string | null;
+  fetchedAt: number;
+}
+
+export interface RemoteScript {
+  collection: string;
+  request: string;
+  hook: string;
+  lines: number;
+}
+
+export interface RemoteEnvironment {
+  name: string;
+  declared: string[];
+  sharedValues: number;
+  awaitingValues: number;
+}
+
+/**
+ * Everything a stranger's collection turns out to be, worked out without running
+ * any of it. `token` pins the review to the exact bytes that were fetched, so
+ * adopting cannot land something other than what was on screen.
+ */
+export interface RemoteReview {
+  origin: RemoteOrigin;
+  files: number;
+  bytes: number;
+  collections: number;
+  requests: number;
+  environments: RemoteEnvironment[];
+  hosts: string[];
+  templatedHosts: string[];
+  scripts: RemoteScript[];
+  findings: Finding[];
+  skipped: string[];
+  token: string;
 }
 
 export interface GitHygiene {
   gitignoreWritten: boolean;
   hookInstalled: boolean;
+}
+
+export interface GitIdentity {
+  name: string;
+  email: string;
+  isFallback: boolean;
+}
+
+export interface SyncStatus {
+  isRepo: boolean;
+  branch: string | null;
+  detached: boolean;
+  remoteUrl: string | null;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  ahead: number;
+  behind: number;
+  conflicted: string[];
+  dirtyFiles: string[];
+  dirtyTotal: number;
+  identity: GitIdentity | null;
+}
+
+export type FileChange =
+  | "new"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "typeChange"
+  | "conflicted";
+
+export type SyncAction =
+  | "nothing"
+  | "commit"
+  | "push"
+  | "commitAndPush"
+  | "pull"
+  | "branchAndPush";
+
+export interface PlannedFile {
+  path: string;
+  change: FileChange;
+  included: boolean;
+}
+
+export interface SyncSelection {
+  only?: string[] | null;
+  except?: string[];
+}
+
+export interface SyncPlan {
+  action: SyncAction;
+  files: PlannedFile[];
+  included: number;
+  excluded: number;
+  remote: string | null;
+  branch: string | null;
+  targetBranch: string | null;
+  ahead: number;
+  behind: number;
+  conflicted: string[];
+  findings: Finding[];
+  blocked: boolean;
+  identity: GitIdentity;
+  token: string;
+  shareDir?: string | null;
+  conflictItems?: ConflictItem[];
+}
+
+export type SyncOutcome =
+  | { kind: "nothingToDo" }
+  | { kind: "committed"; sha: string; identity: GitIdentity }
+  | { kind: "pushed"; sha: string; ahead: number; identity: GitIdentity }
+  | { kind: "pulled"; sha: string; behind: number }
+  | { kind: "conflicted"; files: string[]; items?: ConflictItem[] }
+  | { kind: "rejected"; reason: string };
+
+export interface ConflictSidePreview {
+  exists: boolean;
+  kind?: string | null;
+  method?: string | null;
+  name?: string | null;
+  detail?: string | null;
+  /** Full file text for the line diff UI. */
+  text?: string | null;
+}
+
+export interface ConflictItem {
+  path: string;
+  ours: ConflictSidePreview;
+  theirs: ConflictSidePreview;
+}
+
+export type ConflictChoice = "ours" | "theirs";
+
+export interface ConflictDecision {
+  path: string;
+  choice: ConflictChoice;
+  /** Explicit merged file body (request-by-request picks). */
+  content?: string | null;
 }
 
 export interface Scripts {
@@ -163,6 +389,55 @@ export interface SavedGrpc {
   metadata: [string, string][];
 }
 
+/**
+ * The protocol options a realtime request carries in its file. The shape mirrors
+ * `StreamSpec` minus the parts a run supplies — url, headers, auth and vars are
+ * the request's own fields, exactly as they are for HTTP.
+ */
+export interface SavedStream {
+  subprotocols?: string[];
+  autoReconnect?: boolean;
+  pingIntervalMs?: number;
+  lastEventId?: string | null;
+  clientId?: string | null;
+  username?: string | null;
+  password?: string | null;
+  cleanSession?: boolean;
+  keepAliveSecs?: number;
+  subscriptions?: Subscription[];
+  protocolVersion?: "3.1.1" | "5";
+  maxMessageBytes?: number;
+  maxBufferedEvents?: number;
+  maxReconnectAttempts?: number;
+  idleTimeoutMs?: number;
+  messages?: SavedMessage[];
+}
+
+export interface FormRowPayload {
+  key: string;
+  value?: string;
+  enabled?: boolean;
+  description?: string | null;
+}
+
+export interface FormDataRowPayload {
+  key: string;
+  value?: string;
+  files?: string[];
+  contentType?: string | null;
+  enabled?: boolean;
+  description?: string | null;
+}
+
+export type RawLanguage = "json" | "text" | "xml" | "html" | "javascript";
+
+export type BodyPayload =
+  | { mode: "raw"; language?: RawLanguage; text: string }
+  | { mode: "urlencoded"; rows: FormRowPayload[] }
+  | { mode: "formdata"; rows: FormDataRowPayload[] }
+  | { mode: "binary"; file: string; contentType?: string | null }
+  | { mode: "graphql"; query: string; variables: string };
+
 export interface SavedRequest {
   id: string;
   name: string;
@@ -170,11 +445,14 @@ export interface SavedRequest {
   method: string;
   url: string;
   description?: string | null;
-  body?: string | null;
+  body?: string | BodyPayload | null;
+  /** A `< ./file` body. Only an engine with a filesystem can send one. */
+  bodyFile?: string | null;
   headers: [string, string][];
   auth: Auth;
   graphql?: { query: string; variables: string } | null;
   grpc?: SavedGrpc | null;
+  stream?: SavedStream | null;
   scripts?: Scripts;
   tests?: TestAssertion[];
   captures?: Capture[];
@@ -193,7 +471,8 @@ export interface WorkspaceList {
 
 export interface WorkspaceOpen {
   workspace: WorkspaceInfo;
-  migrated: string[];
+  /** Present when opening migrates legacy root-level request files. */
+  migrated?: string[];
 }
 
 export interface CollectionInfo {
@@ -333,12 +612,6 @@ export function listGrpcMethods(protoPaths: string[]): Promise<GrpcMethodInfo[]>
   return invoke("list_grpc_methods", { protoPaths });
 }
 
-/**
- * PENDING BACKEND: no `describe_message` command exists yet, in either build.
- * The editor treats a rejection as "no example available" and never guesses a
- * shape from the proto text, so this is the one place that has to change once
- * the command lands.
- */
 export function describeMessage(
   protoPaths: string[],
   typeName: string,
@@ -454,6 +727,130 @@ export function installPrecommitHook(workspace: string): Promise<void> {
 
 export function scanWorkspace(workspace: string): Promise<Finding[]> {
   return invoke("scan_workspace", { workspace });
+}
+
+export function gitStatus(workspace: string): Promise<SyncStatus> {
+  return invoke("git_status", { workspace });
+}
+
+export function gitInit(
+  workspace: string,
+  remoteUrl?: string | null,
+): Promise<void> {
+  return invoke("git_init", { workspace, remoteUrl: remoteUrl ?? null });
+}
+
+export function gitClone(
+  url: string,
+  dest: string,
+  token?: string | null,
+): Promise<void> {
+  return invoke("git_clone", { url, dest, token: token ?? null });
+}
+
+export function planSync(
+  workspace: string,
+  selection?: SyncSelection | null,
+  branch?: string | null,
+): Promise<SyncPlan> {
+  return invoke("plan_sync", {
+    workspace,
+    selection: selection ?? null,
+    branch: branch ?? null,
+  });
+}
+
+export function runSync(
+  workspace: string,
+  token: string,
+  message: string,
+  selection?: SyncSelection | null,
+  force = false,
+): Promise<SyncOutcome> {
+  return invoke("run_sync", {
+    workspace,
+    selection: selection ?? null,
+    token,
+    message,
+    gitToken: null,
+    force,
+  });
+}
+
+export function conflictPreviews(
+  workspace: string,
+  files: string[],
+): Promise<ConflictItem[]> {
+  return invoke("conflict_previews", { workspace, files });
+}
+
+export function applyConflictChoices(
+  workspace: string,
+  decisions: ConflictDecision[],
+): Promise<void> {
+  return invoke("apply_conflict_choices", { workspace, decisions });
+}
+
+export interface GithubStatus {
+  connected: boolean;
+  login: string | null;
+}
+
+export interface GithubLoginStart {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+  handle: string;
+}
+
+export interface GithubPoll {
+  pending: boolean;
+  user: { login: string; name?: string | null; avatarUrl?: string | null } | null;
+}
+
+export interface GithubRepo {
+  name: string;
+  fullName: string;
+  private: boolean;
+  cloneUrl: string;
+  htmlUrl: string;
+  defaultBranch: string;
+}
+
+export function githubStatus(): Promise<GithubStatus> {
+  return invoke("github_status", {});
+}
+
+export function githubStartLogin(publicOnly = false): Promise<GithubLoginStart> {
+  return invoke("github_start_login", { publicOnly, clientId: null });
+}
+
+export function githubPollLogin(handle: string): Promise<GithubPoll> {
+  return invoke("github_poll_login", { handle });
+}
+
+export function githubLogout(): Promise<void> {
+  return invoke("github_logout", {});
+}
+
+export function githubListRepos(): Promise<GithubRepo[]> {
+  return invoke("github_list_repos", {});
+}
+
+export function githubCreateRepo(
+  name: string,
+  privateRepo = true,
+): Promise<GithubRepo> {
+  return invoke("github_create_repo", { name, private: privateRepo });
+}
+
+export function toCurl(
+  workspace: string,
+  request: SavedRequest,
+  env?: string | null,
+): Promise<string> {
+  return invoke("to_curl", { workspace, request, env: env ?? null });
 }
 
 export function saveEnvironment(
@@ -573,8 +970,72 @@ export function importPostman(
   return invoke("import_postman", { workspace, json });
 }
 
-export function exportBundle(workspace: string): Promise<ExportBundle> {
-  return invoke("export_bundle", { workspace });
+/** The whole document as text — JSON or YAML, 3.1 / 3.0 / Swagger 2.0. */
+export function importOpenapi(
+  workspace: string,
+  source: string,
+): Promise<ImportReport> {
+  return invoke("import_openapi", { workspace, source });
+}
+
+export type ShareFormat = "native" | "postman";
+
+export interface ShareConfig {
+  format: ShareFormat;
+  dir?: string | null;
+}
+
+export function planExport(
+  workspace: string,
+  selection?: ExportSelection,
+  format?: ShareFormat | null,
+): Promise<ExportPlan> {
+  return invoke("plan_export", {
+    workspace,
+    selection: selection ?? null,
+    format: format ?? null,
+  });
+}
+
+export function runExport(
+  workspace: string,
+  token: string,
+  path: string,
+  force: boolean,
+  selection?: ExportSelection,
+  format?: ShareFormat | null,
+): Promise<ExportReceipt> {
+  return invoke("run_export", {
+    workspace,
+    selection: selection ?? null,
+    token,
+    path,
+    force,
+    format: format ?? null,
+  });
+}
+
+export function workspaceShare(
+  workspace: string,
+): Promise<ShareConfig | null> {
+  return invoke("workspace_share", { workspace });
+}
+
+export function setWorkspaceShare(
+  workspace: string,
+  format: ShareFormat | null,
+  dir?: string | null,
+): Promise<unknown> {
+  return invoke("set_workspace_share", {
+    workspace,
+    format,
+    dir: dir ?? null,
+  });
+}
+
+/** Fetched Rust-side so an import URL passes the same egress guard as any request. */
+export function fetchTextForImport(url: string): Promise<FetchedDocument> {
+  return invoke("fetch_text_for_import", { url });
 }
 
 export function importBundle(
@@ -593,6 +1054,70 @@ export function writeTextFileForExport(
   contents: string,
 ): Promise<void> {
   return invoke("write_text_file_for_export", { path, contents });
+}
+
+/**
+ * Opens a realtime connection. The events arrive on a per-connection channel,
+ * never a global event bus, so one stream can never receive another's traffic
+ * and dropping the receiver is what tells the engine to hang up.
+ */
+export async function streamOpen(
+  spec: StreamSpec,
+  onEvent: (event: StreamEvent) => void,
+): Promise<string> {
+  const channel = new Channel<StreamEvent>();
+  channel.onmessage = onEvent;
+  const { streamId } = await invoke<{ streamId: string }>("stream_open", {
+    spec,
+    channel,
+  });
+  return streamId;
+}
+
+export function streamSend(streamId: string, payload: Outgoing): Promise<void> {
+  return invoke("stream_send", { streamId, payload });
+}
+
+export function streamClose(streamId: string): Promise<void> {
+  return invoke("stream_close", { streamId });
+}
+
+export function streamStatus(streamId: string): Promise<StreamStatus> {
+  return invoke("stream_status", { streamId });
+}
+
+export function streamList(): Promise<StreamStatus[]> {
+  return invoke("stream_list", {});
+}
+
+export function addSampleCollection(workspace: string): Promise<string> {
+  return invoke("add_sample_collection", { workspace });
+}
+
+export function seedWorkspace(
+  workspace: string,
+): Promise<ImportReport | null> {
+  return invoke("seed_workspace", { workspace });
+}
+
+export function reviewRemote(source: string): Promise<RemoteReview> {
+  return invoke("review_remote", { source });
+}
+
+export function adoptRemote(token: string, dest: string): Promise<WorkspaceInfo> {
+  return invoke("adopt_remote", { token, dest });
+}
+
+export function remoteOrigin(workspace: string): Promise<RemoteOrigin | null> {
+  return invoke("remote_origin", { workspace });
+}
+
+export function saveWorkspaceCopy(
+  workspace: string,
+  dest: string,
+  name: string,
+): Promise<WorkspaceInfo> {
+  return invoke("save_workspace_copy", { workspace, dest, name });
 }
 
 export function errorMessage(e: unknown): string {
