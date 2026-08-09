@@ -4,16 +4,11 @@ class Mandalo < Formula
   version "0.2.0"
   license "MIT"
 
-  on_macos do
-    on_arm do
-      url "https://github.com/De-Rus/mandalo/releases/download/v#{version}/mandalo-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_aarch64-apple-darwin"
-    end
-    on_intel do
-      url "https://github.com/De-Rus/mandalo/releases/download/v#{version}/mandalo-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_x86_64-apple-darwin"
-    end
-  end
+  # macOS gets the cask, not the formula: a formula without a bottle takes
+  # Homebrew's build-from-source path, which demands current Command Line Tools
+  # to install a binary that is already compiled. The cask also carries the
+  # desktop app, and linking bin/mandalo from both would collide.
+  depends_on :linux
 
   on_linux do
     on_arm do

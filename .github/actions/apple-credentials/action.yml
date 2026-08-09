@@ -1,0 +1,53 @@
+name: Apple credentials
+description: >-
+  Decide whether this run can sign for macOS and, when it can, put the App Store
+  Connect .p8 on disk so notarytool and tauri-action can find it.
+
+inputs:
+  certificate:
+    description: Base64 of the Developer ID Application .p12 (secrets.APPLE_CERTIFICATE)
+    required: false
+    default: ""
+  api-key-p8:
+    description: Base64 of the App Store Connect AuthKey .p8 (secrets.APPLE_API_KEY_P8)
+    required: false
+    default: ""
+  required:
+    description: >-
+      "true" on a tagged release, where missing credentials are a hard failure
+      rather than a reason to fall back to an unsigned build.
+    required: false
+    default: "false"
+
+outputs:
+  sign:
+    description: '"true" when both credentials are present and signing should run'
+    value: ${{ steps.check.outputs.sign }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        CERTIFICATE: ${{ inputs.certificate }}
+        API_KEY_P8: ${{ inputs.api-key-p8 }}
+        REQUIRED: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        if [ -z "$CERTIFICATE" ] || [ -z "$API_KEY_P8" ]; then
+          if [ "$REQUIRED" = "true" ]; then
+            echo "::error::A tagged release must ship signed macOS artifacts, but APPLE_CERTIFICATE and/or APPLE_API_KEY_P8 are missing. See docs/macos-signing.md."
+            exit 1
+          fi
+          echo "sign=false" >> "$GITHUB_OUTPUT"
+          echo "No Apple credentials — this run produces unsigned macOS artifacts."
+          exit 0
+        fi
+        key_path="$RUNNER_TEMP/AuthKey.p8"
+        umask 077
+        printf '%s' "$API_KEY_P8" | base64 --decode > "$key_path"
+        # tauri-action reads APPLE_API_KEY_PATH from the environment, and
+        # scripts/macos-notarize.sh passes it to notarytool as --key.
+        echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+        echo "sign=true" >> "$GITHUB_OUTPUT"

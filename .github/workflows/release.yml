@@ -24,18 +24,23 @@ jobs:
           - label: macOS (Apple silicon)
             platform: macos-14
             args: --target aarch64-apple-darwin
+            sidecar: aarch64-apple-darwin
           - label: macOS (Intel)
             platform: macos-14
             args: --target x86_64-apple-darwin
+            sidecar: x86_64-apple-darwin
           - label: macOS (universal)
             platform: macos-14
             args: --target universal-apple-darwin
+            sidecar: universal-apple-darwin
           - label: Linux
             platform: ubuntu-22.04
             args: ""
+            sidecar: x86_64-unknown-linux-gnu
           - label: Windows
             platform: windows-latest
             args: ""
+            sidecar: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +48,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            pkg-config libssl-dev cmake
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -56,18 +62,66 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
+      # The bundle carries the CLI as a Tauri sidecar, which is what lets the
+      # Homebrew cask link one `mandalo` out of the installed .app. Without this
+      # step `tauri build` fails: externalBin is declared in tauri.conf.json.
+      - name: Stage the CLI sidecar
+        shell: bash
+        run: bash scripts/build-sidecar.sh ${{ matrix.sidecar }}
+      - name: Apple credentials
+        id: apple
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/apple-credentials
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          api-key-p8: ${{ secrets.APPLE_API_KEY_P8 }}
+          required: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      # tauri-action signs the .app and .dmg from APPLE_CERTIFICATE and notarizes
+      # the .app from the APPLE_API_* trio; with none of them set it just builds
+      # unsigned. It does NOT notarize the .dmg — see the step after it.
       - uses: tauri-apps/tauri-action@v0
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Mándalo ${{ github.ref_name }}"
           releaseDraft: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+      # Tauri notarizes and staples the .app but leaves the .dmg carrying it
+      # merely signed, and Gatekeeper assesses the downloaded .dmg on its own:
+      # `spctl -a -t open` on it reports "Unnotarized Developer ID" and refuses
+      # to open it, however notarized the app inside is. So notarize the disk
+      # image too and put the stapled copy back on the release, before the
+      # publish job hashes what is there into SHA256SUMS.
+      - name: Notarize and staple the DMG
+        if: steps.apple.outputs.sign == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(target/*/release/bundle/dmg/*.dmg)
+          if [ ${#dmgs[@]} -eq 0 ]; then
+            echo "::error::tauri-action produced no .dmg for ${{ matrix.label }}"
+            exit 1
+          fi
+          for dmg in "${dmgs[@]}"; do
+            bash scripts/macos-notarize.sh "$dmg"
+            spctl -a -t open --context context:primary-signature -v "$dmg"
+            gh release upload "${{ github.ref_name }}" "$dmg" --clobber
+          done
       # workflow_dispatch has no tag to release into, so it only proves it builds.
       - uses: tauri-apps/tauri-action@v0
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
@@ -108,6 +162,28 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --profile release-cli -p mandalo-cli --target ${{ matrix.target }}
+      - name: Apple credentials
+        id: apple
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/apple-credentials
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          api-key-p8: ${{ secrets.APPLE_API_KEY_P8 }}
+          required: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      # Signing has to happen before packaging: the tar.gz must carry the signed
+      # binary, and notarytool cannot read a tar.gz anyway.
+      - name: Sign and notarize the binary (macOS)
+        if: steps.apple.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          binary=target/${{ matrix.target }}/release-cli/mandalo
+          bash scripts/macos-sign.sh "$binary"
+          bash scripts/macos-notarize.sh "$binary"
       - name: Package
         id: pkg
         shell: bash
@@ -178,6 +254,27 @@ jobs:
       - name: Fetch or build the CLI
         working-directory: editor-extension
         run: node scripts/fetch-cli.mjs --target ${{ matrix.target }} --build
+      - name: Apple credentials
+        id: apple
+        if: startsWith(matrix.target, 'darwin-')
+        uses: ./.github/actions/apple-credentials
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          api-key-p8: ${{ secrets.APPLE_API_KEY_P8 }}
+          required: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      # The binary inside the VSIX is the one that actually runs on the user's
+      # machine, so it needs the same Developer ID signature as the standalone CLI.
+      - name: Sign and notarize the bundled CLI (macOS)
+        if: steps.apple.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          bash scripts/macos-sign.sh editor-extension/bin/mandalo
+          bash scripts/macos-notarize.sh editor-extension/bin/mandalo
       - name: The VSIX carries the binary it claims to
         if: matrix.target != 'universal'
         working-directory: editor-extension

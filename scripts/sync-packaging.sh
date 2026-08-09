@@ -54,9 +54,23 @@ src, n = re.subn(
     fill,
     src,
 )
-if n != 4:
-    sys.exit(f"sync-packaging: expected 4 formula urls, rewrote {n}")
+if n != 2:
+    sys.exit(f"sync-packaging: expected 2 formula urls, rewrote {n}")
 open(formula_path, "w").write(src)
+
+cask_path = f"{root}/packaging/homebrew/Casks/mandalo.rb"
+src = open(cask_path).read()
+src = re.sub(r'^(  version )"[^"]*"', rf'\g<1>"{version}"', src, count=1, flags=re.M)
+src, n = re.subn(
+    r'^(  sha256 )"[^"]*"',
+    lambda m: f'{m.group(1)}"{digest(f"mandalo_{version}_universal.dmg")}"',
+    src,
+    count=1,
+    flags=re.M,
+)
+if n != 1:
+    sys.exit("sync-packaging: could not rewrite the cask sha256")
+open(cask_path, "w").write(src)
 
 scoop_path = f"{root}/packaging/scoop/mandalo.json"
 m = json.load(open(scoop_path))
@@ -69,8 +83,9 @@ with open(scoop_path, "w") as fh:
     json.dump(m, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
 
-print(f"formula and scoop manifest now describe {tag}")
+print(f"formula, cask and scoop manifest now describe {tag}")
 PY
 
 echo "copy packaging/homebrew/Formula/mandalo.rb into De-Rus/homebrew-tap"
+echo "copy packaging/homebrew/Casks/mandalo.rb into De-Rus/homebrew-tap"
 echo "copy packaging/scoop/mandalo.json into De-Rus/scoop-bucket"

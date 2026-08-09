@@ -26,6 +26,9 @@ dist-ssr
 # Rust workspace build output
 /target/
 
+# CLI sidecar staged into the desktop bundle (scripts/build-sidecar.sh)
+/src-tauri/binaries/
+
 # Built browser app + its generated script worker (produced by CI, see landing.yml)
 /landing/app/
 /src/lib/web/public/
