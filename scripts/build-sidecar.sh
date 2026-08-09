@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the mandalo CLI and stage it where Tauri expects a sidecar.
 #
-#   scripts/build-sidecar.sh <rust-target>
+#   scripts/build-sidecar.sh <rust-target> [cargo profile]
 #
 # Tauri resolves `externalBin: ["binaries/mandalo-cli"]` to
 # src-tauri/binaries/mandalo-cli-<target triple><exe suffix> and drops it in the
@@ -14,11 +14,23 @@
 #
 # universal-apple-darwin is not a real compilation target: both macOS binaries
 # are built and lipo'd, which is also what Tauri does with the app itself.
+#
+# The profile defaults to release-cli, what releases ship. CI passes `dev` only
+# to satisfy the src-tauri build script — `cargo test --workspace` compiles
+# src-tauri, which refuses to build while the declared sidecar is missing — and
+# the debug artifacts it produces are the ones the test run reuses anyway.
 set -euo pipefail
 
-target=${1:?usage: build-sidecar.sh <rust-target>}
+target=${1:?usage: build-sidecar.sh <rust-target> [cargo profile]}
+profile=${2:-release-cli}
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+
+# cargo writes the `dev` profile to target/<triple>/debug, not target/<triple>/dev.
+case "$profile" in
+    dev) profile_dir="debug" ;;
+    *) profile_dir="$profile" ;;
+esac
 
 out_dir="src-tauri/binaries"
 mkdir -p "$out_dir"
@@ -29,8 +41,8 @@ case "$target" in
 esac
 
 build() {
-    cargo build --profile release-cli -p mandalo-cli --target "$1"
-    echo "target/$1/release-cli/mandalo$suffix"
+    cargo build --profile "$profile" -p mandalo-cli --target "$1"
+    echo "target/$1/$profile_dir/mandalo$suffix"
 }
 
 dest="$out_dir/mandalo-cli-${target}${suffix}"

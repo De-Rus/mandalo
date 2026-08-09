@@ -34,6 +34,11 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      # src-tauri declares the CLI as an externalBin, and its build script fails
+      # while that file is missing — which `cargo test --workspace` hits, because
+      # src-tauri is in this workspace. dev, not release-cli: the test run reuses
+      # the debug artifacts instead of paying for a second full compile.
+      - run: bash scripts/build-sidecar.sh x86_64-unknown-linux-gnu dev
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build -p mandalo-cli
