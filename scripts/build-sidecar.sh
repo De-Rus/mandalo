@@ -12,8 +12,13 @@
 # The name cannot be plain `mandalo`: Tauri rejects a sidecar that collides with
 # the Cargo package name of src-tauri, which is `mandalo`.
 #
-# universal-apple-darwin is not a real compilation target: both macOS binaries
-# are built and lipo'd, which is also what Tauri does with the app itself.
+# universal-apple-darwin is not a real compilation target. Tauri compiles each
+# architecture in turn and resolves the sidecar under THAT arch's triple, so the
+# universal build needs mandalo-cli-aarch64-apple-darwin and
+# mandalo-cli-x86_64-apple-darwin on disk; the lipo'd
+# mandalo-cli-universal-apple-darwin goes next to them for the bundling step.
+# Staging only the lipo'd one fails with
+#   resource path `binaries/mandalo-cli-aarch64-apple-darwin` doesn't exist
 #
 # The profile defaults to release-cli, what releases ship. CI passes `dev` only
 # to satisfy the src-tauri build script — `cargo test --workspace` compiles
@@ -50,8 +55,12 @@ dest="$out_dir/mandalo-cli-${target}${suffix}"
 if [ "$target" = "universal-apple-darwin" ]; then
     arm=$(build aarch64-apple-darwin)
     intel=$(build x86_64-apple-darwin)
+    cp "$arm" "$out_dir/mandalo-cli-aarch64-apple-darwin"
+    cp "$intel" "$out_dir/mandalo-cli-x86_64-apple-darwin"
+    chmod 0755 "$out_dir/mandalo-cli-aarch64-apple-darwin" "$out_dir/mandalo-cli-x86_64-apple-darwin"
     lipo -create -output "$dest" "$arm" "$intel"
     lipo -info "$dest"
+    ls -l "$out_dir"
 else
     src=$(build "$target")
     cp "$src" "$dest"
