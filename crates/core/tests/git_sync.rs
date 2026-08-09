@@ -97,6 +97,28 @@ fn read(workspace: &Path, name: &str) -> String {
     std::fs::read_to_string(workspace.join(name)).unwrap_or_default()
 }
 
+/// A commit that stays local. `sync` always pushes what it commits, so this is
+/// the only way to put a branch genuinely ahead of its upstream — which is what
+/// sends the next sync down the merge path instead of the fast-forward one.
+fn commit_local(workspace: &Path, message: &str) {
+    let repo = git2::Repository::open(workspace).expect("open");
+    let mut index = repo.index().expect("index");
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .expect("add");
+    index.write().expect("write index");
+    let tree_oid = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_oid).expect("find tree");
+    let parent = repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("peel head");
+    let who = repo.signature().expect("signature");
+    repo.commit(Some("HEAD"), &who, &who, message, &tree, &[&parent])
+        .expect("commit");
+}
+
 fn sync(workspace: &Path, message: &str) -> SyncOutcome {
     sync_selected(workspace, message, &SyncSelection::default()).expect("sync")
 }
@@ -390,6 +412,11 @@ fn resolving_then_syncing_with_local_commits_merges_cleanly() {
     );
     assert!(matches!(sync(&alice, "alice"), SyncOutcome::Pushed { .. }));
 
+    // A commit of bob's that never reached the remote — the "with local commits"
+    // this test is named after. Without it he is not ahead, resolving leaves him
+    // with nothing to push, and `Pulled` is the honest answer rather than a bug.
+    write(&bob, "collections/api/later.toml", "name = \"later\"\n");
+    commit_local(&bob, "bob keeps working");
     write(
         &bob,
         "environments/local.toml",

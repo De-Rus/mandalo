@@ -1867,9 +1867,8 @@ mod tests {
         let ws = workspace_dir();
         let c = create_collection(ws.path(), "Acme").unwrap();
         let mut req = request("Login");
-        req.scripts.post = Some(
-            "pm.environment.set(\"token\", pm.response.json().data.token);".to_string(),
-        );
+        req.scripts.post =
+            Some("pm.environment.set(\"token\", pm.response.json().data.token);".to_string());
 
         let path = save_request(ws.path(), &c.slug, None, None, &req)
             .unwrap()
