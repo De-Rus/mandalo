@@ -781,6 +781,29 @@ fn ls_on_a_directory_that_is_not_a_workspace_fails_loud() {
     );
 }
 
+/// `git init` then `mandalo init` is how a git-native workspace starts, and the
+/// managed ignore block is what stops the first secret reaching the repository.
+#[test]
+fn init_inside_a_fresh_repository_scaffolds_and_writes_the_ignore_block() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join("api-repo");
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+
+    let mut init = Command::cargo_bin("mandalo").unwrap();
+    init.env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("NO_COLOR", "1")
+        .env("HOME", home.path())
+        .args(["init", dir.to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(dir.join("mandalo.toml").is_file());
+    let ignored = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+    assert!(ignored.contains("mandalo — managed block"), "{ignored}");
+    assert!(ignored.contains("secrets.toml"), "{ignored}");
+}
+
 #[test]
 fn init_creates_a_workspace_a_relative_path_can_then_address() {
     let home = tempfile::tempdir().unwrap();

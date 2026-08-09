@@ -168,21 +168,33 @@ fn list_workspaces() -> Reply<workspace::WorkspaceList> {
     ))
 }
 
+/// The managed `.gitignore` block is what keeps secrets out of a repository, and
+/// a workspace only ever reached through the app would otherwise never get one.
+/// It writes only inside its own markers and does nothing outside a repository,
+/// so a failure here must not stop the workspace from opening.
+fn apply_git_hygiene(dir: &Path) {
+    let _ = git::ensure_git_hygiene(dir);
+}
+
 #[tauri::command]
 fn create_workspace(path: String, name: String) -> Reply<workspace::WorkspaceInfo> {
-    edge(workspace::create_workspace(
+    let created = edge(workspace::create_workspace(
         &edge(workspace::registry_path())?,
         Path::new(&path),
         &name,
-    ))
+    ))?;
+    apply_git_hygiene(Path::new(&created.path));
+    Ok(created)
 }
 
 #[tauri::command]
 fn open_workspace(path: String) -> Reply<workspace::WorkspaceOpen> {
-    edge(workspace::open_workspace(
+    let opened = edge(workspace::open_workspace(
         &edge(workspace::registry_path())?,
         Path::new(&path),
-    ))
+    ))?;
+    apply_git_hygiene(Path::new(&opened.workspace.path));
+    Ok(opened)
 }
 
 #[tauri::command]

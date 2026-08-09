@@ -1111,6 +1111,14 @@ fn init(ctx: &Ctx, path: Option<&Path>, name: Option<&str>) -> CoreResult<bool> 
     };
     let info = workspace::create_workspace(&workspace::registry_path()?, &absolute, &name)?;
     ctx.say(&format!("workspace {} created at {}", info.name, info.path));
+    // The managed ignore block is the guard that keeps secrets out of a repo, so
+    // it belongs to creating a workspace rather than to a command nobody runs.
+    if git::ensure_git_hygiene(&absolute)?.gitignore_written {
+        ctx.say(
+            &ctx.style
+                .dim(".gitignore updated so machine-local values and secrets stay out of git"),
+        );
+    }
     ctx.say(
         &ctx.style
             .dim("add a collection with the app, or drop a .http file into collections/<slug>/"),

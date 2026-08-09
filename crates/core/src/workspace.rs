@@ -212,9 +212,21 @@ pub fn set_share(workspace: &Path, share: Option<ShareConfig>) -> CoreResult<Man
     Ok(manifest)
 }
 
+/// Bookkeeping a directory can hold while still being empty of the user's own
+/// work. `git init` then `mandalo init` is the way a git-native workspace starts,
+/// so a repository with nothing in it yet must not read as somebody else's folder.
+const NOT_CONTENT: [&str; 2] = [".git", ".DS_Store"];
+
 fn dir_is_empty(path: &Path) -> CoreResult<bool> {
-    let mut entries = std::fs::read_dir(path).map_err(|e| CoreError::io(path.display(), e))?;
-    Ok(entries.next().is_none())
+    let entries = std::fs::read_dir(path).map_err(|e| CoreError::io(path.display(), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CoreError::io(path.display(), e))?;
+        let name = entry.file_name();
+        if !NOT_CONTENT.iter().any(|skip| name == *skip) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// What `open_workspace` sees before writing anything.
@@ -2089,6 +2101,33 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         assert_eq!(names, vec!["workspaces.toml"]);
+    }
+
+    /// `git init` then `mandalo init` is how a git-native workspace starts, so a
+    /// repository with no work in it yet has to scaffold like any empty folder.
+    #[test]
+    fn a_freshly_initialised_repository_still_counts_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".DS_Store"), b"junk").unwrap();
+
+        let registry = dir.path().join("registry.toml");
+        let created = create_workspace(&registry, dir.path(), "Repo").unwrap();
+
+        assert_eq!(created.name, "Repo");
+        assert!(dir.path().join("mandalo.toml").is_file());
+    }
+
+    #[test]
+    fn a_directory_with_real_work_in_it_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join("README.md"), b"# api").unwrap();
+
+        let registry = dir.path().join("registry.toml");
+        let error = create_workspace(&registry, dir.path(), "Repo").unwrap_err();
+
+        assert_eq!(error.code(), "E_CONFLICT");
     }
 
     #[test]
