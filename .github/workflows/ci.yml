@@ -84,7 +84,8 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck -s sh scripts/install.sh
-          shellcheck scripts/package-cli.sh scripts/release-notes.sh scripts/sync-packaging.sh
+          shellcheck scripts/package-cli.sh scripts/release-notes.sh scripts/sync-packaging.sh \
+            scripts/macos-sign.sh scripts/macos-notarize.sh scripts/build-sidecar.sh
       - name: The installer the site serves is the installer in the repo
         run: |
           diff -u scripts/install.sh landing/install.sh ||
