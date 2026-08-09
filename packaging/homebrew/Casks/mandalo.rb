@@ -1,6 +1,6 @@
 cask "mandalo" do
-  version "0.2.0"
-  sha256 "REPLACE_WITH_SHA256_universal_dmg"
+  version "0.2.1"
+  sha256 "2322dc5448573b332849cca17239728bf7f735f7c502941d80b1af967f1c735e"
 
   url "https://github.com/De-Rus/mandalo/releases/download/v#{version}/mandalo_#{version}_universal.dmg"
   name "Mándalo"
