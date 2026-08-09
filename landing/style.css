@@ -308,6 +308,8 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.022em; }
   color: var(--text-faint);
 }
 
+.hero-brew + .hero-meta { margin-top: 0.5rem; }
+
 /* ---------- screenshots ---------- */
 
 .showcase { padding: 1.5rem 0 var(--section-y); }

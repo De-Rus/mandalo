@@ -154,6 +154,7 @@
         Download for desktop
       </a>
     </div>
+    <p class="hero-meta hero-brew">On macOS with Homebrew: <code>brew install --cask De-Rus/tap/mandalo</code> — app and CLI together</p>
     <p class="hero-meta">No sign-up · macOS, Windows &amp; Linux · free</p>
   </div>
 </section>
@@ -324,6 +325,7 @@
         <h2>The same engine, in your pipeline</h2>
         <p>The <code>mandalo</code> binary shares the runner with the app, so a suite that passes on your laptop passes the same way in CI. It reports pretty, JSON or JUnit, redacts every resolved secret from its own output, and ships <code>mandalo scan</code> — a credential guard you can point at staged files.</p>
         <p>One line on macOS and Linux: <code>curl -fsSL https://mandalo.dev/install.sh | sh</code>. It lands in <code>~/.local/bin</code>, never asks for <code>sudo</code>, and checks the download against the release checksums before writing anything. Windows binaries and the plain archives are on the <a href="https://github.com/De-Rus/mandalo/releases/latest">release page</a>.</p>
+        <p>Homebrew works too: <code>brew install De-Rus/tap/mandalo</code> on Linux for the binary alone, and <code>brew install --cask De-Rus/tap/mandalo</code> on macOS, which installs the app and puts the same <code>mandalo</code> on your <code>PATH</code>.</p>
         <p>Secrets never live in the collection files: the app reads them from your OS keychain, and CI reads them from <code>MANDALO_SECRET__&lt;ENV&gt;__&lt;KEY&gt;</code>.</p>
         <p><a class="arrow-link" href="/docs/cli-and-ci">CLI and CI reference <span aria-hidden="true">→</span></a></p>
       </div>
