@@ -1851,14 +1851,33 @@ mod tests {
         let Body::Formdata { rows } = load_request(ws.path(), &c.slug, &path).unwrap().body else {
             panic!("expected a formdata body back");
         };
-        // A row with two files renders as two parts under the same name, so the
-        // reread splits it — same bytes on the wire.
-        assert_eq!(rows.len(), 4);
+        // The row keeps its shape across the round-trip: a field carrying two files
+        // comes back as one field with two files, not as two fields.
+        assert_eq!(rows.len(), 3, "{rows:?}");
         assert_eq!(rows[0].value, "hola");
         assert_eq!(rows[1].files, vec!["files/avatar.png"]);
-        assert_eq!(rows[2].files, vec!["files/a.pdf"]);
-        assert_eq!(rows[3].files, vec!["files/b.pdf"]);
-        assert_eq!(rows[3].content_type.as_deref(), Some("application/pdf"));
+        assert_eq!(rows[2].files, vec!["files/a.pdf", "files/b.pdf"]);
+        assert_eq!(rows[2].content_type.as_deref(), Some("application/pdf"));
+    }
+
+    /// What the response pane's capture button writes: a response script. It has
+    /// to survive a save, because the declarative form deliberately cannot.
+    #[test]
+    fn a_capture_written_as_a_response_script_saves_into_a_http_file() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let mut req = request("Login");
+        req.scripts.post = Some(
+            "pm.environment.set(\"token\", pm.response.json().data.token);".to_string(),
+        );
+
+        let path = save_request(ws.path(), &c.slug, None, None, &req)
+            .unwrap()
+            .path;
+
+        let back = load_request(ws.path(), &c.slug, &path).unwrap();
+        assert_eq!(back.scripts.post, req.scripts.post);
+        assert!(path.ends_with(".http#0"), "{path}");
     }
 
     #[test]

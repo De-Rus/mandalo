@@ -17,9 +17,33 @@ import { Tabs, type TabItem } from "./Tabs";
 import { UrlBar } from "./UrlBar";
 
 const TAB_IDS: Record<Kind, string[]> = {
-  http: ["params", "auth", "headers", "body", "pre", "tests", "settings"],
-  graphql: ["query", "variables", "auth", "headers", "pre", "tests", "settings"],
-  grpc: ["proto", "message", "metadata", "auth", "pre", "tests", "settings"],
+  http: [
+    "params",
+    "auth",
+    "headers",
+    "body",
+    "pre",
+    "tests",
+    "settings",
+  ],
+  graphql: [
+    "query",
+    "variables",
+    "auth",
+    "headers",
+    "pre",
+    "tests",
+    "settings",
+  ],
+  grpc: [
+    "proto",
+    "message",
+    "metadata",
+    "auth",
+    "pre",
+    "tests",
+    "settings",
+  ],
   websocket: ["connection", "auth", "headers", "settings"],
   sse: ["connection", "auth", "headers", "settings"],
   mqtt: ["connection", "auth", "settings"],
@@ -209,7 +233,7 @@ export function Workbench({
             placeholder={TEST_PLACEHOLDER}
           />
         )}
-        {active === "settings" && (
+                        {active === "settings" && (
           <div className="settings-list">
             <label className="field">
               <span className="field-label">Description</span>

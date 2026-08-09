@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { errorMessage, type TestResult } from "../lib/api";
+import {
+  errorMessage,
+  type TestResult,
+} from "../lib/api";
 import {
   bodyText,
   formatBytes,
   formatDuration,
   statusTone,
 } from "../lib/format";
+import type { JsonLeaf } from "../lib/json";
 import { tallyTests } from "../lib/testTally";
+import { useActiveRequest, useCollection } from "../store/collection";
 import { useEnv } from "../store/env";
 import { EMPTY_RUN, type ResponseState, type RunResult } from "../store/session";
 import { toast } from "../store/toast";
 import { Check, Copy, Inbox, Search, Warn } from "./Icons";
-import { countMatches, JsonView } from "./JsonView";
+import { countMatches, JsonView, type LeafAction } from "./JsonView";
 import { Tabs, type TabItem } from "./Tabs";
 
 function Placeholder({
@@ -183,11 +188,113 @@ function SecretNotices({ run }: { run: RunResult }) {
   );
 }
 
+const SECRET_WORDS = new Set([
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "pwd",
+  "key",
+  "apikey",
+  "auth",
+  "authorization",
+  "credential",
+  "credentials",
+  "bearer",
+  "session",
+  "cookie",
+  "jwt",
+  "otp",
+  "signature",
+  "sig",
+  "refresh",
+]);
+
+const SECRET_MIN_LENGTH = 24;
+
+/** The trailing key of a JSONPath — `$.data['api key']` is `api key`. */
+export function leafKey(path: string): string {
+  const segments = /\.([A-Za-z_][A-Za-z0-9_]*)|\['((?:[^'\\]|\\.)*)'\]/g;
+  let key = "";
+  for (const match of path.matchAll(segments))
+    key = match[1] ?? match[2].replace(/\\(['\\])/g, "$1");
+  return key;
+}
+
+export function leafValue(leaf: JsonLeaf): unknown {
+  try {
+    return JSON.parse(leaf.raw);
+  } catch {
+    return leaf.raw;
+  }
+}
+
+/**
+ * A credential must not pick a scope that writes it to a git-tracked file, nor
+ * leave its literal in an assertion that lands in one. Guessing wide costs a
+ * scope the user can widen; guessing narrow leaks a token into a commit.
+ */
+export function looksSecret(leaf: JsonLeaf): boolean {
+  const words = leafKey(leaf.path)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word !== "");
+  if (words.some((word) => SECRET_WORDS.has(word))) return true;
+  const value = leafValue(leaf);
+  return (
+    typeof value === "string" &&
+    value.length >= SECRET_MIN_LENGTH &&
+    !/\s/.test(value)
+  );
+}
+
+export function captureName(path: string, taken: string[]): string {
+  const base =
+    leafKey(path)
+      .replace(/[^A-Za-z0-9_-]/g, "_")
+      .replace(/^_+|_+$/g, "") || "value";
+  if (!taken.includes(base)) return base;
+  let n = 2;
+  while (taken.includes(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
+
+/** `$.data.token` → `.data.token`, the accessor chain onto `pm.response.json()`. */
+function accessor(path: string): string {
+  return path.startsWith("$") ? path.slice(1) : path;
+}
+
+/**
+ * A `.http` file has no line for a declarative capture — the format's answer is a
+ * response script, so that is what these buttons write. The engine then runs the
+ * very code the file shows.
+ */
+export function captureLine(leaf: JsonLeaf, taken: string[]): string {
+  const name = captureName(leaf.path, taken);
+  return `pm.environment.set("${name}", pm.response.json()${accessor(leaf.path)});`;
+}
+
+export function assertLine(leaf: JsonLeaf): string {
+  const read = `pm.response.json()${accessor(leaf.path)}`;
+  if (looksSecret(leaf))
+    return `pm.test("${leafKey(leaf.path)} is present", function () {\n  pm.expect(${read}).to.not.be.undefined;\n});`;
+  return `pm.test("${leafKey(leaf.path)} is ${String(leafValue(leaf))}", function () {\n  pm.expect(${read}).to.eql(${JSON.stringify(leafValue(leaf))});\n});`;
+}
+
+/** Appends a line to a script, keeping one blank line between statements. */
+export function appendScript(script: string, line: string): string {
+  const body = script.replace(/\s+$/, "");
+  return body === "" ? line : `${body}\n${line}`;
+}
+
 interface BodyViewProps {
   body: string;
   binary: boolean;
   findOpen: boolean;
   onFindHandled: () => void;
+  actions: LeafAction[];
+  onAction: (action: LeafAction, leaf: JsonLeaf) => void;
 }
 
 type BodyMode = "pretty" | "raw" | "preview";
@@ -198,7 +305,14 @@ const BODY_MODES: { id: BodyMode; label: string }[] = [
   { id: "preview", label: "Preview" },
 ];
 
-function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
+function BodyView({
+  body,
+  binary,
+  findOpen,
+  onFindHandled,
+  actions,
+  onAction,
+}: BodyViewProps) {
   const [mode, setMode] = useState<BodyMode>("pretty");
   const [wrap, setWrap] = useState(false);
   const [numbers, setNumbers] = useState(true);
@@ -316,6 +430,8 @@ function BodyView({ body, binary, findOpen, onFindHandled }: BodyViewProps) {
             wrap={wrap}
             query={query}
             current={current}
+            actions={actions}
+            onAction={onAction}
           />
         </div>
       )}
@@ -331,6 +447,50 @@ interface ResponsePaneProps {
 export function ResponsePane({ response, findSignal }: ResponsePaneProps) {
   const [tab, setTab] = useState("body");
   const [findOpen, setFindOpen] = useState(false);
+  const draft = useActiveRequest();
+  const updateActive = useCollection((s) => s.updateActive);
+
+  const onLeafAction = (action: LeafAction, leaf: JsonLeaf) => {
+    const source = `body.${leaf.path}`;
+    if (action === "copy") {
+      void navigator.clipboard.writeText(source);
+      toast("success", `Copied ${source}`);
+      return;
+    }
+    if (!draft) return;
+    const script = draft.testScript;
+    const read = `pm.response.json()${accessor(leaf.path)}`;
+    if (action === "capture") {
+      if (script.includes(`, ${read});`)) {
+        toast("info", `${source} is already captured`);
+        return;
+      }
+      const taken = [...script.matchAll(/pm\.environment\.set\("([^"]+)"/g)].map((m) => m[1]!);
+      updateActive({ testScript: appendScript(script, captureLine(leaf, taken)) });
+      toast(
+        "success",
+        looksSecret(leaf)
+          ? `${source} is now set as a variable by the response script — it looks like a credential, so keep it out of a shared environment file.`
+          : `${source} is now set as a variable by the response script.`,
+      );
+      return;
+    }
+    if (script.includes(`pm.expect(${read})`)) {
+      toast("info", `${leaf.path} is already asserted on`);
+      return;
+    }
+    updateActive({ testScript: appendScript(script, assertLine(leaf)) });
+    toast(
+      "success",
+      looksSecret(leaf)
+        ? `Asserting ${leaf.path} is present — its value looks like a credential, so it stays out of the request file.`
+        : `Added a test on ${leaf.path} to the response script.`,
+    );
+  };
+
+  const leafActions: LeafAction[] = draft
+    ? ["copy", "capture", "assert"]
+    : ["copy"];
 
   useEffect(() => {
     if (findSignal === 0) return;
@@ -433,6 +593,8 @@ export function ResponsePane({ response, findSignal }: ResponsePaneProps) {
           binary={binary}
           findOpen={findOpen}
           onFindHandled={() => setFindOpen(false)}
+          actions={leafActions}
+          onAction={onLeafAction}
         />
       )}
       {tab === "headers" && (

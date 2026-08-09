@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { tokenizeLines, type Token } from "../lib/json";
-import { ChevronDown, ChevronRight } from "./Icons";
+import { leafPaths, tokenizeLines, type JsonLeaf, type Token } from "../lib/json";
+import { Branch, Check, ChevronDown, ChevronRight, Copy } from "./Icons";
+
+export type LeafAction = "copy" | "capture" | "assert";
 
 const HIGHLIGHT_LIMIT = 300_000;
 
@@ -95,6 +97,23 @@ function hiddenLines(
   return hidden;
 }
 
+const ACTION_ICONS: Record<LeafAction, React.ReactNode> = {
+  copy: <Copy size={10} />,
+  capture: <Branch size={10} />,
+  assert: <Check size={10} />,
+};
+
+function actionLabel(action: LeafAction, source: string): string {
+  switch (action) {
+    case "copy":
+      return `Copy path ${source}`;
+    case "capture":
+      return `Capture ${source} into a variable`;
+    case "assert":
+      return `Assert on ${source}`;
+  }
+}
+
 interface JsonViewProps {
   text: string;
   highlight: boolean;
@@ -102,6 +121,8 @@ interface JsonViewProps {
   wrap: boolean;
   query: string;
   current: number;
+  actions?: LeafAction[];
+  onAction?: (action: LeafAction, leaf: JsonLeaf) => void;
 }
 
 export function JsonView({
@@ -111,6 +132,8 @@ export function JsonView({
   wrap,
   query,
   current,
+  actions = [],
+  onAction,
 }: JsonViewProps) {
   const [folded, setFolded] = useState<ReadonlySet<number>>(new Set());
 
@@ -121,6 +144,9 @@ export function JsonView({
     ? tokenizeLines(text)
     : text.split("\n").map((line) => [{ type: "text" as const, text: line }]);
   const ranges = usable ? foldRanges(lines) : new Map<number, number>();
+  const offered = onAction ? actions : [];
+  const leaves =
+    usable && offered.length > 0 ? leafPaths(lines) : lines.map(() => null);
   const hidden = hiddenLines(ranges, folded);
   const cursor: Cursor = { seen: 0 };
 
@@ -156,10 +182,26 @@ export function JsonView({
         </button>
       ),
     );
+    const leaf = leaves[i];
     rows.push(
       <div key={i}>
         {tokens.length === 0 ? "​" : renderLine(tokens, query, current, cursor)}
         {shut && <span className="code-fold-mark">⋯</span>}
+        {leaf && onAction && (
+          <span className="code-line-actions">
+            {offered.map((action) => (
+              <button
+                key={action}
+                className="code-line-act"
+                aria-label={actionLabel(action, `body.${leaf.path}`)}
+                title={actionLabel(action, `body.${leaf.path}`)}
+                onClick={() => onAction(action, leaf)}
+              >
+                {ACTION_ICONS[action]}
+              </button>
+            ))}
+          </span>
+        )}
       </div>,
     );
   });

@@ -1,8 +1,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResponseData } from "../lib/api";
+import { newDraft, type RequestDraft } from "../lib/draft";
+import { useCollection } from "../store/collection";
 import { EMPTY_RUN, type ResponseState, type RunResult } from "../store/session";
 import { useEnv } from "../store/env";
+import { useToasts } from "../store/toast";
 import { ResponsePane } from "./ResponsePane";
 
 function data(patch: Partial<ResponseData> = {}): ResponseData {
@@ -226,6 +229,15 @@ describe("ResponsePane", () => {
     expect(bindHost).toHaveBeenCalledWith("prod", "token", "api.acme.com");
   });
 
+  it("offers no authoring buttons on a line without an active request", () => {
+    useCollection.setState({ activeId: null, drafts: {} });
+    render(<ResponsePane response={http()} findSignal={0} />);
+
+    expect(screen.getByLabelText("Copy path body.$.a")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Capture/)).toBeNull();
+    expect(screen.queryByLabelText(/^Assert/)).toBeNull();
+  });
+
   it("reports a script write to a secret by name, never by value", () => {
     useEnv.setState({ selected: "prod" } as never);
     render(
@@ -235,5 +247,128 @@ describe("ResponsePane", () => {
       />,
     );
     expect(screen.getByText(/prod\.token was set by a script/)).toBeTruthy();
+  });
+});
+
+function activate(patch: Partial<RequestDraft> = {}): void {
+  useCollection.setState({
+    workspace: null,
+    activeId: "r1",
+    drafts: { r1: { ...newDraft("R", "http"), id: "r1", ...patch } },
+  });
+}
+
+const active = (): RequestDraft => useCollection.getState().drafts.r1;
+
+const toastText = (): string =>
+  useToasts
+    .getState()
+    .items.map((t) => t.text)
+    .join(" | ");
+
+describe("ResponsePane leaf actions", () => {
+  afterEach(() => {
+    cleanup();
+    useToasts.setState({ items: [] });
+  });
+
+  it("copies the path in the syntax a capture source accepts", () => {
+    activate();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(
+      <ResponsePane response={http({ body: '{"data":{"id":7}}' })} findSignal={0} />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Copy path body.$.data.id"));
+    expect(writeText).toHaveBeenCalledWith("body.$.data.id");
+    expect(toastText()).toContain("Copied body.$.data.id");
+  });
+
+  it("captures a plain value into a variable named after its key", () => {
+    activate();
+    render(<ResponsePane response={http({ body: '{"userId":7}' })} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Capture body.$.userId into a variable"));
+    expect(active().testScript).toBe(
+      'pm.environment.set("userId", pm.response.json().userId);',
+    );
+  });
+
+  it("warns when the captured value looks like a credential", () => {
+    activate();
+    render(
+      <ResponsePane response={http({ body: '{"accessToken":"abc"}' })} findSignal={0} />,
+    );
+
+    fireEvent.click(
+      screen.getByLabelText("Capture body.$.accessToken into a variable"),
+    );
+    expect(active().testScript).toContain('pm.environment.set("accessToken"');
+    expect(toastText()).toContain("credential");
+  });
+
+  it("keeps an existing script and appends under it", () => {
+    activate({ testScript: 'pm.test("ok", function () {});' });
+    render(<ResponsePane response={http({ body: '{"id":7}' })} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Capture body.$.id into a variable"));
+    const script = active().testScript;
+    expect(script.startsWith('pm.test("ok", function () {});')).toBe(true);
+    expect(script).toContain('pm.environment.set("id", pm.response.json().id);');
+  });
+
+  it("does not capture the same value twice", () => {
+    activate({ testScript: 'pm.environment.set("a", pm.response.json().a);' });
+    render(<ResponsePane response={http()} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Capture body.$.a into a variable"));
+    expect(active().testScript.match(/pm\.environment\.set/g)).toHaveLength(1);
+    expect(toastText()).toContain("already captured");
+  });
+
+  it("gives a second capture of the same key a name of its own", () => {
+    activate({ testScript: 'pm.environment.set("id", pm.response.json().data.id);' });
+    render(<ResponsePane response={http({ body: '{"id":7}' })} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Capture body.$.id into a variable"));
+    expect(active().testScript).toContain('pm.environment.set("id_2"');
+  });
+
+  it("asserts a plain value by equality, in the script the file stores", () => {
+    activate();
+    render(<ResponsePane response={http({ body: '{"id":7}' })} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Assert on body.$.id"));
+    expect(active().testScript).toContain("pm.expect(pm.response.json().id).to.eql(7)");
+  });
+
+  it("asserts a credential exists rather than writing its value to the file", () => {
+    activate();
+    render(<ResponsePane response={http({ body: '{"token":"s3cret"}' })} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Assert on body.$.token"));
+    const script = active().testScript;
+    expect(script).toContain("to.not.be.undefined");
+    expect(script).not.toContain("s3cret");
+    expect(toastText()).toContain("credential");
+  });
+
+  it("does not add the same assertion twice", () => {
+    activate();
+    render(<ResponsePane response={http()} findSignal={0} />);
+
+    fireEvent.click(screen.getByLabelText("Assert on body.$.a"));
+    fireEvent.click(screen.getByLabelText("Assert on body.$.a"));
+    expect(active().testScript.match(/pm\.test\(/g)).toHaveLength(1);
+    expect(toastText()).toContain("already asserted on");
+  });
+
+  it("offers nothing on a raw body, where no line is a single JSON leaf", () => {
+    activate();
+    render(<ResponsePane response={http()} findSignal={0} />);
+    fireEvent.click(screen.getByText("Raw"));
+
+    expect(screen.queryByLabelText(/^Copy path/)).toBeNull();
   });
 });

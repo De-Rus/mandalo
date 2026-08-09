@@ -6,9 +6,9 @@ import { Workbench } from "./Workbench";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-function show(patch: Partial<RequestDraft>, onPatch = vi.fn()) {
+function mount(patch: Partial<RequestDraft>, onPatch = vi.fn()) {
   const draft = { ...newDraft("R", "http"), ...patch };
-  const view = render(
+  return render(
     <Workbench
       draft={draft}
       vars={{}}
@@ -20,6 +20,10 @@ function show(patch: Partial<RequestDraft>, onPatch = vi.fn()) {
       onSave={() => {}}
     />,
   );
+}
+
+function show(patch: Partial<RequestDraft>, onPatch = vi.fn()) {
+  const view = mount(patch, onPatch);
   fireEvent.click(screen.getByRole("tab", { name: /Settings/ }));
   return view;
 }

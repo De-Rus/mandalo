@@ -182,6 +182,39 @@
   padding: 0 var(--sp-3) 0 var(--sp-2);
 }
 
+.code-line-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-2);
+  vertical-align: top;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.code-view-body > div:hover .code-line-actions,
+.code-line-actions:focus-within {
+  opacity: 1;
+}
+
+.code-line-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: calc(1em * var(--lh-code));
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--bg-active);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.code-line-act:hover {
+  color: var(--text-primary);
+}
+
 .code-view mark {
   background: var(--warn-soft);
   color: inherit;
