@@ -506,6 +506,155 @@ pub async fn send_grpc(spec: GrpcSpec) -> CoreResult<GrpcResponse> {
     })
 }
 
+/// Where an imported `.proto` lands. A request names its proto by a
+/// workspace-relative path, so the file has to live under the workspace or it
+/// cannot be named at all — see `body::resolve_workspace_file`.
+pub const PROTO_DIR: &str = "protos";
+
+fn proto_file_name(given: &str) -> CoreResult<&str> {
+    let name = Path::new(given)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| CoreError::Request(format!("not a file name: {given:?}")))?;
+    if !name.ends_with(".proto") {
+        return Err(CoreError::Request(format!(
+            "a proto file must be named *.proto, got {name:?}"
+        )));
+    }
+    if name.starts_with('.') {
+        return Err(CoreError::Request(format!(
+            "a proto file name cannot start with a dot: {name:?}"
+        )));
+    }
+    Ok(name)
+}
+
+/// Copies a `.proto` into `<workspace>/protos/` and answers with the
+/// workspace-relative path a request should store.
+///
+/// This is the only way a browser tab can supply a proto at all — it has no
+/// filesystem path to give — and on the desktop it is what keeps a saved request
+/// portable: the file travels in the repository beside the request that needs it,
+/// instead of pointing at somebody's home directory.
+///
+/// Only the file name is taken from `given_name`; any directory part is dropped,
+/// so a picker handing over an absolute path cannot write outside the workspace.
+/// Re-importing the same bytes is a no-op; different bytes under a name that is
+/// already taken is an error rather than a silent overwrite of a file other
+/// requests may be compiling against.
+pub fn import_proto(workspace: &Path, given_name: &str, contents: &str) -> CoreResult<String> {
+    let name = proto_file_name(given_name)?;
+    let dir = workspace.join(PROTO_DIR);
+    let target = dir.join(name);
+    let rel = format!("{PROTO_DIR}/{name}");
+
+    if let Ok(existing) = std::fs::read_to_string(&target) {
+        if existing == contents {
+            return Ok(rel);
+        }
+        return Err(CoreError::Conflict(format!(
+            "{rel} already exists with different contents — rename the file or remove it first"
+        )));
+    }
+
+    std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(dir.display(), e))?;
+    std::fs::write(&target, contents).map_err(|e| CoreError::io(target.display(), e))?;
+    Ok(rel)
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    const LEAF: &str = "syntax = \"proto3\";\npackage a.v1;\nmessage Leaf { string id = 1; }\n";
+
+    fn ws() -> tempfile::TempDir {
+        tempfile::tempdir().expect("workspace")
+    }
+
+    #[test]
+    fn an_imported_proto_lands_under_protos_and_is_named_relatively() {
+        let dir = ws();
+        let rel = import_proto(dir.path(), "leaf.proto", LEAF).unwrap();
+        assert_eq!(rel, "protos/leaf.proto");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("protos/leaf.proto")).unwrap(),
+            LEAF
+        );
+    }
+
+    /// A file picker hands over whatever path the OS gave it. Only the name is
+    /// ours to keep, so nothing can be written outside the workspace.
+    #[test]
+    fn a_directory_part_in_the_name_is_dropped() {
+        let dir = ws();
+        let rel = import_proto(dir.path(), "/etc/passwd/../evil.proto", LEAF).unwrap();
+        assert_eq!(rel, "protos/evil.proto");
+        assert!(dir.path().join("protos/evil.proto").is_file());
+    }
+
+    #[test]
+    fn traversal_and_wrong_extensions_are_refused() {
+        let dir = ws();
+        assert!(import_proto(dir.path(), "../escape.proto", LEAF).is_ok());
+        assert!(!dir.path().parent().unwrap().join("escape.proto").exists());
+
+        for bad in ["notes.txt", "proto", ".proto", ""] {
+            assert!(
+                import_proto(dir.path(), bad, LEAF).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn re_importing_the_same_bytes_is_a_no_op_but_different_bytes_refuse() {
+        let dir = ws();
+        import_proto(dir.path(), "leaf.proto", LEAF).unwrap();
+        assert_eq!(
+            import_proto(dir.path(), "leaf.proto", LEAF).unwrap(),
+            "protos/leaf.proto"
+        );
+
+        let err = import_proto(dir.path(), "leaf.proto", "syntax = \"proto3\";\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already exists with different contents"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("protos/leaf.proto")).unwrap(),
+            LEAF,
+            "the original must survive a refused import"
+        );
+    }
+
+    /// The case that matters for an upload button: a proto that imports another
+    /// one only compiles once both have been brought in, and they resolve each
+    /// other because they end up side by side.
+    #[test]
+    fn a_proto_importing_a_sibling_compiles_after_both_are_imported() {
+        let dir = ws();
+        let root = "syntax = \"proto3\";\npackage a.v1;\nimport \"leaf.proto\";\nmessage Root { Leaf leaf = 1; }\n";
+
+        let root_rel = import_proto(dir.path(), "root.proto", root).unwrap();
+        let full = dir.path().join(&root_rel).display().to_string();
+        let err = compile(std::slice::from_ref(&full))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("leaf.proto"),
+            "must name the missing import: {err}"
+        );
+
+        import_proto(dir.path(), "leaf.proto", LEAF).unwrap();
+        let pool = compile(&[full]).unwrap();
+        assert!(pool.get_message_by_name("a.v1.Root").is_some());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
