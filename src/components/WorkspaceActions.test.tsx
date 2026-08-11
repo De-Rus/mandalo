@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCollection } from "../store/collection";
 import { useEnv } from "../store/env";
 import { useTransfer } from "../store/transfer";
-import { TransferMenu } from "./TransferMenu";
+import { WorkspaceActions } from "./WorkspaceActions";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -39,7 +39,7 @@ const PLAN = {
   format: "native",
 };
 
-describe("TransferMenu", () => {
+describe("WorkspaceActions", () => {
   beforeEach(() => {
     invoke.mockReset();
     open.mockReset();
@@ -80,9 +80,9 @@ describe("TransferMenu", () => {
   afterEach(cleanup);
 
   it("opens the import dialog rather than a bare file picker", () => {
-    render(<TransferMenu />);
+    render(<WorkspaceActions />);
 
-    fireEvent.click(screen.getByLabelText("Import / Export"));
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
     fireEvent.click(screen.getByText("Import…"));
 
     expect(useTransfer.getState().importOpen).toBe(true);
@@ -90,9 +90,9 @@ describe("TransferMenu", () => {
   });
 
   it("shows the export plan before anything is written", async () => {
-    render(<TransferMenu />);
+    render(<WorkspaceActions />);
 
-    fireEvent.click(screen.getByLabelText("Import / Export"));
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
     fireEvent.click(screen.getByText("Export…"));
 
     await waitFor(() =>

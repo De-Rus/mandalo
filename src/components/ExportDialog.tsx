@@ -274,13 +274,28 @@ function countRequests(node: CollectionNode | FolderNode): number {
   return n;
 }
 
-export function ExportDialog({ onClose }: { onClose: () => void }) {
+/**
+ * `collection` opens the dialog already narrowed to one collection, which is how
+ * the right-click menu on a tree row enters. Everything stays editable from
+ * there — it seeds the picker, it does not lock it.
+ */
+export function ExportDialog({
+  onClose,
+  collection,
+}: {
+  onClose: () => void;
+  collection?: string;
+}) {
   useModalGuard();
   const tree = useCollection((s) => s.tree);
   const envs = useEnv((s) => s.envs);
   const envNames = useMemo(() => envs.map((e) => e.name), [envs]);
   const [plan, setPlan] = useState<ExportPlan | null>(null);
-  const [picked, setPicked] = useState<Picked | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(
+    collection === undefined
+      ? null
+      : { collections: [collection], environments: [] },
+  );
   const [format, setFormat] = useState<ShareFormat>("native");
   const [formatReady, setFormatReady] = useState(false);
   const [error, setError] = useState<string | null>(null);

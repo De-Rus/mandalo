@@ -12,9 +12,11 @@ import {
 import { useCollection } from "../store/collection";
 import { toast } from "../store/toast";
 import { useRemote } from "../store/remote";
+import { useTransfer } from "../store/transfer";
 import { useWorkspaces } from "../store/workspace";
 import { CloneRepoDialog } from "./CloneRepoDialog";
 import { ConfirmModal } from "./ConfirmModal";
+import { ExportDialog } from "./ExportDialog";
 import { GithubReposDialog } from "./GithubReposDialog";
 import { Dropdown, MenuItem } from "./Dropdown";
 import {
@@ -22,8 +24,10 @@ import {
   Branch,
   Doc,
   Dots,
+  Export,
   Eye,
   FolderOpen,
+  Import,
 } from "./Icons";
 
 export function WorkspaceActions() {
@@ -33,8 +37,10 @@ export function WorkspaceActions() {
   const workspace = useCollection((s) => s.workspace);
   const refreshTree = useCollection((s) => s.refreshTree);
   const openRemote = useRemote((s) => s.open);
+  const openImport = useTransfer((s) => s.openImport);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
 
   const doOpen = async (close: () => void) => {
@@ -159,6 +165,27 @@ export function WorkspaceActions() {
             </MenuItem>
 
             <div className="menu-sep" />
+            <div className="menu-head">Collections</div>
+            <MenuItem
+              icon={<Import size={13} />}
+              hint="Postman, OpenAPI, curl"
+              onClick={() => {
+                close();
+                openImport();
+              }}
+            >
+              Import…
+            </MenuItem>
+            <MenuItem
+              icon={<Export size={13} />}
+              hint="A shareable bundle"
+              onClick={() => {
+                close();
+                setExporting(true);
+              }}
+            >
+              Export…
+            </MenuItem>
             <MenuItem
               icon={<Doc size={13} />}
               hint="Into the active workspace"
@@ -169,6 +196,7 @@ export function WorkspaceActions() {
           </>
         )}
       </Dropdown>
+      {exporting && <ExportDialog onClose={() => setExporting(false)} />}
       {githubOpen && <GithubReposDialog onClose={() => setGithubOpen(false)} />}
       {cloneOpen && <CloneRepoDialog onClose={() => setCloneOpen(false)} />}
       {pendingUpdate !== null && (

@@ -46,9 +46,11 @@ function actions(): TreeActions {
     onNewRequestIn: vi.fn(),
     onRenameCollection: vi.fn(),
     onDeleteCollection: vi.fn(),
+    onExportCollection: vi.fn(),
     onNewFolder: vi.fn(),
     onRenameFolder: vi.fn(),
     onDeleteFolder: vi.fn(),
+    onDropRequestInto: vi.fn(),
   };
 }
 
@@ -136,6 +138,72 @@ describe("CollectionTree", () => {
     fireEvent.click(screen.getByLabelText("Actions for Acme API"));
     fireEvent.click(screen.getByText("Delete collection"));
     expect(a.onDeleteCollection).toHaveBeenCalledWith("acme");
+  });
+
+  it("right-clicking a collection offers the same actions as its ⋮ button", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Acme API"), {
+      clientX: 40,
+      clientY: 60,
+    });
+    fireEvent.click(screen.getByText("Export…"));
+    expect(a.onExportCollection).toHaveBeenCalledWith("acme");
+  });
+
+  it("right-clicking a request row reaches its own actions", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Health check"));
+    fireEvent.click(screen.getByText("Duplicate"));
+    expect(a.onDuplicateRequest).toHaveBeenCalledWith("r2");
+  });
+
+  it("dragging a request onto a folder asks to move it there", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      setData: (type: string, value: string) => void data.set(type, value),
+      getData: (type: string) => data.get(type) ?? "",
+      get types() {
+        return [...data.keys()];
+      },
+      effectAllowed: "",
+      dropEffect: "",
+    };
+
+    fireEvent.dragStart(screen.getByText("Health check"), { dataTransfer });
+    fireEvent.drop(screen.getByText("Users"), { dataTransfer });
+
+    expect(a.onDropRequestInto).toHaveBeenCalledWith("r2", "acme", "users");
+  });
+
+  it("ignores a drop that carries no request of ours", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    const dataTransfer = {
+      setData: () => {},
+      getData: () => "",
+      types: ["Files"],
+      effectAllowed: "",
+      dropEffect: "",
+    };
+    fireEvent.drop(screen.getByText("Users"), { dataTransfer });
+
+    expect(a.onDropRequestInto).not.toHaveBeenCalled();
   });
 
   it("remembers collapsed rows across mounts", () => {

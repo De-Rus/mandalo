@@ -375,6 +375,15 @@
   color: var(--text-primary);
 }
 
+/* The folder a dragged request would land in. An inset outline rather than a
+   background, so it reads as a container opening up and not as a selection. */
+.tree-row-drop {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .tree-row-active::before {
   content: "";
   position: absolute;

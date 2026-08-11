@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { CollectionNode, FolderNode, RequestSummary } from "../lib/api";
 import { collectionRequestCount, folderRequestCount } from "../lib/tree";
+import { ContextMenu } from "./ContextMenu";
 import { Dropdown, MenuItem } from "./Dropdown";
 import {
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   Copy,
   Doc,
   Dots,
+  Export,
   Folder,
   FolderOpen,
   Pencil,
@@ -30,9 +32,11 @@ export interface TreeActions {
   onNewRequestIn: (collection: string, folder: string) => void;
   onRenameCollection: (slug: string, name: string) => void;
   onDeleteCollection: (slug: string) => void;
+  onExportCollection: (slug: string) => void;
   onNewFolder: (collection: string, parent: string) => void;
   onRenameFolder: (collection: string, path: string, name: string) => void;
   onDeleteFolder: (collection: string, path: string) => void;
+  onDropRequestInto: (id: string, collection: string, folder: string) => void;
 }
 
 interface RowProps {
@@ -49,7 +53,18 @@ interface RowProps {
   onClick: () => void;
   onRename?: (name: string) => void;
   menu?: (close: () => void) => ReactNode;
+  /** Set on a request row: the id this row hands over when dragged. */
+  dragId?: string;
+  /** Set on a row that accepts requests: a folder, or a collection root. */
+  onDropRequest?: (id: string) => void;
 }
+
+/**
+ * A private type, so dragging a request over a Finder window or another app
+ * offers it nothing, and a file dragged in from outside is never mistaken for a
+ * request being moved.
+ */
+const DRAG_TYPE = "application/x-mandalo-request";
 
 function Row({
   depth,
@@ -65,14 +80,37 @@ function Row({
   onClick,
   onRename,
   menu,
+  dragId,
+  onDropRequest,
 }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(label);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [over, setOver] = useState(false);
 
   const startRename = () => {
     setDraft(label);
     setEditing(true);
   };
+
+  /// The same entries behind the ⋮ button and behind a right-click, written once
+  /// so the two can never drift apart.
+  const entries = (close: () => void) => (
+    <>
+      {onRename && (
+        <MenuItem
+          icon={<Pencil size={12} />}
+          onClick={() => {
+            close();
+            startRename();
+          }}
+        >
+          Rename
+        </MenuItem>
+      )}
+      {menu?.(close)}
+    </>
+  );
 
   const commit = () => {
     setEditing(false);
@@ -82,10 +120,40 @@ function Row({
 
   return (
     <div
-      className={`tree-row ${className} ${active ? "tree-row-active" : ""}`}
+      className={`tree-row ${className} ${active ? "tree-row-active" : ""} ${
+        over ? "tree-row-drop" : ""
+      }`}
       style={{ paddingLeft: 4 + depth * INDENT }}
+      draggable={dragId !== undefined && !editing}
+      onDragStart={(e) => {
+        if (dragId === undefined) return;
+        e.stopPropagation();
+        e.dataTransfer.setData(DRAG_TYPE, dragId);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(e) => {
+        if (!onDropRequest || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+        // Without preventDefault the browser refuses the drop outright.
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        if (!onDropRequest || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setOver(false);
+        const id = e.dataTransfer.getData(DRAG_TYPE);
+        if (id !== "") onDropRequest(id);
+      }}
       onClick={onClick}
       onDoubleClick={() => onRename && startRename()}
+      onContextMenu={(e) => {
+        if (editing || !menu) return;
+        e.preventDefault();
+        setMenuAt({ x: e.clientX, y: e.clientY });
+      }}
       role="treeitem"
       aria-selected={active}
       aria-level={depth + 1}
@@ -147,23 +215,18 @@ function Row({
             </button>
           )}
         >
-          {(close) => (
-            <>
-              {onRename && (
-                <MenuItem
-                  icon={<Pencil size={12} />}
-                  onClick={() => {
-                    close();
-                    startRename();
-                  }}
-                >
-                  Rename
-                </MenuItem>
-              )}
-              {menu(close)}
-            </>
-          )}
+          {(close) => entries(close)}
         </Dropdown>
+      )}
+      {menuAt && (
+        <ContextMenu
+          x={menuAt.x}
+          y={menuAt.y}
+          label={`Actions for ${label}`}
+          onClose={() => setMenuAt(null)}
+        >
+          {(close) => entries(close)}
+        </ContextMenu>
       )}
     </div>
   );
@@ -183,6 +246,7 @@ function RequestRow({
   return (
     <Row
       depth={depth}
+      dragId={request.id}
       badge={<MethodBadge item={request} />}
       label={request.name}
       active={request.id === activeId}
@@ -256,6 +320,9 @@ function FolderRows({
         onToggle={() => toggle(key)}
         onClick={() => toggle(key)}
         onRename={(name) => actions.onRenameFolder(slug, folder.path, name)}
+        onDropRequest={(id) =>
+          actions.onDropRequestInto(id, slug, folder.path)
+        }
         menu={(close) => (
           <>
             <MenuItem
@@ -372,6 +439,9 @@ export function CollectionTree({
               onToggle={() => toggle(key)}
               onClick={() => toggle(key)}
               onRename={(name) => actions.onRenameCollection(collection.slug, name)}
+              onDropRequest={(id) =>
+                actions.onDropRequestInto(id, collection.slug, "")
+              }
               menu={(close) => (
                 <>
                   <MenuItem
@@ -391,6 +461,16 @@ export function CollectionTree({
                     }}
                   >
                     New folder
+                  </MenuItem>
+                  <div className="menu-sep" />
+                  <MenuItem
+                    icon={<Export size={12} />}
+                    onClick={() => {
+                      close();
+                      actions.onExportCollection(collection.slug);
+                    }}
+                  >
+                    Export…
                   </MenuItem>
                   <div className="menu-sep" />
                   <MenuItem

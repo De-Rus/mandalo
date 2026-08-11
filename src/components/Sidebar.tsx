@@ -14,9 +14,9 @@ import { useModalGuard } from "../store/ui";
 import { CollectionTree, type TreeActions } from "./CollectionTree";
 import { ConfirmModal } from "./ConfirmModal";
 import { EnvList } from "./EnvList";
+import { ExportDialog } from "./ExportDialog";
 import { Close, Collection, Search, Warn } from "./Icons";
 import { NewMenu } from "./NewMenu";
-import { TransferMenu } from "./TransferMenu";
 import { PromptModal } from "./PromptModal";
 import { SidebarSection } from "./SidebarSection";
 
@@ -170,6 +170,7 @@ export function Sidebar({ width }: { width: number }) {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [move, setMove] = useState<Move | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
 
   const tree = useMemo(
     () => applyDraftOverrides(collections, Object.values(drafts)),
@@ -208,12 +209,31 @@ export function Sidebar({ width }: { width: number }) {
         slug,
         name: collections.find((c) => c.slug === slug)?.name ?? slug,
       }),
+    onExportCollection: (slug) => setExporting(slug),
     onNewFolder: (collection, parent) =>
       setPrompt({ kind: "folder", collection, parent }),
     onRenameFolder: (collection, path, name) =>
       guard(() => renameFolder(collection, path, name)),
     onDeleteFolder: (collection, path) =>
       setConfirm({ kind: "folder", collection, path }),
+    onDropRequestInto: (id, collection, folder) => {
+      const location = locationOf(id);
+      if (!location) {
+        toast("error", "This request has no saved file yet, so it cannot be moved");
+        return;
+      }
+      // moveRequest works inside one collection; crossing them is not supported
+      // by the backend yet, so say so rather than silently doing nothing.
+      if (location.collection !== collection) {
+        toast(
+          "error",
+          "Moving a request to another collection is not supported yet",
+        );
+        return;
+      }
+      if (folderOf(location.path) === folder) return;
+      guard(() => moveRequest(id, folder));
+    },
   };
 
   const empty = tree.length === 0;
@@ -237,7 +257,6 @@ export function Sidebar({ width }: { width: number }) {
           }
           onNewCollection={() => setPrompt({ kind: "collection" })}
         />
-        <TransferMenu />
       </div>
       {envError && !environmentsOpen && (
         <div className="notice notice-error sidebar-warning" title={envError}>
@@ -250,6 +269,7 @@ export function Sidebar({ width }: { width: number }) {
         title="Collections"
         open={collectionsOpen}
         onToggle={setCollectionsOpen}
+        count={collections.length}
         grow
       >
         <>
@@ -377,6 +397,12 @@ export function Sidebar({ width }: { width: number }) {
           move={move}
           onSubmit={(target) => guard(() => moveRequest(move.id, target))}
           onClose={() => setMove(null)}
+        />
+      )}
+      {exporting !== null && (
+        <ExportDialog
+          collection={exporting}
+          onClose={() => setExporting(null)}
         />
       )}
       {confirm?.kind === "collection" && (
