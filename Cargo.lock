@@ -2821,7 +2821,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mandalo"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "mandalo-core",
  "serde",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "mandalo-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2855,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "mandalo-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "mandalo-grpc-wasm"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -2901,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "mandalo-testkit"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "brotli",
