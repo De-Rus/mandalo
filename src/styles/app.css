@@ -375,6 +375,29 @@
   color: var(--text-primary);
 }
 
+/* Where a dragged request would be inserted among its siblings. A line rather
+   than a highlight, because it marks a seam between two rows and not a
+   container that would swallow it. */
+.tree-row-before::after,
+.tree-row-after::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.tree-row-before::after {
+  top: -1px;
+}
+
+.tree-row-after::after {
+  bottom: -1px;
+}
+
 /* The folder a dragged request would land in. An inset outline rather than a
    background, so it reads as a container opening up and not as a selection. */
 .tree-row-drop {
@@ -430,6 +453,15 @@
   color: var(--text-muted);
 }
 
+/* A request has nothing to expand, so its method takes the twisty and the icon
+   columns together: 16 + 6 gap + 13 = 35px. A folder spends exactly the same
+   before its name, so the two line up with no padding wedged anywhere. */
+.badge-tree {
+  width: 35px;
+  min-width: 35px;
+  padding: 0;
+}
+
 .tree-children {
   position: relative;
 }
@@ -442,6 +474,14 @@
   left: var(--guide);
   width: 1px;
   background: var(--border);
+}
+
+.tree-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 
 .tree-row-collection .tree-icon {

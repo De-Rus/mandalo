@@ -139,6 +139,27 @@ export function locateRequests(
   return out;
 }
 
+/**
+ * The requests one folder holds, in the order the tree shows them. `folder` is
+ * "" for the collection root. Nested folders are not included: reordering acts
+ * on one folder at a time, the same unit the manifest records.
+ */
+export function requestsIn(
+  collection: CollectionNode,
+  folder: string,
+): RequestSummary[] {
+  if (folder === "") return collection.requests;
+  const find = (folders: FolderNode[]): FolderNode | null => {
+    for (const node of folders) {
+      if (node.path === folder) return node;
+      const deeper = find(node.folders);
+      if (deeper) return deeper;
+    }
+    return null;
+  };
+  return find(collection.folders)?.requests ?? [];
+}
+
 export function folderOf(path: string): string {
   const parts = path.split("/");
   return parts.slice(0, -1).join("/");

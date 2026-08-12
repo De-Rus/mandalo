@@ -285,6 +285,15 @@ const handlers: Record<string, (a: Args) => unknown> = {
       () => TREE,
     ),
 
+  // Reordering writes the collection manifest and rewrites request files; the
+  // browser build has none of that yet. Saying so beats "unknown command".
+  reorder_requests: (): Promise<never> =>
+    Promise.reject(
+      new Error(
+        "Reordering requests is not available in the browser build yet — use the desktop app",
+      ),
+    ),
+
   move_request: (a): Promise<SavedPath> =>
     mutate(
       a,

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionNode } from "../lib/api";
 import { CollectionTree, type TreeActions } from "./CollectionTree";
@@ -51,6 +51,7 @@ function actions(): TreeActions {
     onRenameFolder: vi.fn(),
     onDeleteFolder: vi.fn(),
     onDropRequestInto: vi.fn(),
+    onDropBeside: vi.fn(),
   };
 }
 
@@ -67,7 +68,11 @@ describe("CollectionTree", () => {
     expect(screen.getByText("Users")).toBeTruthy();
     expect(screen.getByText("List users")).toBeTruthy();
     expect(screen.getByText("GET")).toBeTruthy();
-    expect(screen.getByText("DELETE")).toBeTruthy();
+    // The method occupies a twisty plus an icon so names line up with a sibling
+    // folder's; the long verbs are shortened to fit, with the full one on hover.
+    const del = screen.getByText("DEL");
+    expect(del).toBeTruthy();
+    expect(del.getAttribute("title")).toBe("DELETE");
   });
 
   it("collapses and expands a folder", () => {
@@ -186,6 +191,75 @@ describe("CollectionTree", () => {
     fireEvent.drop(screen.getByText("Users"), { dataTransfer });
 
     expect(a.onDropRequestInto).toHaveBeenCalledWith("r2", "acme", "users");
+  });
+
+  /// Most of a folder's visible area is its requests, so dropping on one has to
+  /// mean "put it here" rather than nothing at all.
+  it("dropping onto a request targets the folder that request lives in", () => {
+    const a = actions();
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={a} />,
+    );
+
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      setData: (t: string, v: string) => void data.set(t, v),
+      getData: (t: string) => data.get(t) ?? "",
+      get types() {
+        return [...data.keys()];
+      },
+      effectAllowed: "",
+      dropEffect: "",
+    };
+
+    fireEvent.dragStart(screen.getByText("Health check"), { dataTransfer });
+    fireEvent.drop(screen.getByText("List users"), { dataTransfer });
+
+    expect(a.onDropRequestInto).toHaveBeenCalledWith("r2", "acme", "users");
+  });
+
+  it("a closed folder springs open while a request hovers it", async () => {
+    render(
+      <CollectionTree collections={COLLECTIONS} activeId={null} actions={actions()} />,
+    );
+    fireEvent.click(screen.getByLabelText("Collapse Users"));
+    expect(screen.queryByText("List users")).toBeNull();
+
+    const data = new Map<string, string>([
+      ["application/x-mandalo-request", "r2"],
+    ]);
+    const dataTransfer = {
+      setData: () => {},
+      getData: (t: string) => data.get(t) ?? "",
+      get types() {
+        return [...data.keys()];
+      },
+      effectAllowed: "",
+      dropEffect: "",
+    };
+    fireEvent.dragEnter(screen.getByText("Users"), { dataTransfer });
+
+    await waitFor(() => expect(screen.getByText("List users")).toBeTruthy(), {
+      timeout: 2000,
+    });
+  });
+
+  /// An expanded empty folder used to render nothing at all, so the sibling rows
+  /// below it looked like its contents.
+  it("says so when an expanded folder is empty", () => {
+    const withEmpty: CollectionNode[] = [
+      {
+        ...COLLECTIONS[0],
+        folders: [
+          { ...COLLECTIONS[0].folders[0], folders: [], requests: [] },
+        ],
+      },
+    ];
+    render(
+      <CollectionTree collections={withEmpty} activeId={null} actions={actions()} />,
+    );
+
+    expect(screen.getByText("Empty")).toBeTruthy();
   });
 
   it("ignores a drop that carries no request of ours", () => {

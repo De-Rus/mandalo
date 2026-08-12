@@ -6,6 +6,7 @@ import {
   deleteFolder as deleteFolderCmd,
   errorMessage,
   moveRequest as moveRequestCmd,
+  reorderRequests as reorderRequestsCmd,
   renameCollection as renameCollectionCmd,
   renameFolder as renameFolderCmd,
   seedWorkspace,
@@ -66,6 +67,7 @@ interface CollectionState {
   deleteRequest: (id: string) => void;
   duplicateRequest: (id: string) => Promise<void>;
   moveRequest: (id: string, target: string) => Promise<void>;
+  reorderRequests: (collection: string, folder: string, ordered: string[]) => Promise<void>;
   updateActive: (patch: Partial<RequestDraft>) => void;
   saveActiveNow: () => Promise<void>;
   createCollection: (name: string) => Promise<void>;
@@ -516,6 +518,21 @@ export const useCollection = create<CollectionState>((set, get) => ({
       await get().refreshTree();
     } catch (e) {
       fail(e);
+    }
+  },
+  reorderRequests: async (collection, folder, ordered) => {
+    const { workspace } = get();
+    if (!workspace) {
+      fail(new Error("Open a workspace before reordering requests"));
+      return;
+    }
+    try {
+      await reorderRequestsCmd(workspace, collection, folder, ordered);
+      ok();
+      await get().refreshTree();
+    } catch (e) {
+      fail(e);
+      throw e;
     }
   },
   moveRequest: async (id, target) => {

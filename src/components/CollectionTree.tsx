@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CollectionNode, FolderNode, RequestSummary } from "../lib/api";
 import { collectionRequestCount, folderRequestCount } from "../lib/tree";
 import { ContextMenu } from "./ContextMenu";
@@ -19,6 +19,9 @@ import { MethodBadge } from "./MethodBadge";
 
 const INDENT = 15;
 
+/** How long a dragged request must hover a closed folder before it opens. */
+const SPRING_MS = 600;
+
 function guide(depth: number): React.CSSProperties {
   return { ["--guide" as string]: `${depth * INDENT + 15}px` };
 }
@@ -37,6 +40,8 @@ export interface TreeActions {
   onRenameFolder: (collection: string, path: string, name: string) => void;
   onDeleteFolder: (collection: string, path: string) => void;
   onDropRequestInto: (id: string, collection: string, folder: string) => void;
+  /** Put `id` immediately before or after `anchor`, both in the same folder. */
+  onDropBeside: (id: string, anchor: string, before: boolean) => void;
 }
 
 interface RowProps {
@@ -45,7 +50,12 @@ interface RowProps {
   label: string;
   className?: string;
   active?: boolean;
-  badge?: ReactNode;
+  /**
+   * Replaces the twisty and icon columns together. A request has nothing to
+   * expand, so its method takes that whole span and the names still line up
+   * with a sibling folder's.
+   */
+  leading?: ReactNode;
   count?: number;
   expandable?: boolean;
   expanded?: boolean;
@@ -57,6 +67,11 @@ interface RowProps {
   dragId?: string;
   /** Set on a row that accepts requests: a folder, or a collection root. */
   onDropRequest?: (id: string) => void;
+  /**
+   * Set on a request row: a drop on its top or bottom edge puts the dragged
+   * request there instead of inside the folder. `before` says which edge.
+   */
+  onDropBeside?: (id: string, before: boolean) => void;
 }
 
 /**
@@ -72,7 +87,7 @@ function Row({
   label,
   className = "",
   active = false,
-  badge,
+  leading,
   count,
   expandable = false,
   expanded = false,
@@ -82,11 +97,46 @@ function Row({
   menu,
   dragId,
   onDropRequest,
+  onDropBeside,
 }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(label);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [over, setOver] = useState(false);
+  const [edge, setEdge] = useState<"before" | "after" | null>(null);
+  // dragenter/dragleave fire for every child element the pointer crosses — the
+  // icon, the label, the ⋮ — so a plain boolean flickers. Count instead.
+  const depthRef = useRef(0);
+  const springRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelSpring = () => {
+    if (springRef.current !== null) {
+      clearTimeout(springRef.current);
+      springRef.current = null;
+    }
+  };
+
+  const leave = () => {
+    depthRef.current = Math.max(0, depthRef.current - 1);
+    if (depthRef.current === 0) {
+      setOver(false);
+      setEdge(null);
+      cancelSpring();
+    }
+  };
+
+  /// The middle of a row means "into"; the top and bottom quarters mean "here",
+  /// which is the only way to say where among siblings something goes.
+  const edgeAt = (e: React.DragEvent<HTMLDivElement>): "before" | "after" | null => {
+    if (!onDropBeside) return null;
+    const box = e.currentTarget.getBoundingClientRect();
+    const offset = e.clientY - box.top;
+    if (offset < box.height * 0.25) return "before";
+    if (offset > box.height * 0.75) return "after";
+    return null;
+  };
+
+  useEffect(() => cancelSpring, []);
 
   const startRename = () => {
     setDraft(label);
@@ -121,7 +171,9 @@ function Row({
   return (
     <div
       className={`tree-row ${className} ${active ? "tree-row-active" : ""} ${
-        over ? "tree-row-drop" : ""
+        over && edge === null ? "tree-row-drop" : ""
+      } ${edge === "before" ? "tree-row-before" : ""} ${
+        edge === "after" ? "tree-row-after" : ""
       }`}
       style={{ paddingLeft: 4 + depth * INDENT }}
       draggable={dragId !== undefined && !editing}
@@ -131,21 +183,53 @@ function Row({
         e.dataTransfer.setData(DRAG_TYPE, dragId);
         e.dataTransfer.effectAllowed = "move";
       }}
+      onDragEnter={(e) => {
+        if (
+          (!onDropRequest && !onDropBeside) ||
+          !e.dataTransfer.types.includes(DRAG_TYPE)
+        )
+          return;
+        depthRef.current += 1;
+        setOver(true);
+        // Spring-loading: a folder inside a collapsed one cannot be dropped on
+        // because it is not rendered. Hovering opens the way through, the same
+        // as Finder.
+        if (expandable && !expanded && onToggle && springRef.current === null) {
+          springRef.current = setTimeout(() => {
+            springRef.current = null;
+            onToggle();
+          }, SPRING_MS);
+        }
+      }}
       onDragOver={(e) => {
-        if (!onDropRequest || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+        if (
+          (!onDropRequest && !onDropBeside) ||
+          !e.dataTransfer.types.includes(DRAG_TYPE)
+        )
+          return;
         // Without preventDefault the browser refuses the drop outright.
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        setOver(true);
+        setEdge(edgeAt(e));
       }}
-      onDragLeave={() => setOver(false)}
+      onDragLeave={leave}
       onDrop={(e) => {
-        if (!onDropRequest || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+        if (
+          (!onDropRequest && !onDropBeside) ||
+          !e.dataTransfer.types.includes(DRAG_TYPE)
+        )
+          return;
         e.preventDefault();
         e.stopPropagation();
+        const where = edgeAt(e);
+        depthRef.current = 0;
         setOver(false);
+        setEdge(null);
+        cancelSpring();
         const id = e.dataTransfer.getData(DRAG_TYPE);
-        if (id !== "") onDropRequest(id);
+        if (id === "") return;
+        if (where !== null && onDropBeside) onDropBeside(id, where === "before");
+        else onDropRequest?.(id);
       }}
       onClick={onClick}
       onDoubleClick={() => onRename && startRename()}
@@ -159,21 +243,25 @@ function Row({
       aria-level={depth + 1}
       aria-expanded={expandable ? expanded : undefined}
     >
-      {expandable ? (
-        <button
-          className={`tree-twisty ${expanded ? "tree-twisty-open" : ""}`}
-          aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle?.();
-          }}
-        >
-          <ChevronRight size={12} />
-        </button>
-      ) : (
-        <span className="tree-twisty-spacer" />
+      {leading ?? (
+        <>
+          {expandable ? (
+            <button
+              className={`tree-twisty ${expanded ? "tree-twisty-open" : ""}`}
+              aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle?.();
+              }}
+            >
+              <ChevronRight size={12} />
+            </button>
+          ) : (
+            <span className="tree-twisty-spacer" />
+          )}
+          <span className="tree-icon">{icon}</span>
+        </>
       )}
-      {badge ?? <span className="tree-icon">{icon}</span>}
       {editing ? (
         <input
           className="tree-rename"
@@ -237,17 +325,30 @@ function RequestRow({
   depth,
   activeId,
   actions,
+  slug,
+  folder,
 }: {
   request: RequestSummary;
   depth: number;
   activeId: string | null;
   actions: TreeActions;
+  slug: string;
+  /** The folder holding this request; "" at the collection root. */
+  folder: string;
 }) {
   return (
     <Row
       depth={depth}
       dragId={request.id}
-      badge={<MethodBadge item={request} />}
+      // Most of a folder's visible area is its requests. Dropping on the middle
+      // means "put it in this folder"; on an edge it means "put it here".
+      onDropRequest={(id) =>
+        id === request.id ? undefined : actions.onDropRequestInto(id, slug, folder)
+      }
+      onDropBeside={(id, before) =>
+        id === request.id ? undefined : actions.onDropBeside(id, request.id, before)
+      }
+      leading={<MethodBadge item={request} tree />}
       label={request.name}
       active={request.id === activeId}
       onClick={() => actions.onOpen(request.id)}
@@ -378,8 +479,21 @@ function FolderRows({
               depth={depth + 1}
               activeId={activeId}
               actions={actions}
+              slug={slug}
+              folder={folder.path}
             />
           ))}
+          {folder.folders.length === 0 && folder.requests.length === 0 && (
+            // An expanded folder with nothing in it collapses to zero height, so
+            // the rows that follow — its siblings — read as its contents. Saying
+            // it is empty is what makes the tree honest about where things are.
+            <div
+              className="tree-empty"
+              style={{ paddingLeft: 4 + (depth + 1) * INDENT }}
+            >
+              Empty
+            </div>
+          )}
         </div>
       )}
     </>
@@ -507,6 +621,8 @@ export function CollectionTree({
                     depth={1}
                     activeId={activeId}
                     actions={actions}
+                    slug={collection.slug}
+                    folder=""
                   />
                 ))}
               </div>

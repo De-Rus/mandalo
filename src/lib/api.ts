@@ -963,6 +963,20 @@ export function moveRequest(
   return invoke("move_request", { workspace, collection, from, toFolder });
 }
 
+/**
+ * Puts the requests of one folder in the order given. `ordered` has to name
+ * every request the folder holds — a partial list is refused rather than
+ * guessed at.
+ */
+export function reorderRequests(
+  workspace: string,
+  collection: string,
+  folder: string,
+  ordered: string[],
+): Promise<void> {
+  return invoke("reorder_requests", { workspace, collection, folder, ordered });
+}
+
 export function importPostman(
   workspace: string,
   json: string,

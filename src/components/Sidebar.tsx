@@ -5,7 +5,7 @@ import {
   type FolderNode,
   type Kind,
 } from "../lib/api";
-import { applyDraftOverrides, filterTree, folderOf } from "../lib/tree";
+import { applyDraftOverrides, filterTree, folderOf, requestsIn } from "../lib/tree";
 import { locationOf, useCollection } from "../store/collection";
 import { toast } from "../store/toast";
 import { useEnv } from "../store/env";
@@ -152,6 +152,7 @@ export function Sidebar({ width }: { width: number }) {
   const deleteRequest = useCollection((s) => s.deleteRequest);
   const duplicateRequest = useCollection((s) => s.duplicateRequest);
   const moveRequest = useCollection((s) => s.moveRequest);
+  const reorderRequests = useCollection((s) => s.reorderRequests);
   const createCollection = useCollection((s) => s.createCollection);
   const renameCollection = useCollection((s) => s.renameCollection);
   const deleteCollection = useCollection((s) => s.deleteCollection);
@@ -216,6 +217,37 @@ export function Sidebar({ width }: { width: number }) {
       guard(() => renameFolder(collection, path, name)),
     onDeleteFolder: (collection, path) =>
       setConfirm({ kind: "folder", collection, path }),
+    onDropBeside: (id, anchor, before) => {
+      const from = locationOf(id);
+      const to = locationOf(anchor);
+      if (!from || !to) {
+        toast("error", "This request has no saved file yet, so it cannot be moved");
+        return;
+      }
+      if (from.collection !== to.collection) {
+        toast("error", "Moving a request to another collection is not supported yet");
+        return;
+      }
+      const folder = folderOf(to.path);
+      if (folderOf(from.path) !== folder) {
+        // Crossing folders changes the path, and the new one only exists after
+        // the move. Land it in the folder; ordering there is a second gesture.
+        guard(() => moveRequest(id, folder));
+        return;
+      }
+      const collection = visible.find((c) => c.slug === to.collection);
+      if (!collection) return;
+      // The whole folder's order has to be sent, so read it off the tree as
+      // shown and slide the dragged one into its new seat.
+      const siblings = requestsIn(collection, folder).map((r) => r.path);
+      const without = siblings.filter((p) => p !== from.path);
+      const at = without.indexOf(to.path);
+      const seat = before ? at : at + 1;
+      const ordered = [...without.slice(0, seat), from.path, ...without.slice(seat)];
+      if (ordered.join("\u0000") === siblings.join("\u0000")) return;
+
+      guard(() => reorderRequests(to.collection, folder, ordered));
+    },
     onDropRequestInto: (id, collection, folder) => {
       const location = locationOf(id);
       if (!location) {
