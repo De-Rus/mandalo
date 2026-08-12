@@ -8,6 +8,7 @@ use crate::stream::{MqttVersion, Outgoing, StreamKind, Subscription};
 use crate::stream_format::{self, Flavor, StreamDoc};
 use crate::workspace::SCHEMA_VERSION;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Field order is the on-disk order: every scalar and array-of-values comes
@@ -222,11 +223,21 @@ pub fn reject_literal_password(value: &str) -> CoreResult<()> {
     ))
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct CollectionManifest {
     pub schema_version: u32,
     pub id: String,
     pub name: String,
+    /// A chosen order of request files, keyed by folder path relative to the
+    /// collection root (`""` for the root itself).
+    ///
+    /// Without an entry a folder lists alphabetically, which is what the
+    /// filesystem hands over and what someone reading the repository sees. A
+    /// file that arrives later — pulled, or written by hand — is not in the list
+    /// and sorts after everything that is, alphabetically among its own kind, so
+    /// a stale list degrades into the default instead of hiding the file.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub order: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -738,6 +749,7 @@ pub fn create_collection(workspace: &Path, name: &str) -> CoreResult<CollectionI
         schema_version: SCHEMA_VERSION,
         id: uuid::Uuid::new_v4().to_string(),
         name: name.to_string(),
+        order: BTreeMap::new(),
     };
     write_collection_manifest(&dir, &manifest)?;
     Ok(CollectionInfo {
@@ -771,6 +783,7 @@ pub fn ensure_collection(
                     .map(String::from)
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 name: name.to_string(),
+                order: BTreeMap::new(),
             };
             write_collection_manifest(&dir, &manifest)?;
             manifest
@@ -812,6 +825,8 @@ pub fn rename_collection(workspace: &Path, slug: &str, name: &str) -> CoreResult
         schema_version: SCHEMA_VERSION,
         id: manifest.id,
         name: name.to_string(),
+        // A rename keeps whatever order the collection already had.
+        order: manifest.order,
     };
     write_collection_manifest(&new_dir, &manifest)?;
     Ok(CollectionInfo {
@@ -852,9 +867,18 @@ fn summaries(root: &Path, path: &Path, format: Format) -> CoreResult<Vec<Request
     Ok(out)
 }
 
+/// The file a request path names, without the `#index` that picks one request
+/// out of a file holding several.
+fn file_part(path: &str) -> String {
+    path.rsplit_once('#')
+        .map(|(f, _)| f.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
 fn walk(
     root: &Path,
     dir: &Path,
+    order: &BTreeMap<String, Vec<String>>,
     skipped: &mut Vec<String>,
 ) -> CoreResult<(Vec<FolderNode>, Vec<RequestSummary>)> {
     let mut folders = Vec::new();
@@ -869,7 +893,7 @@ fn walk(
             continue;
         }
         if path.is_dir() {
-            let (child_folders, child_requests) = walk(root, &path, skipped)?;
+            let (child_folders, child_requests) = walk(root, &path, order, skipped)?;
             folders.push(FolderNode {
                 name: name.to_string(),
                 path: rel_string(root, &path)?,
@@ -896,15 +920,22 @@ fn walk(
         }
     }
     folders.sort_by(|a, b| a.path.cmp(&b.path));
-    // Index order inside a file is the author's order, so only the file part sorts.
-    requests.sort_by(|a, b| {
-        let file = |p: &str| {
-            p.rsplit_once('#')
-                .map(|(f, _)| f.to_string())
-                .unwrap_or_default()
-        };
-        file(&a.path).cmp(&file(&b.path))
-    });
+    // Index order inside a file is the author's order, so only the file part
+    // sorts. A chosen order names files; anything it does not name follows,
+    // alphabetically, so a file that arrives later still shows up.
+    let chosen = order
+        .get(&rel_string(root, dir)?)
+        .cloned()
+        .unwrap_or_default();
+    let rank = |p: &str| {
+        let file = file_part(p);
+        chosen
+            .iter()
+            .position(|f| f == &file)
+            .map(|i| (0usize, i, String::new()))
+            .unwrap_or((1, 0, file))
+    };
+    requests.sort_by_key(|r| rank(&r.path));
     Ok((folders, requests))
 }
 
@@ -916,7 +947,10 @@ pub fn list_tree(workspace: &Path) -> CoreResult<Tree> {
     };
     for info in listed.items {
         let dir = collections_dir(workspace).join(&info.slug);
-        let (folders, requests) = walk(&dir, &dir, &mut tree.skipped)?;
+        let order = read_collection_manifest(&dir)
+            .map(|m| m.order)
+            .unwrap_or_default();
+        let (folders, requests) = walk(&dir, &dir, &order, &mut tree.skipped)?;
         tree.collections.push(CollectionNode {
             id: info.id,
             slug: info.slug,
@@ -994,6 +1028,94 @@ pub fn plan_file(
         Format::Ws => stream_format::render_file(requests, Flavor::Ws, "\n")?,
         Format::Mqtt => stream_format::render_file(requests, Flavor::Mqtt, "\n")?,
     })
+}
+
+/// Puts the requests of one folder in the order given, top to bottom.
+///
+/// `ordered` names every request the folder holds, by the same path the tree
+/// reports. Two things carry the result, because two things decide it: the file
+/// a request lives in is placed by the collection manifest's `order`, and a
+/// request inside a file is placed by rewriting that file. What you see in the
+/// app is then what the repository says, with nothing kept anywhere else.
+///
+/// Requests that share a file cannot be split apart by one that lives elsewhere
+/// — a file is one place in the list — so that arrangement is refused by name
+/// rather than quietly approximated.
+pub fn reorder_requests(
+    workspace: &Path,
+    slug: &str,
+    folder: &str,
+    ordered: &[String],
+) -> CoreResult<()> {
+    crate::remote::ensure_writable(workspace)?;
+    let root = collection_dir(workspace, slug)?;
+    let dir = resolve_within(&root, folder)?;
+    if !dir.is_dir() {
+        return Err(CoreError::NotFound(format!("unknown folder: {folder}")));
+    }
+
+    let mut present: Vec<String> = Vec::new();
+    let mut skipped = Vec::new();
+    let (_, requests) = walk(&root, &dir, &BTreeMap::new(), &mut skipped)?;
+    for request in &requests {
+        present.push(request.path.clone());
+    }
+    let mut sorted_given: Vec<&String> = ordered.iter().collect();
+    sorted_given.sort();
+    let mut sorted_present: Vec<&String> = present.iter().collect();
+    sorted_present.sort();
+    if sorted_given != sorted_present {
+        return Err(CoreError::Conflict(format!(
+            "the given order does not match what {folder:?} holds — it lists {} of {} requests",
+            ordered.len(),
+            present.len()
+        )));
+    }
+
+    let mut files: Vec<String> = Vec::new();
+    let mut within: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in ordered {
+        let file = file_part(path);
+        if !files.contains(&file) {
+            files.push(file.clone());
+        } else if files.last() != Some(&file) {
+            return Err(CoreError::Unsupported(format!(
+                "{file} holds several of these requests, so they cannot be split apart — move them together, or split the file first"
+            )));
+        }
+        within.entry(file).or_default().push(path.clone());
+    }
+
+    for (file, paths) in &within {
+        if paths.len() < 2 {
+            continue;
+        }
+        let target = resolve_within(&root, file)?;
+        let (format, doc) = read_doc(&target, file)?;
+        let mut reordered = Vec::with_capacity(paths.len());
+        for path in paths {
+            let (_, fragment) = split_identity(path);
+            reordered.push(doc.raw(index_in(&doc, fragment, file)?)?);
+        }
+        let _ = format;
+        let text = plan_file(workspace, slug, file, &reordered)?;
+        write_file(workspace, slug, file, &text)?;
+    }
+
+    let mut manifest = read_collection_manifest(&root)?;
+    let alphabetical = {
+        let mut sorted = files.clone();
+        sorted.sort();
+        sorted == files
+    };
+    if alphabetical {
+        // The default already produces this, so recording it would leave a list
+        // to drift out of date for no gain.
+        manifest.order.remove(folder);
+    } else {
+        manifest.order.insert(folder.to_string(), files);
+    }
+    write_collection_manifest(&root, &manifest)
 }
 
 /// Writes text a [`plan_file`] call produced. The path is proven to stay inside
@@ -1332,6 +1454,119 @@ mod tests {
         )
         .unwrap();
         dir
+    }
+
+    /// The order lives in two places because two things decide it: which file a
+    /// request is in, and where it sits inside that file.
+    #[test]
+    fn reordering_across_files_is_recorded_in_the_manifest() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let a = save_request(ws.path(), &c.slug, None, None, &request("Alpha"))
+            .unwrap()
+            .path;
+        let b = save_request(ws.path(), &c.slug, None, None, &request("Beta"))
+            .unwrap()
+            .path;
+
+        let listed = |ws: &Path| {
+            list_tree(ws).unwrap().collections[0]
+                .requests
+                .iter()
+                .map(|r| r.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(listed(ws.path()), vec!["Alpha", "Beta"]);
+
+        reorder_requests(ws.path(), &c.slug, "", &[b.clone(), a.clone()]).unwrap();
+        assert_eq!(listed(ws.path()), vec!["Beta", "Alpha"]);
+
+        let root = collections_dir(ws.path()).join(&c.slug);
+        let manifest = read_collection_manifest(&root).unwrap();
+        assert_eq!(
+            manifest.order.get(""),
+            Some(&vec![file_part(&b), file_part(&a)])
+        );
+
+        // Back to alphabetical: the list would only be a thing to keep in step.
+        reorder_requests(ws.path(), &c.slug, "", &[a, b]).unwrap();
+        assert!(read_collection_manifest(&root).unwrap().order.is_empty());
+    }
+
+    #[test]
+    fn reordering_inside_one_file_rewrites_that_file() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let file = "pair.http";
+        let text = plan_file(ws.path(), &c.slug, file, &[request("One"), request("Two")]).unwrap();
+        write_file(ws.path(), &c.slug, file, &text).unwrap();
+
+        let paths = |ws: &Path| {
+            list_tree(ws).unwrap().collections[0]
+                .requests
+                .iter()
+                .map(|r| r.path.clone())
+                .collect::<Vec<_>>()
+        };
+        let both = paths(ws.path());
+        let (first, second) = (both[0].clone(), both[1].clone());
+
+        let names = |ws: &Path| {
+            list_tree(ws).unwrap().collections[0]
+                .requests
+                .iter()
+                .map(|r| r.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(ws.path()), vec!["One", "Two"]);
+
+        reorder_requests(ws.path(), &c.slug, "", &[second, first]).unwrap();
+        assert_eq!(names(ws.path()), vec!["Two", "One"]);
+
+        // Nothing was recorded: one file, so the manifest has nothing to say.
+        let root = collections_dir(ws.path()).join(&c.slug);
+        assert!(read_collection_manifest(&root).unwrap().order.is_empty());
+    }
+
+    /// A file is one place in the list, so a request from elsewhere cannot be
+    /// wedged between two that share one.
+    #[test]
+    fn splitting_the_requests_of_one_file_is_refused() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let file = "pair.http";
+        let text = plan_file(ws.path(), &c.slug, file, &[request("One"), request("Two")]).unwrap();
+        write_file(ws.path(), &c.slug, file, &text).unwrap();
+        let other = save_request(ws.path(), &c.slug, None, None, &request("Zeta"))
+            .unwrap()
+            .path;
+        let shared: Vec<String> = list_tree(ws.path()).unwrap().collections[0]
+            .requests
+            .iter()
+            .filter(|r| file_part(&r.path) == file)
+            .map(|r| r.path.clone())
+            .collect();
+        let (one, two) = (shared[0].clone(), shared[1].clone());
+
+        let err = reorder_requests(ws.path(), &c.slug, "", &[one, other, two])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot be split apart"), "{err}");
+    }
+
+    #[test]
+    fn an_order_that_does_not_list_everything_is_refused() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        let a = save_request(ws.path(), &c.slug, None, None, &request("Alpha"))
+            .unwrap()
+            .path;
+        save_request(ws.path(), &c.slug, None, None, &request("Beta")).unwrap();
+
+        let err = reorder_requests(ws.path(), &c.slug, "", &[a])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not match"), "{err}");
     }
 
     fn request(name: &str) -> SavedRequest {
