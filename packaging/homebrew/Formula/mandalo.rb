@@ -1,7 +1,7 @@
 class Mandalo < Formula
   desc "Fast, offline, git-native API client — HTTP, GraphQL and gRPC from the terminal"
   homepage "https://mandalo.dev"
-  version "0.2.2"
+  version "0.2.3"
   license "MIT"
 
   # macOS gets the cask, not the formula: a formula without a bottle takes
@@ -13,11 +13,11 @@ class Mandalo < Formula
   on_linux do
     on_arm do
       url "https://github.com/De-Rus/mandalo/releases/download/v#{version}/mandalo-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "45cac11093658f12b8b80698484bde54f7374c2208b665e3f45348225a32e5ed"
+      sha256 "08ada6b9c656cc5d9267b2630d22b771c4431b1dac1f58d5a43a1aa2db0bbe66"
     end
     on_intel do
       url "https://github.com/De-Rus/mandalo/releases/download/v#{version}/mandalo-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "cb884e451f5d4109e9b8d6f8c303fcb7698bbbb4b5d0ded3ec7148e8a9bd7ac8"
+      sha256 "5a40c31514b792801662d260889da7afa8fcc079308e5d89acccb692fd06eaac"
     end
   end
 
