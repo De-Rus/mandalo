@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorMessage } from "../lib/api";
-import { currentHost } from "../lib/host";
 import {
   documentFromFile,
-  documentFromPath,
   type LoadedDocument,
 } from "../lib/importSource";
 import { toast } from "../store/toast";
@@ -15,9 +13,16 @@ function carriesFiles(transfer: DataTransfer | null): boolean {
 }
 
 /**
- * Two drop paths, because the desktop webview swallows HTML drag events and
- * reports the drop to Rust with a real path instead: the DOM path serves the
- * browser and the editor, `onDragDropEvent` serves the desktop app.
+ * One drop path for every host.
+ *
+ * The desktop used to take a second one: with the window's `dragDropEnabled`
+ * on, the OS handler swallowed HTML drag events and handed Rust a real path
+ * instead. That also made dragging anything *inside* the page impossible, which
+ * is what moving a request between folders needs, so the window now turns it off
+ * and every host reads the dropped file straight from the DOM. Nothing is lost —
+ * both routes produced the same document, and this one also enforces the import
+ * size limit. A file picked through the dialog still arrives as a path; that is
+ * `ImportDialog`, not this.
  */
 export function DropTarget() {
   const openImport = useTransfer((s) => s.openImport);
@@ -58,39 +63,11 @@ export function DropTarget() {
     window.addEventListener("dragleave", onLeave);
     window.addEventListener("drop", onDrop);
 
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    if (currentHost() === "desktop") {
-      void import("@tauri-apps/api/webview")
-        .then(({ getCurrentWebview }) =>
-          getCurrentWebview().onDragDropEvent((event) => {
-            const payload = event.payload;
-            if (payload.type === "enter" || payload.type === "over") {
-              setOver(true);
-              return;
-            }
-            setOver(false);
-            if (payload.type !== "drop") return;
-            const path = payload.paths[0];
-            if (path) accept(() => documentFromPath(path));
-          }),
-        )
-        .then(
-          (stop) => {
-            if (cancelled) stop();
-            else unlisten = stop;
-          },
-          () => undefined,
-        );
-    }
-
     return () => {
       window.removeEventListener("dragenter", onEnter);
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("dragleave", onLeave);
       window.removeEventListener("drop", onDrop);
-      cancelled = true;
-      unlisten?.();
     };
   }, [openImport]);
 

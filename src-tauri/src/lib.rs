@@ -404,6 +404,21 @@ fn rename_folder(
 }
 
 #[tauri::command]
+fn reorder_requests(
+    workspace: String,
+    collection: String,
+    folder: String,
+    ordered: Vec<String>,
+) -> Reply<()> {
+    edge(collection::reorder_requests(
+        &ws(&workspace)?,
+        &collection,
+        &folder,
+        &ordered,
+    ))
+}
+
+#[tauri::command]
 fn move_request(
     workspace: String,
     collection: String,
@@ -1088,6 +1103,72 @@ fn save_workspace_copy(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+const DOCS_URL: &str = "https://mandalo.dev/docs";
+const ISSUES_URL: &str = "https://github.com/De-Rus/mandalo/issues/new";
+const RELEASES_URL: &str = "https://github.com/De-Rus/mandalo/releases";
+
+/// The application menu.
+///
+/// macOS users look for "Check for Updates…" under the app menu, not inside a
+/// sidebar popover, so it lives in both places and fires the same frontend flow
+/// through the `menu://check-updates` event.
+///
+/// Edit and Window are the predefined submenus on purpose: replacing the default
+/// menu without them leaves a webview where ⌘C and ⌘V do nothing, because on
+/// macOS those shortcuts are routed by the menu, not by the web page.
+fn build_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+
+    let check_updates =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
+
+    let app_menu = SubmenuBuilder::new(app, "Mándalo")
+        .about(Some(AboutMetadata {
+            name: Some("Mándalo".into()),
+            version: Some(app.package_info().version.to_string()),
+            website: Some("https://mandalo.dev".into()),
+            ..Default::default()
+        }))
+        .separator()
+        .item(&check_updates)
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .fullscreen()
+        .close_window()
+        .build()?;
+
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .text("help-docs", "Mándalo Documentation")
+        .text("help-releases", "Release Notes")
+        .separator()
+        .text("help-issue", "Report an Issue…")
+        .build()?;
+
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &edit_menu, &window_menu, &help_menu])
+        .build()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -1101,6 +1182,25 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .menu(build_menu)
+        .on_menu_event(|app, event| {
+            use tauri::Emitter;
+            let open = |url: &str| {
+                use tauri_plugin_opener::OpenerExt;
+                let _ = app.opener().open_url(url, None::<&str>);
+            };
+            match event.id().as_ref() {
+                // The frontend already owns the whole update conversation —
+                // prompt, download, relaunch — so the menu only nudges it.
+                "check-updates" => {
+                    let _ = app.emit("menu://check-updates", ());
+                }
+                "help-docs" => open(DOCS_URL),
+                "help-releases" => open(RELEASES_URL),
+                "help-issue" => open(ISSUES_URL),
+                _ => {}
+            }
+        })
         .manage(GithubFlows::default())
         .manage(Streams::default())
         .on_window_event(|window, event| {
@@ -1146,6 +1246,7 @@ pub fn run() {
             delete_folder,
             rename_folder,
             move_request,
+            reorder_requests,
             import_postman,
             import_openapi,
             plan_export,

@@ -1,5 +1,6 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useToasts } from "../store/toast";
 import { UpdatePrompt } from "./UpdatePrompt";
 
 const check = vi.fn();
@@ -35,6 +36,23 @@ describe("UpdatePrompt", () => {
     const { queryByRole } = render(<UpdatePrompt />);
     await waitFor(() => expect(check).toHaveBeenCalled());
     expect(queryByRole("heading", { name: "Update available" })).toBeNull();
+  });
+
+  /// A check that fails used to look exactly like being up to date, which left
+  /// the one path every fix travels able to break in complete silence.
+  it("reports a failed check instead of looking up to date", async () => {
+    check.mockRejectedValueOnce(new Error("signature mismatch"));
+    render(<UpdatePrompt />);
+
+    await waitFor(() =>
+      expect(
+        useToasts
+          .getState()
+          .items.some(
+            (t) => t.tone === "error" && t.text.includes("signature mismatch"),
+          ),
+      ).toBe(true),
+    );
   });
 
   it("prompts when an update is ready", async () => {
