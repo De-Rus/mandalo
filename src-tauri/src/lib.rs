@@ -100,21 +100,54 @@ async fn send_request(spec: request::RequestSpec) -> Reply<request::ResponseData
     edge(request::send_request(spec, &DesktopPolicy).await)
 }
 
+/// Turns the workspace-relative `proto:` paths a request carries into the real
+/// files the compiler needs. The editor works in relative paths — that is what a
+/// request file may hold — so every gRPC command has to resolve them, and an
+/// absolute one is refused here for the same reason the format refuses it.
+fn proto_files(workspace: &Path, paths: &[String]) -> Reply<Vec<String>> {
+    paths
+        .iter()
+        .map(|rel| {
+            edge(mandalo_core::body::resolve_workspace_file(
+                Some(workspace),
+                rel,
+                "proto file",
+            ))
+            .map(|p| p.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
 #[tauri::command]
-async fn list_grpc_methods(proto_paths: Vec<String>) -> Reply<Vec<grpc::GrpcMethodInfo>> {
-    edge(grpc::list_grpc_methods(proto_paths).await)
+async fn list_grpc_methods(
+    workspace: String,
+    proto_paths: Vec<String>,
+) -> Reply<Vec<grpc::GrpcMethodInfo>> {
+    let files = proto_files(&ws(&workspace)?, &proto_paths)?;
+    edge(grpc::list_grpc_methods(files).await)
 }
 
 #[tauri::command]
 async fn describe_message(
+    workspace: String,
     proto_paths: Vec<String>,
     type_name: String,
 ) -> Reply<grpc::MessageShape> {
-    edge(grpc::describe_message(proto_paths, type_name).await)
+    let files = proto_files(&ws(&workspace)?, &proto_paths)?;
+    edge(grpc::describe_message(files, type_name).await)
+}
+
+/// Copies a `.proto` into the workspace so a request can name it by a relative
+/// path. The browser build has the same command over its own filesystem.
+#[tauri::command]
+fn import_proto(workspace: String, file_name: String, contents: String) -> Reply<String> {
+    edge(grpc::import_proto(&ws(&workspace)?, &file_name, &contents))
 }
 
 #[tauri::command]
-async fn send_grpc(spec: grpc::GrpcSpec) -> Reply<grpc::GrpcResponse> {
+async fn send_grpc(workspace: String, spec: grpc::GrpcSpec) -> Reply<grpc::GrpcResponse> {
+    let mut spec = spec;
+    spec.proto_paths = proto_files(&ws(&workspace)?, &spec.proto_paths)?;
     edge(grpc::send_grpc(spec).await)
 }
 
@@ -348,13 +381,18 @@ fn save_request(
     ))
 }
 
+/// The editor's loader, and so the **source** one: it keeps a `proto:` path as
+/// the file wrote it, workspace-relative. `load_request` resolves those to
+/// absolute paths for the runner, and an editor handed those would write them
+/// straight back on the next save — leaving a request the loader then refuses,
+/// because an absolute proto path is not portable and is rejected by design.
 #[tauri::command]
 fn load_request(
     workspace: String,
     collection: String,
     path: String,
 ) -> Reply<collection::SavedRequest> {
-    edge(collection::load_request(
+    edge(collection::load_request_source(
         &ws(&workspace)?,
         &collection,
         &path,
@@ -1180,7 +1218,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            // GitHub closes the connection on a client that sends no user agent,
+            // and the update feed lives on github.com — without this the check
+            // fails with `connection closed before message completed`.
+            tauri_plugin_updater::Builder::new()
+                .header("User-Agent", mandalo_core::request::USER_AGENT)
+                .expect("the user agent is a valid header value")
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .menu(build_menu)
         .on_menu_event(|app, event| {
@@ -1214,6 +1260,7 @@ pub fn run() {
             list_grpc_methods,
             describe_message,
             send_grpc,
+            import_proto,
             execute_script,
             run_request_full,
             run_request_draft,

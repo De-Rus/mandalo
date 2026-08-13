@@ -1569,6 +1569,47 @@ mod tests {
         assert!(err.contains("does not match"), "{err}");
     }
 
+    /// The editor opens with `load_request_source` and saves what it was given,
+    /// so the source loader has to hand back the path the file wrote. Handing it
+    /// the resolved absolute path — which is what the runner needs — meant one
+    /// save turned a working request into one the loader refuses.
+    #[test]
+    fn opening_and_saving_a_grpc_request_keeps_it_loadable() {
+        let ws = workspace_dir();
+        let c = create_collection(ws.path(), "Acme").unwrap();
+        std::fs::create_dir_all(ws.path().join("protos")).unwrap();
+        std::fs::write(
+            ws.path().join("protos/echo.proto"),
+            "syntax = \"proto3\";\npackage e;\nmessage M { string a = 1; }\nservice S { rpc C(M) returns (M); }\n",
+        )
+        .unwrap();
+        let mut req = request("Echo");
+        req.kind = "grpc".to_string();
+        req.grpc = Some(GrpcRequest {
+            proto_paths: vec!["protos/echo.proto".to_string()],
+            service: "e.S".to_string(),
+            method: "C".to_string(),
+            message: "{}".to_string(),
+            metadata: vec![],
+        });
+        req.url = "http://localhost:1".to_string();
+        req.body = crate::body::Body::None;
+        let path = save_request(ws.path(), &c.slug, None, None, &req)
+            .unwrap()
+            .path;
+
+        let opened = load_request_source(ws.path(), &c.slug, &path).unwrap();
+        assert_eq!(
+            opened.grpc.as_ref().unwrap().proto_paths,
+            vec!["protos/echo.proto".to_string()],
+            "the editor must see the path the file holds, not the resolved one"
+        );
+
+        save_request(ws.path(), &c.slug, Some(&path), None, &opened).unwrap();
+        load_request(ws.path(), &c.slug, &path)
+            .expect("a request must survive being opened and saved unchanged");
+    }
+
     fn request(name: &str) -> SavedRequest {
         SavedRequest {
             id: uuid::Uuid::new_v4().to_string(),
