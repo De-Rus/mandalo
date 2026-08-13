@@ -100,6 +100,14 @@ pub struct ResponseData {
 /// timeout message can quote the number the client is actually enforcing.
 pub const REQUEST_TIMEOUT_SECS: u64 = 30;
 
+/// Sent on every request that does not set its own `User-Agent`.
+///
+/// reqwest sends none at all, and a client with no user agent is not merely
+/// unidentified — GitHub closes the connection on one, which made every request
+/// to github.com fail with `connection closed before message completed` and took
+/// the update check down with it. A request that sets its own header still wins.
+pub const USER_AGENT: &str = concat!("mandalo/", env!("CARGO_PKG_VERSION"));
+
 /// reqwest reports a refused connection as a chain whose outer message says only
 /// "error sending request"; the actionable part (ECONNREFUSED, a rejected
 /// certificate) is further down, so the whole chain is collected.
@@ -196,6 +204,7 @@ pub fn client() -> CoreResult<&'static reqwest::Client> {
     crate::install_crypto_provider();
     let built = reqwest::Client::builder()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| CoreError::Network(e.to_string()))?;
