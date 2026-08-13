@@ -25,18 +25,23 @@ primary_region = "cdg"
     method = "GET"
     path = "/health"
 
+# gRPC needs HTTP/2 end to end. The "http" handler parses HTTP/1.1 and hands the
+# backend something tonic answers with a bare 400 — `h2_backend` was meant to
+# avoid that and Fly does not apply it here. Terminating TLS and passing the
+# stream through untouched leaves the h2 framing intact, which is what the
+# server speaks on 8081.
 [[services]]
   protocol = "tcp"
   internal_port = 8081
   auto_stop_machines = "stop"
   auto_start_machines = true
 
-  [services.http_options]
-  h2_backend = true
-
   [[services.ports]]
     port = 8443
     handlers = ["tls", "http"]
+
+    [services.ports.http_options]
+      h2_backend = true
 
 # The MQTT broker's WebSocket transport (TCP port + 1). A browser can only reach
 # MQTT over WebSocket, so this is the port the web build uses.

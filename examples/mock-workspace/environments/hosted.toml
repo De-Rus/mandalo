@@ -6,7 +6,6 @@ wsUrl = "wss://api.mandalo.dev"
 mqttUrl = "wss://api.mandalo.dev:8884"
 trace = "hosted"
 room = "kitchen"
-# TODO: point this at the hosted mock's gRPC endpoint once it is deployed.
-# Until then it is deliberately absent: a "hosted" gRPC request fails loud with
-# `unresolved variable: grpcUrl` instead of quietly calling the local mock.
-# grpcUrl = "<the hosted gRPC url>"
+# The hosted mock serves gRPC on its own port: Fly terminates TLS there and
+# passes HTTP/2 through to the server, which is what gRPC needs end to end.
+grpcUrl = "https://api.mandalo.dev:8443"
