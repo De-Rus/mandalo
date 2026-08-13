@@ -608,19 +608,36 @@ export function sendRequest(spec: RequestSpec): Promise<ResponseData> {
   return invoke("send_request", { spec });
 }
 
-export function listGrpcMethods(protoPaths: string[]): Promise<GrpcMethodInfo[]> {
-  return invoke("list_grpc_methods", { protoPaths });
+/**
+ * Copies a `.proto` into the workspace and answers with the workspace-relative
+ * path a request should store. This is the only way a browser tab can supply a
+ * proto at all: a page has no filesystem path to give.
+ */
+export function importProto(
+  workspace: string,
+  fileName: string,
+  contents: string,
+): Promise<string> {
+  return invoke("import_proto", { workspace, fileName, contents });
+}
+
+export function listGrpcMethods(
+  workspace: string,
+  protoPaths: string[],
+): Promise<GrpcMethodInfo[]> {
+  return invoke("list_grpc_methods", { workspace, protoPaths });
 }
 
 export function describeMessage(
+  workspace: string,
   protoPaths: string[],
   typeName: string,
 ): Promise<MessageShape> {
-  return invoke("describe_message", { protoPaths, typeName });
+  return invoke("describe_message", { workspace, protoPaths, typeName });
 }
 
-export function sendGrpc(spec: GrpcSpec): Promise<GrpcResponse> {
-  return invoke("send_grpc", { spec });
+export function sendGrpc(workspace: string, spec: GrpcSpec): Promise<GrpcResponse> {
+  return invoke("send_grpc", { workspace, spec });
 }
 
 export function executeScript(

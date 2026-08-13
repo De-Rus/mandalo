@@ -27,6 +27,7 @@ import {
 } from "./grpc";
 import { withWriteLock } from "./locks";
 import * as mounts from "./mounts";
+import { PROTO_DIR } from "./protos";
 import * as remote from "./remote";
 import { webRunRequest } from "./run";
 import { persistOnFirstSave } from "./storage";
@@ -96,6 +97,25 @@ const ENVIRONMENTS: Change = { scope: "environments" };
 
 const handlers: Record<string, (a: Args) => unknown> = {
   send_request: (a) => webSend(a.spec),
+
+  // The browser cannot take a filesystem path, so a picked file is written into
+  // the mounted workspace under protos/ and named relatively — the same place
+  // and the same name the desktop writes, so the request file travels either way.
+  import_proto: async (a): Promise<string> => {
+    const name = (a.fileName as string).split(/[\\/]/).filter(Boolean).pop() ?? "";
+    if (!name.endsWith(".proto") || name.startsWith("."))
+      throw new Error(`a proto file must be named *.proto, got "${name}"`);
+    const vfs = await mounts.activeVfs();
+    const rel = `${PROTO_DIR}/${name}`;
+    const existing = await vfs.read(rel);
+    const contents = a.contents as string;
+    if (existing !== null && existing !== contents)
+      throw new Error(
+        `${rel} already exists with different contents — rename the file or remove it first`,
+      );
+    if (existing === null) await vfs.write(rel, contents);
+    return rel;
+  },
 
   list_grpc_methods: async (a): Promise<GrpcMethodInfo[]> =>
     webListGrpcMethods(await mounts.activeVfs(), a.protoPaths as string[]),

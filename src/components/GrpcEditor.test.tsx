@@ -4,6 +4,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GrpcMethodInfo, MessageShape } from "../lib/api";
 import { newDraft, type GrpcDraft } from "../lib/draft";
+import { useCollection } from "../store/collection";
 import { GrpcEditor } from "./GrpcEditor";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -76,6 +77,7 @@ function message(container: HTMLElement): string {
 describe("gRPC method selection", () => {
   beforeEach(() => {
     invoke.mockReset();
+    useCollection.setState({ workspace: "/ws" });
     invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
       if (command === "list_grpc_methods") return Promise.resolve(METHODS);
       if (command === "describe_message") {
@@ -145,5 +147,58 @@ describe("gRPC method selection", () => {
     await waitFor(() => expect(screen.getByRole("combobox")).toBeTruthy());
     expect(message(container)).toBe("");
     expect(screen.queryByText(/Insert example message/)).toBeNull();
+  });
+});
+
+describe("adding a .proto", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useCollection.setState({ workspace: "/ws" });
+  });
+  afterEach(cleanup);
+
+  /// A page has no filesystem path to give, and on the desktop an absolute path
+  /// would not survive being shared, so a picked file is copied into the
+  /// workspace and named relatively.
+  it("copies the file into the workspace and adds the relative path", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "import_proto") return Promise.resolve("protos/extra.proto");
+      return Promise.resolve(undefined);
+    });
+    render(<Harness start={{ protoPaths: "protos/mock.proto" }} />);
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["syntax = \"proto3\";"], "extra.proto", {
+      type: "text/plain",
+    });
+    Object.defineProperty(picker, "files", { value: [file] });
+    fireEvent.change(picker);
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("import_proto", {
+        workspace: "/ws",
+        fileName: "extra.proto",
+        contents: 'syntax = "proto3";',
+      }),
+    );
+    // The path is bookkeeping now; what the editor shows is the file.
+    await waitFor(() => expect(screen.getByText("extra.proto")).toBeTruthy());
+    expect(screen.getByText("mock.proto")).toBeTruthy();
+  });
+
+  it("says what went wrong instead of adding a path", async () => {
+    invoke.mockImplementation(() =>
+      Promise.reject(new Error("protos/extra.proto already exists with different contents")),
+    );
+    render(<Harness start={{ protoPaths: "" }} />);
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["x"], "extra.proto");
+    Object.defineProperty(picker, "files", { value: [file] });
+    fireEvent.change(picker);
+
+    expect(
+      await screen.findByText(/already exists with different contents/),
+    ).toBeTruthy();
   });
 });

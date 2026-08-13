@@ -1,15 +1,18 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   describeMessage,
   errorMessage,
+  importProto,
   listGrpcMethods,
   type GrpcMethodInfo,
   type MessageShape,
 } from "../lib/api";
+import { useCollection } from "../store/collection";
 import type { GrpcDraft } from "../lib/draft";
 import { replaceable, skeletonFor } from "../lib/skeleton";
 import { parseProtoPaths } from "../lib/spec";
 import { RawBodyEditor } from "./BodyEditor";
+import { Close } from "./Icons";
 import { KeyValueEditor } from "./KeyValueEditor";
 
 interface GrpcEditorProps {
@@ -28,6 +31,35 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
+  const workspace = useCollection((s) => s.workspace);
+  const picker = useRef<HTMLInputElement>(null);
+
+  /**
+   * A request names its proto by a workspace-relative path, so the file has to
+   * live in the workspace first. Picking one copies it into `protos/` and adds
+   * the path — which is the only way a browser tab can supply a proto at all,
+   * and on the desktop is what keeps the request portable.
+   */
+  const addFiles = async (files: FileList) => {
+    if (!workspace) {
+      setError("Open a workspace before adding proto files.");
+      return;
+    }
+    setError(null);
+    const added: string[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        added.push(await importProto(workspace, file.name, await file.text()));
+      } catch (e) {
+        setError(errorMessage(e));
+        break;
+      }
+    }
+    if (added.length === 0) return;
+    const lines = parseProtoPaths(grpc.protoPaths);
+    const fresh = added.filter((p) => !lines.includes(p));
+    patch({ protoPaths: [...lines, ...fresh].join("\n") });
+  };
 
   const patch = (p: Partial<GrpcDraft>) => onChange({ ...grpc, ...p });
 
@@ -35,7 +67,11 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
     setLoading(true);
     setError(null);
     try {
-      const found = await listGrpcMethods(parseProtoPaths(grpc.protoPaths));
+      if (!workspace) throw new Error("Open a workspace before loading methods.");
+      const found = await listGrpcMethods(
+        workspace,
+        parseProtoPaths(grpc.protoPaths),
+      );
       setMethods(found);
       if (found.length === 0) setError("No methods found in the given proto files.");
     } catch (e) {
@@ -50,7 +86,9 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
   ): Promise<MessageShape | null> => {
     if (!method) return null;
     try {
+      if (!workspace) return null;
       return await describeMessage(
+        workspace,
         parseProtoPaths(grpc.protoPaths),
         method.input,
       );
@@ -117,21 +155,67 @@ export function GrpcEditor({ tab, grpc, onChange }: GrpcEditorProps) {
     );
   }
 
+  // The file is what the user picked; the path underneath is bookkeeping the
+  // editor no longer shows, because showing it invited absolute paths that a
+  // request file cannot hold.
+  const files = parseProtoPaths(grpc.protoPaths);
+
   const selectedValue =
     grpc.service && grpc.method ? `${grpc.service}/${grpc.method}` : "";
 
   return (
     <div className="grpc-proto">
-      <label className="field">
-        <span className="field-label">Proto files (one path per line)</span>
-        <textarea
-          className="textarea mono proto-paths"
-          value={grpc.protoPaths}
-          placeholder="/path/to/service.proto"
-          spellCheck={false}
-          onChange={(e) => patch({ protoPaths: e.target.value })}
-        />
-      </label>
+      <div className="field">
+        <div className="grpc-proto-head">
+          <span className="field-label">Proto files</span>
+          <button
+            className="btn btn-sm"
+            type="button"
+            onClick={() => picker.current?.click()}
+          >
+            Add .proto…
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            accept=".proto"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = e.target.files;
+              if (files && files.length > 0) void addFiles(files);
+              e.target.value = "";
+            }}
+          />
+        </div>
+        {files.length === 0 ? (
+          <p className="empty-line proto-empty">
+            No proto files yet. Add one and its services show up below.
+          </p>
+        ) : (
+          <ul className="proto-list">
+            {files.map((file) => (
+              <li key={file} className="proto-item">
+                <span className="proto-name mono" title={file}>
+                  {file.split("/").pop()}
+                </span>
+                <button
+                  className="btn-ghost btn-icon btn-icon-sm"
+                  type="button"
+                  aria-label={`Remove ${file}`}
+                  onClick={() =>
+                    patch({
+                      protoPaths: files.filter((f) => f !== file).join("\n"),
+                    })
+                  }
+                >
+                  <Close size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <div className="grpc-load-row">
         <button
           className="btn"
